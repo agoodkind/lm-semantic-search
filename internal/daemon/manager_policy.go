@@ -134,7 +134,7 @@ func (manager *Manager) resolveAndPersistIndexPolicy(
 }
 
 func (manager *Manager) persistResolvedIndexPolicyLocked(original model.Codebase, resolved model.Codebase) error {
-	if resolved.SchedulingPolicy == original.SchedulingPolicy && resolved.PolicyPendingInitialization == original.PolicyPendingInitialization {
+	if resolved.SchedulingPolicy == original.SchedulingPolicy && resolved.PolicyPendingInitialization == original.PolicyPendingInitialization && worktreeSourceEqual(original, resolved) {
 		return nil
 	}
 	manager.codebases[resolved.ID] = resolved
@@ -822,7 +822,7 @@ func (manager *Manager) startRecoveredIndex(ctx context.Context, plan resumePlan
 	job, codebase, deduplicated, overlapsCodebaseID, err := manager.startIndexWithRecovery(ctx, plan.canonicalPath, client, plan.config, false, emptyAdmissionBudget, indexPolicyIntent{
 		Patch:      plan.schedulingOverride,
 		Initialize: false,
-	}, &plan)
+	}, model.WorktreeSourceRequest{SourcePath: "", StartingCommit: ""}, &plan)
 	if err == nil && job.ID == "" && !deduplicated {
 		return fmt.Errorf("resume did not queue job for codebase %s (overlap %s)", codebase.ID, overlapsCodebaseID)
 	}

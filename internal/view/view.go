@@ -560,6 +560,10 @@ type RawStatus struct {
 	// HeldForSiblingBuild reports that a discovered worktree's build waits for a
 	// sibling worktree's first index to finish.
 	HeldForSiblingBuild bool
+	// The fields store the recorded worktree source path, source codebase identifier, and starting commit; each field is empty when its value has not been recorded.
+	WorktreeSourcePath     string
+	WorktreeSourceID       string
+	WorktreeStartingCommit string
 
 	HasJob         bool
 	JobID          string

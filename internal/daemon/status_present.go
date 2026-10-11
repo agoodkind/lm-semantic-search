@@ -493,29 +493,34 @@ func blankRawStatus() view.RawStatus {
 		Collection:          "",
 		CollectionRows:      nil,
 		HeldForSiblingBuild: false,
-		HasJob:              false,
-		JobID:               "",
-		Operation:           "",
-		JobState:            "",
-		Trigger:             "",
-		Phase:               "",
-		FilesProcessed:      0,
-		FilesTotal:          0,
-		ChunksEmbedded:      0,
-		ChunksReused:        0,
-		OverallPercent:      0,
-		LastEventAt:         "",
-		HasLastRun:          false,
-		LastRunFiles:        0,
-		LastRunChunks:       0,
-		LastRunCompleted:    "",
-		HasFailure:          false,
-		FailureMessage:      "",
-		FailureJobID:        "",
-		FailureTraceID:      "",
-		FailureFailedAt:     "",
-		GraphState:          "",
-		GraphUpdatedAt:      "",
+
+		WorktreeSourcePath:     "",
+		WorktreeSourceID:       "",
+		WorktreeStartingCommit: "",
+
+		HasJob:           false,
+		JobID:            "",
+		Operation:        "",
+		JobState:         "",
+		Trigger:          "",
+		Phase:            "",
+		FilesProcessed:   0,
+		FilesTotal:       0,
+		ChunksEmbedded:   0,
+		ChunksReused:     0,
+		OverallPercent:   0,
+		LastEventAt:      "",
+		HasLastRun:       false,
+		LastRunFiles:     0,
+		LastRunChunks:    0,
+		LastRunCompleted: "",
+		HasFailure:       false,
+		FailureMessage:   "",
+		FailureJobID:     "",
+		FailureTraceID:   "",
+		FailureFailedAt:  "",
+		GraphState:       "",
+		GraphUpdatedAt:   "",
 	}
 }
 
@@ -529,6 +534,9 @@ func resolveRawStatus(codebase model.Codebase, activeJob *model.Job, readiness s
 	raw.StoredStatus = string(codebase.Status)
 	raw.Collection = string(readiness)
 	raw.CollectionRows = observedRows
+	raw.WorktreeSourcePath = codebase.WorktreeSourcePath
+	raw.WorktreeSourceID = codebase.WorktreeSourceID
+	raw.WorktreeStartingCommit = codebase.WorktreeStartingCommit
 	raw.GraphState = string(codebase.GraphState)
 	raw.GraphUpdatedAt = formatStampWithRelative(codebase.GraphUpdatedAt)
 	if activeJob != nil {

@@ -52,6 +52,14 @@ func FromStartIndexBudget(request *pb.StartIndexRequest) model.AdmissionBudget {
 	}
 }
 
+// FromStartIndexSource converts the request source fields to model.WorktreeSourceRequest without validation.
+func FromStartIndexSource(request *pb.StartIndexRequest) model.WorktreeSourceRequest {
+	return model.WorktreeSourceRequest{
+		SourcePath:     request.GetSourcePath(),
+		StartingCommit: request.GetStartingCommit(),
+	}
+}
+
 // FromSchedulingPolicyPatch preserves protobuf field presence while validating
 // every supplied value before it reaches the daemon manager.
 func FromSchedulingPolicyPatch(
@@ -103,6 +111,9 @@ func ToCodebase(codebase model.Codebase) *pb.Codebase {
 		UpdatedAt:                   ts(codebase.UpdatedAt),
 		SchedulingPolicy:            schedulingPolicyToProto(codebase.SchedulingPolicy),
 		PolicyPendingInitialization: codebase.PolicyPendingInitialization,
+		WorktreeSourcePath:          codebase.WorktreeSourcePath,
+		WorktreeSourceId:            codebase.WorktreeSourceID,
+		WorktreeStartingCommit:      codebase.WorktreeStartingCommit,
 	}
 	if codebase.LastSuccessfulRun != nil {
 		result.LastSuccessfulRun = &pb.IndexRunSummary{

@@ -1403,8 +1403,16 @@ type Codebase struct {
 	ActiveProgress              *Progress         `protobuf:"bytes,18,opt,name=active_progress,json=activeProgress,proto3" json:"active_progress,omitempty"`
 	SchedulingPolicy            *SchedulingPolicy `protobuf:"bytes,19,opt,name=scheduling_policy,json=schedulingPolicy,proto3" json:"scheduling_policy,omitempty"`
 	PolicyPendingInitialization bool              `protobuf:"varint,20,opt,name=policy_pending_initialization,json=policyPendingInitialization,proto3" json:"policy_pending_initialization,omitempty"`
-	unknownFields               protoimpl.UnknownFields
-	sizeCache                   protoimpl.SizeCache
+	// worktree_source_path records the declared source worktree's canonical path and is empty when no source is recorded.
+	// A declared source does not prove that the source created the worktree.
+	WorktreeSourcePath string `protobuf:"bytes,21,opt,name=worktree_source_path,json=worktreeSourcePath,proto3" json:"worktree_source_path,omitempty"`
+	// worktree_source_id records the codebase identifier registered at the source path at the last index request and is empty when that path has no registered codebase.
+	WorktreeSourceId string `protobuf:"bytes,22,opt,name=worktree_source_id,json=worktreeSourceId,proto3" json:"worktree_source_id,omitempty"`
+	// worktree_starting_commit records the starting commit supplied by the caller.
+	// The daemon does not derive the value from HEAD.
+	WorktreeStartingCommit string `protobuf:"bytes,23,opt,name=worktree_starting_commit,json=worktreeStartingCommit,proto3" json:"worktree_starting_commit,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *Codebase) Reset() {
@@ -1568,6 +1576,27 @@ func (x *Codebase) GetPolicyPendingInitialization() bool {
 		return x.PolicyPendingInitialization
 	}
 	return false
+}
+
+func (x *Codebase) GetWorktreeSourcePath() string {
+	if x != nil {
+		return x.WorktreeSourcePath
+	}
+	return ""
+}
+
+func (x *Codebase) GetWorktreeSourceId() string {
+	if x != nil {
+		return x.WorktreeSourceId
+	}
+	return ""
+}
+
+func (x *Codebase) GetWorktreeStartingCommit() string {
+	if x != nil {
+		return x.WorktreeStartingCommit
+	}
+	return ""
 }
 
 type Job struct {
@@ -1903,8 +1932,14 @@ type StartIndexRequest struct {
 	MaxJobChunks      int32                  `protobuf:"varint,7,opt,name=max_job_chunks,json=maxJobChunks,proto3" json:"max_job_chunks,omitempty"`
 	MaxJobBytes       int64                  `protobuf:"varint,8,opt,name=max_job_bytes,json=maxJobBytes,proto3" json:"max_job_bytes,omitempty"`
 	SchedulingPolicy  *SchedulingPolicyPatch `protobuf:"bytes,9,opt,name=scheduling_policy,json=schedulingPolicy,proto3" json:"scheduling_policy,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// An optional path or codebase id declares the source worktree in the same Git repository; an empty value preserves the stored source.
+	// The daemon rejects source_path when the request path is inside an indexed covering codebase.
+	SourcePath string `protobuf:"bytes,10,opt,name=source_path,json=sourcePath,proto3" json:"source_path,omitempty"`
+	// The optional value records the known starting commit; an empty value preserves the stored value.
+	// The daemon rejects starting_commit when the target has no stored source path and the request supplies no source path.
+	StartingCommit string `protobuf:"bytes,11,opt,name=starting_commit,json=startingCommit,proto3" json:"starting_commit,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *StartIndexRequest) Reset() {
@@ -1998,6 +2033,20 @@ func (x *StartIndexRequest) GetSchedulingPolicy() *SchedulingPolicyPatch {
 		return x.SchedulingPolicy
 	}
 	return nil
+}
+
+func (x *StartIndexRequest) GetSourcePath() string {
+	if x != nil {
+		return x.SourcePath
+	}
+	return ""
+}
+
+func (x *StartIndexRequest) GetStartingCommit() string {
+	if x != nil {
+		return x.StartingCommit
+	}
+	return ""
 }
 
 type StartIndexResponse struct {
@@ -4563,7 +4612,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12:\n" +
 	"\x19last_attempted_percentage\x18\x02 \x01(\x05R\x17lastAttemptedPercentage\x127\n" +
 	"\tfailed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bfailedAt\x12\x12\n" +
-	"\x04code\x18\x04 \x01(\tR\x04code\"\xfe\a\n" +
+	"\x04code\x18\x04 \x01(\tR\x04code\"\x98\t\n" +
 	"\bCodebase\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12%\n" +
 	"\x0ecanonical_path\x18\x02 \x01(\tR\rcanonicalPath\x12\x16\n" +
@@ -4586,7 +4635,10 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x13reuse_sibling_count\x18\x11 \x01(\x05R\x11reuseSiblingCount\x12F\n" +
 	"\x0factive_progress\x18\x12 \x01(\v2\x1d.lmsemanticsearch.v1.ProgressR\x0eactiveProgress\x12R\n" +
 	"\x11scheduling_policy\x18\x13 \x01(\v2%.lmsemanticsearch.v1.SchedulingPolicyR\x10schedulingPolicy\x12B\n" +
-	"\x1dpolicy_pending_initialization\x18\x14 \x01(\bR\x1bpolicyPendingInitializationJ\x04\b\x03\x10\x04R\aaliases\"\x99\b\n" +
+	"\x1dpolicy_pending_initialization\x18\x14 \x01(\bR\x1bpolicyPendingInitialization\x120\n" +
+	"\x14worktree_source_path\x18\x15 \x01(\tR\x12worktreeSourcePath\x12,\n" +
+	"\x12worktree_source_id\x18\x16 \x01(\tR\x10worktreeSourceId\x128\n" +
+	"\x18worktree_starting_commit\x18\x17 \x01(\tR\x16worktreeStartingCommitJ\x04\b\x03\x10\x04R\aaliases\"\x99\b\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +
@@ -4624,7 +4676,7 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\bend_line\x18\x03 \x01(\x05R\aendLine\x12\x1a\n" +
 	"\blanguage\x18\x04 \x01(\tR\blanguage\x12\x14\n" +
 	"\x05score\x18\x05 \x01(\x01R\x05score\x12\x18\n" +
-	"\acontent\x18\x06 \x01(\tR\acontent\"\xb2\x03\n" +
+	"\acontent\x18\x06 \x01(\tR\acontent\"\xfc\x03\n" +
 	"\x11StartIndexRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\x12?\n" +
@@ -4634,7 +4686,11 @@ const file_lmsemanticsearch_v1_service_proto_rawDesc = "" +
 	"\x12include_submodules\x18\x06 \x03(\tR\x11includeSubmodules\x12$\n" +
 	"\x0emax_job_chunks\x18\a \x01(\x05R\fmaxJobChunks\x12\"\n" +
 	"\rmax_job_bytes\x18\b \x01(\x03R\vmaxJobBytes\x12W\n" +
-	"\x11scheduling_policy\x18\t \x01(\v2*.lmsemanticsearch.v1.SchedulingPolicyPatchR\x10schedulingPolicy\"\x82\x02\n" +
+	"\x11scheduling_policy\x18\t \x01(\v2*.lmsemanticsearch.v1.SchedulingPolicyPatchR\x10schedulingPolicy\x12\x1f\n" +
+	"\vsource_path\x18\n" +
+	" \x01(\tR\n" +
+	"sourcePath\x12'\n" +
+	"\x0fstarting_commit\x18\v \x01(\tR\x0estartingCommit\"\x82\x02\n" +
 	"\x12StartIndexResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1f\n" +
 	"\vcodebase_id\x18\x02 \x01(\tR\n" +

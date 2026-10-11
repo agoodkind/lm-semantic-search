@@ -213,6 +213,10 @@ func rawStatusLines(getIndex view.GetIndexView) []string {
 		statusLine += " held_for_sibling_build=true"
 	}
 	lines = append(lines, statusLine)
+	if raw.WorktreeSourcePath != "" || raw.WorktreeSourceID != "" || raw.WorktreeStartingCommit != "" {
+		lines = append(lines, fmt.Sprintf("worktree_source_path=%s worktree_source_id=%s worktree_starting_commit=%s",
+			raw.WorktreeSourcePath, raw.WorktreeSourceID, raw.WorktreeStartingCommit))
+	}
 	if raw.HasJob {
 		lines = append(lines,
 			fmt.Sprintf("job_id=%s operation=%s state=%s trigger=%s phase=%q",

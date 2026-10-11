@@ -272,13 +272,30 @@ type Codebase struct {
 	// is a linked git worktree, else empty. It lets the daemon recognize a
 	// removed worktree (git deleted its admin entry) after the directory is gone
 	// and auto-clean the disposable index.
-	WorktreeCommonDir     string `json:"worktree_common_dir,omitempty"`
-	InodeTrackingDisabled bool   `json:"inode_tracking_disabled,omitempty"`
+	WorktreeCommonDir string `json:"worktree_common_dir,omitempty"`
+	// WorktreeSourcePath is the declared source worktree's canonical path or an empty value when no source is recorded; the registry stores the field independently of EffectiveConfig.
+	// A declared source does not prove that the source created the worktree.
+	WorktreeSourcePath string `json:"worktree_source_path,omitempty"`
+	// WorktreeSourceID records the codebase identifier registered at the source path at the last index request and is empty when that path has no registered codebase.
+	WorktreeSourceID string `json:"worktree_source_id,omitempty"`
+	// WorktreeStartingCommit records the starting commit supplied by the caller.
+	// The daemon does not derive the value from HEAD.
+	WorktreeStartingCommit string `json:"worktree_starting_commit,omitempty"`
+	InodeTrackingDisabled  bool   `json:"inode_tracking_disabled,omitempty"`
 	// Declaration is the scalar schema a document collection registered. It is
 	// nil for code codebases and for document records written before
 	// registration saved a declaration.
 	Declaration *collection.Declaration `json:"declaration,omitempty"`
 	UpdatedAt   time.Time               `json:"updated_at"`
+}
+
+// WorktreeSourceRequest contains the optional source fields of one index request.
+// Empty fields preserve the stored values.
+type WorktreeSourceRequest struct {
+	// SourcePath is the requested source path or codebase identifier before canonicalization.
+	SourcePath string
+	// StartingCommit is the starting commit supplied by the caller.
+	StartingCommit string
 }
 
 // QuarantineState records why destructive sync is paused for a codebase and

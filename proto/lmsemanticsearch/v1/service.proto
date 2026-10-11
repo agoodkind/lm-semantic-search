@@ -258,6 +258,14 @@ message Codebase {
   Progress active_progress = 18;
   SchedulingPolicy scheduling_policy = 19;
   bool policy_pending_initialization = 20;
+  // worktree_source_path records the declared source worktree's canonical path and is empty when no source is recorded.
+  // A declared source does not prove that the source created the worktree.
+  string worktree_source_path = 21;
+  // worktree_source_id records the codebase identifier registered at the source path at the last index request and is empty when that path has no registered codebase.
+  string worktree_source_id = 22;
+  // worktree_starting_commit records the starting commit supplied by the caller.
+  // The daemon does not derive the value from HEAD.
+  string worktree_starting_commit = 23;
 }
 
 message Job {
@@ -323,6 +331,12 @@ message StartIndexRequest {
   int32 max_job_chunks = 7;
   int64 max_job_bytes = 8;
   SchedulingPolicyPatch scheduling_policy = 9;
+  // An optional path or codebase id declares the source worktree in the same Git repository; an empty value preserves the stored source.
+  // The daemon rejects source_path when the request path is inside an indexed covering codebase.
+  string source_path = 10;
+  // The optional value records the known starting commit; an empty value preserves the stored value.
+  // The daemon rejects starting_commit when the target has no stored source path and the request supplies no source path.
+  string starting_commit = 11;
 }
 
 message StartIndexResponse {

@@ -194,10 +194,18 @@ func (server *GRPCServer) StartIndex(ctx context.Context, request *pb.StartIndex
 	if pathErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
 	}
+	source := pbconv.FromStartIndexSource(request)
+	if strings.TrimSpace(source.SourcePath) != "" {
+		sourcePath, sourcePathErr := resolveRequestPath(source.SourcePath, request.GetClient().GetCallerCwd())
+		if sourcePathErr != nil {
+			return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInvalidPath(sourcePathErr.Error(), sourcePathErr)))
+		}
+		source.SourcePath = sourcePath
+	}
 	if refusal := server.refuseDuringMaintenance(ctx); refusal != nil {
 		return nil, refusal
 	}
-	job, codebase, deduplicated, overlapsCodebaseID, callErr := server.manager.StartIndexWithPolicy(ctx, requestedPath, pbClient(request.GetClient()), pbconv.FromStartIndexConfig(request), request.GetForce(), pbconv.FromStartIndexBudget(request), policyPatch)
+	job, codebase, deduplicated, overlapsCodebaseID, callErr := server.manager.StartIndexWithSource(ctx, requestedPath, pbClient(request.GetClient()), pbconv.FromStartIndexConfig(request), request.GetForce(), pbconv.FromStartIndexBudget(request), policyPatch, source)
 	if callErr != nil {
 		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
 	}
