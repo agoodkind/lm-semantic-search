@@ -6,11 +6,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"strings"
+	"time"
 
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
 
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"google.golang.org/grpc/peer"
 )
@@ -132,18 +135,62 @@ func runCopyChunkMutations(mutations copyChunkMutations) error {
 	return nil
 }
 
+// Milvus rejects flushes less than 10 seconds apart by default with rate limit exceeded.
+// CopyChunks flushes one collection twice.
+// Eight attempts 2 seconds apart wait up to 14 seconds per flush.
+const (
+	flushRateLimitMessage     = "rate limit exceeded"
+	flushRateLimitRetryWait   = 2 * time.Second
+	flushRateLimitMaxAttempts = 8
+)
+
 func (service *Service) flushCollection(ctx context.Context, collectionName string) error {
-	task, err := service.milvus.Flush(
-		ctx,
-		milvusclient.NewFlushOption(collectionName),
-	)
+	peerInfo, _ := peer.FromContext(ctx)
+	startedAt := clock.Now()
+	task, attempts, err := service.requestFlush(ctx, collectionName)
+	if attempts > 1 {
+		slog.InfoContext(ctx, "milvus rate limited the flush request", "collection", collectionName, "attempts", attempts, "waited_ms", clock.Now().Sub(startedAt).Milliseconds(), "peer", peerInfo.String())
+	}
 	if err != nil {
-		return wrapStoreError(ctx, err, "flush Milvus collection "+collectionName)
+		return err
 	}
 	if err := task.Await(ctx); err != nil {
 		return wrapStoreError(ctx, err, "await Milvus collection flush "+collectionName)
 	}
 	return nil
+}
+
+func (service *Service) requestFlush(
+	ctx context.Context,
+	collectionName string,
+) (*milvusclient.FlushTask, int, error) {
+	for attempt := 1; ; attempt++ {
+		task, err := service.milvus.Flush(
+			ctx,
+			milvusclient.NewFlushOption(collectionName),
+		)
+		if err == nil {
+			return task, attempt, nil
+		}
+		if !flushRateLimited(err) || attempt >= flushRateLimitMaxAttempts || !waitForFlushRetry(ctx) {
+			return nil, attempt, wrapStoreError(ctx, err, "flush Milvus collection "+collectionName)
+		}
+	}
+}
+
+func flushRateLimited(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), flushRateLimitMessage)
+}
+
+func waitForFlushRetry(ctx context.Context) bool {
+	timer := time.NewTimer(flushRateLimitRetryWait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func copiedChunkID(sourceID string, dstRelativePath string) string {
