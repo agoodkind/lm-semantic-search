@@ -55,6 +55,32 @@ func storeSearchSentinel(err error) error {
 	return nil
 }
 
+const flushRateLimitMessage = "rate limit exceeded"
+
+type flushRateLimitError struct {
+	cause error
+}
+
+func (err flushRateLimitError) Error() string {
+	return err.cause.Error()
+}
+
+func (err flushRateLimitError) Unwrap() error {
+	return err.cause
+}
+
+// classifyFlushError wraps Milvus Flush errors containing "rate limit exceeded" in flushRateLimitError and returns every other error unchanged.
+// The text match replaces merr.ErrServiceRateLimit because importing merr crashes the govulncheck gate.
+func classifyFlushError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(strings.ToLower(err.Error()), flushRateLimitMessage) {
+		return flushRateLimitError{cause: err}
+	}
+	return err
+}
+
 // wrapStoreError logs and classifies a milvus call error from the write, index,
 // or read/check paths. operation names the failing call (for example "create
 // Milvus collection <name>"). A transport-unavailable store outage becomes a

@@ -4,13 +4,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
 
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"google.golang.org/grpc/peer"
 )
@@ -25,9 +28,8 @@ import (
 // CopyChunks queries the source rows, computes new IDs and rows for the
 // destination path, inserts and flushes the new rows, then deletes and flushes
 // the source rows. A failure after the destination flush keeps the destination
-// durable even if the source deletion has an uncertain result. CopyChunks
-// returns the failure without retrying, leaving later convergence to remove
-// any remaining source rows.
+// durable even if the source deletion has an uncertain result.
+// CopyChunks retries a flush request after a Milvus flush rate limit rejection for up to 8 total attempts and returns every other failure without a retry.
 // The dense vector is preserved across the copy; the sparse vector, when
 // the collection is hybrid, is re-derived by the BM25 function from the
 // preserved content so no embedding API call is issued.
@@ -132,18 +134,48 @@ func runCopyChunkMutations(mutations copyChunkMutations) error {
 	return nil
 }
 
+// Milvus rejects flushes less than 10 seconds apart by default with rate limit exceeded.
+// CopyChunks flushes one collection twice.
+// Eight attempts 2 seconds apart wait up to 14 seconds per flush.
+const (
+	flushRateLimitRetryWait   = 2 * time.Second
+	flushRateLimitMaxAttempts = 8
+)
+
 func (service *Service) flushCollection(ctx context.Context, collectionName string) error {
-	task, err := service.milvus.Flush(
-		ctx,
-		milvusclient.NewFlushOption(collectionName),
-	)
+	peerInfo, _ := peer.FromContext(ctx)
+	startedAt := clock.Now()
+	task, attempts, err := service.requestFlush(ctx, collectionName)
+	if attempts > 1 {
+		slog.InfoContext(ctx, "milvus rate limited the flush request", "collection", collectionName, "attempts", attempts, "waited_ms", clock.Now().Sub(startedAt).Milliseconds(), "peer", peerInfo.String())
+	}
 	if err != nil {
-		return wrapStoreError(ctx, err, "flush Milvus collection "+collectionName)
+		return err
 	}
 	if err := task.Await(ctx); err != nil {
 		return wrapStoreError(ctx, err, "await Milvus collection flush "+collectionName)
 	}
 	return nil
+}
+
+func (service *Service) requestFlush(
+	ctx context.Context,
+	collectionName string,
+) (*milvusclient.FlushTask, int, error) {
+	for attempt := 1; ; attempt++ {
+		task, err := service.milvus.Flush(
+			ctx,
+			milvusclient.NewFlushOption(collectionName),
+		)
+		if err == nil {
+			return task, attempt, nil
+		}
+		flushErr := classifyFlushError(err)
+		var rateLimited flushRateLimitError
+		if !errors.As(flushErr, &rateLimited) || attempt >= flushRateLimitMaxAttempts || !reconnectSleep(ctx, flushRateLimitRetryWait) {
+			return nil, attempt, wrapStoreError(ctx, flushErr, "flush Milvus collection "+collectionName)
+		}
+	}
 }
 
 func copiedChunkID(sourceID string, dstRelativePath string) string {
