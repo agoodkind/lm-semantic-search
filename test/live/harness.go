@@ -110,6 +110,7 @@ type harness struct {
 	embeddingRecorder *embeddingCallRecorder
 	milvusContext     context.Context
 	stopServer        func()
+	fileWatcher       bool
 }
 
 type harnessEmbedder int
@@ -117,7 +118,23 @@ type harnessEmbedder int
 const (
 	harnessEmbedderFake harnessEmbedder = iota
 	harnessEmbedderONNX
+	harnessEmbedderEndpoint
 )
+
+// endpointBaseURLVariable and the related constants specify the environment
+// variable keys that harnessEmbedderEndpoint uses to configure the
+// OpenAI-compatible embedding endpoint URL, model, dimension, and API key.
+const (
+	endpointBaseURLVariable   = "LMS_LIVE_EMBEDDING_BASE_URL"
+	endpointModelVariable     = "LMS_LIVE_EMBEDDING_MODEL"
+	endpointDimensionVariable = "LMS_LIVE_EMBEDDING_DIMENSION"
+	endpointAPIKeyVariable    = "LMS_LIVE_EMBEDDING_API_KEY"
+)
+
+type liveDaemonOptions struct {
+	embedder    harnessEmbedder
+	fileWatcher bool
+}
 
 type milvusInventory map[string]map[string]string
 
@@ -297,6 +314,20 @@ func newONNXHarness(t *testing.T) *harness {
 	return newHarnessWithEmbedder(t, nil, 0, true, harnessEmbedderONNX)
 }
 
+// newMeasurementHarness creates an isolated harness with ONNX embeddings unless
+// LMS_LIVE_EMBEDDING_BASE_URL has a nonempty value, which selects an
+// OpenAI-compatible endpoint. Setup fails the test when Milvus is unavailable.
+// When fileWatcher is true, the harness enables the daemon file watcher and
+// starts the background sync coordinator.
+func newMeasurementHarness(t *testing.T, fileWatcher bool) *harness {
+	t.Helper()
+	embedder := harnessEmbedderONNX
+	if os.Getenv(endpointBaseURLVariable) != "" {
+		embedder = harnessEmbedderEndpoint
+	}
+	return newHarnessWithDaemonOptions(t, nil, 0, true, liveDaemonOptions{embedder: embedder, fileWatcher: fileWatcher})
+}
+
 func newHarnessWithEmbedder(
 	t *testing.T,
 	gate *embedGate,
@@ -305,6 +336,18 @@ func newHarnessWithEmbedder(
 	embedder harnessEmbedder,
 ) *harness {
 	t.Helper()
+	return newHarnessWithDaemonOptions(t, gate, idleTimeout, requireMilvus, liveDaemonOptions{embedder: embedder, fileWatcher: false})
+}
+
+func newHarnessWithDaemonOptions(
+	t *testing.T,
+	gate *embedGate,
+	idleTimeout time.Duration,
+	requireMilvus bool,
+	daemonOptions liveDaemonOptions,
+) *harness {
+	t.Helper()
+	embedder := daemonOptions.embedder
 
 	defaultConfig, err := config.Default()
 	if err != nil {
@@ -432,15 +475,18 @@ func newHarnessWithEmbedder(
 
 	embeddingRecorder := &embeddingCallRecorder{}
 	var cfg config.Config
-	if embedder == harnessEmbedderONNX {
-		cfg = resolveLiveONNXConfig(
+	if embedder == harnessEmbedderONNX || embedder == harnessEmbedderEndpoint {
+		cfg = resolveLiveConfigFor(
 			t,
 			stateRoot,
 			socketPath,
+			"",
 			milvusAddress,
 			defaultConfig.MilvusToken,
 			databaseName,
+			"",
 			idleTimeout,
+			daemonOptions,
 		)
 	} else {
 		embedServer := newFakeEmbeddingServerWithRecorder(
@@ -475,7 +521,7 @@ func newHarnessWithEmbedder(
 		t.Fatalf("NewManager returned error: %v", err)
 	}
 
-	stopServer = startInProcessServer(t, manager, socketPath)
+	stopServer = startDaemonServices(t, manager, cfg, daemonOptions.fileWatcher)
 
 	conn, client, err := grpcutil.DialDaemon(context.Background(), socketPath)
 	if err != nil {
@@ -503,6 +549,7 @@ func newHarnessWithEmbedder(
 		embeddingRecorder: embeddingRecorder,
 		milvusContext:     sandboxContext,
 		stopServer:        stopServer,
+		fileWatcher:       daemonOptions.fileWatcher,
 	}
 	h.trackTemporaryCollection(h.reuseCatalogName)
 	t.Cleanup(func() { h.teardown(h.stopServer) })
@@ -533,7 +580,7 @@ func (h *harness) restart(between func()) {
 		h.t.Fatalf("NewManager on restart returned error: %v", err)
 	}
 	h.manager = manager
-	h.stopServer = startInProcessServer(h.t, manager, h.config.SocketPath)
+	h.stopServer = startDaemonServices(h.t, manager, h.config, h.fileWatcher)
 	conn, client, err := grpcutil.DialDaemon(context.Background(), h.config.SocketPath)
 	if err != nil {
 		h.t.Fatalf("DialDaemon on restart returned error: %v", err)
@@ -1042,31 +1089,7 @@ func resolveLiveConfig(
 		databaseName,
 		harnessID,
 		idleTimeout,
-		harnessEmbedderFake,
-	)
-}
-
-func resolveLiveONNXConfig(
-	t *testing.T,
-	sandboxRoot string,
-	socketPath string,
-	milvusAddress string,
-	milvusToken string,
-	databaseName string,
-	idleTimeout time.Duration,
-) config.Config {
-	t.Helper()
-	return resolveLiveConfigFor(
-		t,
-		sandboxRoot,
-		socketPath,
-		"",
-		milvusAddress,
-		milvusToken,
-		databaseName,
-		"",
-		idleTimeout,
-		harnessEmbedderONNX,
+		liveDaemonOptions{embedder: harnessEmbedderFake, fileWatcher: false},
 	)
 }
 
@@ -1091,6 +1114,30 @@ func onnxEmbeddingSettings(t *testing.T) []liveSetting {
 	}
 }
 
+// endpointEmbeddingSettings trims the required endpoint environment values, maps
+// them to daemon settings, and selects the OpenAI embedding provider. It fails
+// the test if any required value is empty.
+func endpointEmbeddingSettings(t *testing.T) []liveSetting {
+	t.Helper()
+	settings := make([]liveSetting, 0, 4)
+	for _, variable := range []struct {
+		source string
+		target string
+	}{
+		{source: endpointBaseURLVariable, target: "OPENAI_BASE_URL"},
+		{source: endpointModelVariable, target: "EMBEDDING_MODEL"},
+		{source: endpointDimensionVariable, target: "EMBEDDING_DIMENSION"},
+		{source: endpointAPIKeyVariable, target: "OPENAI_API_KEY"},
+	} {
+		value := strings.TrimSpace(os.Getenv(variable.source))
+		if value == "" {
+			t.Fatalf("The required environment variable %s is unset or contains only whitespace. Set a nonempty value before running the endpoint harness.", variable.source)
+		}
+		settings = append(settings, liveSetting{name: variable.target, value: value})
+	}
+	return append(settings, liveSetting{name: "EMBEDDING_PROVIDER", value: "OpenAI"})
+}
+
 func resolveLiveConfigFor(
 	t *testing.T,
 	sandboxRoot string,
@@ -1101,9 +1148,10 @@ func resolveLiveConfigFor(
 	databaseName string,
 	harnessID string,
 	idleTimeout time.Duration,
-	embedder harnessEmbedder,
+	daemonOptions liveDaemonOptions,
 ) config.Config {
 	t.Helper()
+	embedder := daemonOptions.embedder
 
 	chosen := []liveSetting{
 		// The real store, which is what this suite exists to exercise.
@@ -1125,15 +1173,19 @@ func resolveLiveConfigFor(
 		// Background work is off so a scenario observes only what it asked for.
 		{name: "CLAUDE_CONTEXT_BACKGROUND_SYNC", value: "false"},
 		{name: "CLAUDE_CONTEXT_TRIGGER_WATCHER", value: "false"},
-		{name: "CLAUDE_CONTEXT_FILE_WATCHER", value: "false"},
+		{name: "CLAUDE_CONTEXT_FILE_WATCHER", value: strconv.FormatBool(daemonOptions.fileWatcher)},
 		{name: "CLAUDE_CONTEXT_DEBUG_LISTENER", value: "false"},
 		{name: "CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS", value: "0"},
 		{name: "CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", value: "1"},
 		{name: "CLAUDE_CONTEXT_RESUME_ON_BOOT", value: "false"},
 		{name: "CLAUDE_CONTEXT_MILVUS_COLLECTION_IDLE_TIMEOUT_MS", value: strconv.FormatInt(idleTimeout.Milliseconds(), 10)},
 	}
-	if embedder == harnessEmbedderONNX {
+	switch embedder {
+	case harnessEmbedderONNX:
 		chosen = append(chosen, onnxEmbeddingSettings(t)...)
+	case harnessEmbedderEndpoint:
+		chosen = append(chosen, endpointEmbeddingSettings(t)...)
+	case harnessEmbedderFake:
 	}
 	for _, setting := range chosen {
 		t.Setenv(setting.name, setting.value)
@@ -1171,6 +1223,13 @@ func resolveLiveConfigFor(
 		}
 		return resolved
 	}
+	if embedder == harnessEmbedderEndpoint {
+		endpointBaseURL := strings.TrimSpace(os.Getenv(endpointBaseURLVariable))
+		if resolved.OpenAIBaseURL != endpointBaseURL {
+			t.Fatalf("The resolved OpenAI base URL is %q. The endpoint harness requires the LMS_LIVE_EMBEDDING_BASE_URL value %q.", resolved.OpenAIBaseURL, endpointBaseURL)
+		}
+		return resolved
+	}
 	if resolved.OpenAIBaseURL != embedServerURL {
 		t.Fatalf(
 			"resolved OpenAIBaseURL = %q, want the fake embedder at %q",
@@ -1179,6 +1238,23 @@ func resolveLiveConfigFor(
 		)
 	}
 	return resolved
+}
+
+// startDaemonServices starts the background sync coordinator when fileWatcher is
+// true, then starts the daemon gRPC server. It returns a function that cancels
+// the background sync context and then stops the gRPC server. The caller closes
+// the manager afterward.
+func startDaemonServices(t *testing.T, manager *daemon.Manager, cfg config.Config, fileWatcher bool) func() {
+	t.Helper()
+	backgroundContext, stopBackground := context.WithCancel(context.Background())
+	if fileWatcher {
+		daemon.NewBackgroundSync(cfg, manager).Start(backgroundContext)
+	}
+	stopListener := startInProcessServer(t, manager, cfg.SocketPath)
+	return func() {
+		stopBackground()
+		stopListener()
+	}
 }
 
 // startInProcessServer serves the daemon gRPC service on a throwaway unix socket
