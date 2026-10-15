@@ -120,17 +120,24 @@ HEAD}` files. It does not depend on the daemon and does not call git.
 
 Discovery selects one source with `selectDiscoveredWorktreeSourceLocked`.
 Candidates are registered code indexes at other worktree roots in the same
-repository with the same embedding provider, model, and dimension. The daemon
-prefers an indexed sibling with the same HEAD commit, then the indexed main
-worktree, then the indexed sibling with the latest successful run. Without an
-indexed sibling, the daemon selects a sibling running its first build. Ties
-resolve by main worktree first, then path order. The daemon skips candidates
-that would create a source cycle and records no source without an eligible
-candidate.
+repository with the same embedding provider, model, and dimension.
+The daemon samples at most 200 relative paths evenly from the sorted union of
+candidate snapshot paths. It hashes the corresponding files in the new worktree
+with `merkle.ContentHash`, which uses the same SHA-256 hash as the snapshots,
+and counts exact matches for each candidate. Candidates with more matches rank
+first. Ties favor the same HEAD commit, then the main worktree, then the latest
+completed run, newest first. A checkout HEAD does not identify the contents of
+its saved index. Without usable snapshots, all match counts are zero. Without an
+indexed sibling, the daemon selects a sibling running its first build.
+Remaining ties favor the main worktree, then path order. The daemon skips
+candidates that would create a source cycle and records no source without an
+eligible candidate.
 
-Selection reads the registry and Git pointer files without querying the vector
-store. `gitworktree.HeadCommit` reads HEAD, loose refs, and `packed-refs` from
-disk.
+Selection reads the registry, Git pointer files, saved merkle snapshot files
+of candidates through `loadLiveCheckpoint`, and sampled files in the new
+worktree without querying the vector store. The daemon skips file hashing
+when fewer than two candidates own a live collection.
+`gitworktree.HeadCommit` reads HEAD, loose refs, and `packed-refs` from disk.
 
 An index request can declare a source with `source_path` and `starting_commit`.
 The command `lm-semantic-search codebase index` accepts `--source-path` and
@@ -215,15 +222,15 @@ Location / nesting:
 Reuse source availability:
 
 6. On first use with an indexed main worktree, discovery selects one eligible
-   source. An indexed sibling with the same HEAD commit takes priority over
-   the indexed main worktree.
+   source. An indexed sibling with more sampled content matches takes priority
+   over the indexed main worktree.
 7. When the main worktree is not indexed, discovery can select another indexed
    sibling or a sibling running its first build. Without either candidate, a
    read registers no codebase. An explicit index request performs a full embed.
    The daemon does not index the main worktree to create a source.
-8. With several indexed siblings, discovery selects one source by HEAD commit,
-   main worktree, and latest successful run, in that order. The build reads only
-   the target collection and the recorded source collection.
+8. With several indexed siblings, discovery selects one source by sampled
+   content match count first and applies the tie order above. The build reads
+   only the target collection and the recorded source collection.
 9. A sibling with a different embedding provider, model, or dimension is
    ineligible for discovery selection. If the recorded source's configuration
    differs at job time, status reports `source_embedding_configuration_differs`

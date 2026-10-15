@@ -2,6 +2,7 @@ package merkle
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -10,6 +11,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"goodkind.io/lm-semantic-search/internal/indexability"
+	"goodkind.io/lm-semantic-search/internal/model"
 )
 
 // guardedBuffer collects the process-global logger's output. slog.SetDefault is
@@ -207,6 +211,30 @@ func TestLoadSnapshotForConfigLegacyRejectsOnMismatch(t *testing.T) {
 	loaded, _ := LoadSnapshotForConfig(path, "sha256:request", "sha256:other")
 	if len(loaded.Files) != 0 {
 		t.Fatalf("Files = %#v, want empty due to legacy digest mismatch", loaded.Files)
+	}
+}
+
+func TestContentHashEqualsHashCaptureStoresForSameFile(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	relativePath := "sample.go"
+	content := []byte("package sample\n\nfunc Sample() int {\n\treturn 1\n}\n")
+	if err := os.WriteFile(filepath.Join(root, relativePath), content, 0o600); err != nil {
+		t.Fatalf("Writing the sample file %s failed with error %v.", relativePath, err)
+	}
+
+	var indexConfig model.IndexConfig
+	snapshot, err := Capture(context.Background(), indexability.NewResolver(nil, nil), "content-hash", root, indexConfig)
+	if err != nil {
+		t.Fatalf("Capturing the Merkle snapshot for %s failed with error %v.", root, err)
+	}
+	storedHash, stored := snapshot.Files[relativePath]
+	if !stored {
+		t.Fatalf("The snapshot does not contain the expected file %s. Its recorded file paths and hashes are %v.", relativePath, snapshot.Files)
+	}
+	if contentHash := ContentHash(content); contentHash != storedHash {
+		t.Fatalf("ContentHash returned %q instead of the hash %q that Capture stored for %s.", contentHash, storedHash, relativePath)
 	}
 }
 

@@ -71,6 +71,8 @@ func (manager *Manager) discoverWorktree(ctx context.Context, info gitworktree.I
 		}
 	}
 
+	sourceOverlaps := manager.discoveredSourceOverlaps(ctx, info, indexConfig)
+
 	manager.policyMutationMutex.Lock()
 	defer manager.policyMutationMutex.Unlock()
 	manager.mu.Lock()
@@ -84,10 +86,10 @@ func (manager *Manager) discoverWorktree(ctx context.Context, info gitworktree.I
 	record.EffectiveConfig = indexConfig
 	record.CollectionName = collectionName
 	record.WorktreeCommonDir = info.CommonDir
-	source, sourceTier, sourceSelected := manager.selectDiscoveredWorktreeSourceLocked(info, indexConfig)
+	source, sourceSelected := manager.selectDiscoveredWorktreeSourceLocked(info, indexConfig, sourceOverlaps)
 	if sourceSelected {
-		record.WorktreeSourcePath = source.CanonicalPath
-		record.WorktreeSourceID = source.ID
+		record.WorktreeSourcePath = source.codebase.CanonicalPath
+		record.WorktreeSourceID = source.codebase.ID
 	}
 	record.InodeTrackingDisabled = detectInodeTrackingDisabled(ctx, info.WorktreeRoot)
 	record.MerkleSnapshotPath = manager.merklePath(record.ID)
@@ -115,7 +117,7 @@ func (manager *Manager) discoverWorktree(ctx context.Context, info gitworktree.I
 		}()
 		manager.notifyCodebaseAdded(notifyCtx, record)
 	}()
-	slog.InfoContext(ctx, "discovered worktree on read; build deferred", "codebase_id", record.ID, "path", info.WorktreeRoot, "common_dir", info.CommonDir, "source_path", record.WorktreeSourcePath, "source_id", record.WorktreeSourceID, "source_tier", string(sourceTier))
+	slog.InfoContext(ctx, "discovered worktree on read; build deferred", "codebase_id", record.ID, "path", info.WorktreeRoot, "common_dir", info.CommonDir, "source_path", record.WorktreeSourcePath, "source_id", record.WorktreeSourceID, "source_tier", string(source.tier), "source_overlap_matches", source.overlap.matches, "source_overlap_sampled", source.overlap.sampled)
 	return record, true
 }
 
