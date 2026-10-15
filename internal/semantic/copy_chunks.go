@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
@@ -18,125 +19,119 @@ import (
 	"google.golang.org/grpc/peer"
 )
 
-// CopyChunks rewrites the relativePath column on every existing chunk row
-// for srcRelativePath so the same vectors are addressable under
-// dstRelativePath. Used by the converge decision table to handle a rename
-// or hardlink without re-embedding.
-//
-// Milvus does not support an in-place column update on a primary-keyed
-// row (the primary key in this schema is derived from relativePath), so
-// CopyChunks queries the source rows, computes new IDs and rows for the
-// destination path, inserts and flushes the new rows, then deletes and flushes
-// the source rows. A failure after the destination flush keeps the destination
-// durable even if the source deletion has an uncertain result.
-// CopyChunks retries a flush request after a Milvus flush rate limit rejection for up to 8 total attempts and returns every other failure without a retry.
-// The dense vector is preserved across the copy; the sparse vector, when
-// the collection is hybrid, is re-derived by the BM25 function from the
-// preserved content so no embedding API call is issued.
-func (service *Service) CopyChunks(ctx context.Context, codebasePath string, srcRelativePath string, dstRelativePath string) (int, error) {
+// ChunkCopy uses source and destination paths relative to the codebase root.
+type ChunkCopy struct {
+	Source      string
+	Destination string
+}
+
+// CopyChunks reads source rows for each copy with different source and
+// destination paths and inserts them under the destination path. After all
+// inserts, it flushes the collection once, deletes the rows of all copied source
+// paths with one delete, and does not flush after that delete. The returned
+// slice contains one row count per copy in the order of copies, with zero for a
+// copy with equal source and destination paths or no source rows. A failure
+// before the flush leaves the source rows in Milvus. After the flush, the
+// destination rows stay in Milvus even when the delete fails or its result is
+// uncertain.
+func (service *Service) CopyChunks(ctx context.Context, codebasePath string, copies []ChunkCopy) ([]int, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	if !service.Available() {
-		return 0, ErrUnavailable
+		return nil, ErrUnavailable
 	}
-	if srcRelativePath == dstRelativePath {
-		return 0, nil
+	copiedRowCounts := make([]int, len(copies))
+	if !hasDistinctChunkCopy(copies) {
+		return copiedRowCounts, nil
 	}
 	collectionName := service.CollectionName(codebasePath)
 	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if !hasCollection {
-		return 0, ErrCollectionMissing
+		return nil, ErrCollectionMissing
 	}
 	if err := service.PrepareCollection(ctx, collectionName); err != nil {
-		return 0, err
+		return nil, err
 	}
 	lease, err := service.AcquireCollection(ctx, collectionName)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer lease.Release()
 
-	source, err := service.fetchChunksForPath(ctx, collectionName, srcRelativePath)
+	copiedSources := make([]string, 0, len(copies))
+	for index, chunkCopy := range copies {
+		if chunkCopy.Source == chunkCopy.Destination {
+			continue
+		}
+		inserted, insertErr := service.insertCopiedRows(ctx, collectionName, chunkCopy)
+		if insertErr != nil {
+			return nil, insertErr
+		}
+		copiedRowCounts[index] = inserted
+		if inserted > 0 && !slices.Contains(copiedSources, chunkCopy.Source) {
+			copiedSources = append(copiedSources, chunkCopy.Source)
+		}
+	}
+	if len(copiedSources) == 0 {
+		return copiedRowCounts, nil
+	}
+	// The flush makes all destination rows durable before any source row deletion.
+	if err := service.flushCollection(ctx, collectionName); err != nil {
+		return nil, err
+	}
+	// The delete applies to later queries without another flush.
+	if _, err := service.deleteByRelativePaths(ctx, collectionName, copiedSources); err != nil {
+		return nil, err
+	}
+	slog.InfoContext(ctx, "semantic.copy_chunks", "collection", collectionName, "copies", len(copies), "sources_deleted", len(copiedSources), "peer", peerInfo.String())
+	return copiedRowCounts, nil
+}
+
+func hasDistinctChunkCopy(copies []ChunkCopy) bool {
+	for _, chunkCopy := range copies {
+		if chunkCopy.Source != chunkCopy.Destination {
+			return true
+		}
+	}
+	return false
+}
+
+// insertCopiedRows derives new row IDs from the destination path. Milvus cannot
+// update a row's primary key in place.
+func (service *Service) insertCopiedRows(ctx context.Context, collectionName string, chunkCopy ChunkCopy) (int, error) {
+	source, err := service.fetchChunksForPath(ctx, collectionName, chunkCopy.Source)
 	if err != nil {
 		return 0, err
 	}
 	if len(source.chunks) == 0 {
 		return 0, nil
 	}
-
-	rewritten, destinationIDs, splitPartsRecorded := rewriteCopiedRows(
-		source,
-		dstRelativePath,
-	)
-
-	mutations := copyChunkMutations{
-		insertDestination: func() error {
-			// CopyChunks rewrites the rows of a code collection.
-			return service.insertBatchWithIDs(
-				ctx,
-				collectionName,
-				rewritten,
-				destinationIDs,
-				source.vectors,
-				source.embeddingModels,
-				splitPartsRecorded,
-				CodeColumns(),
-			)
-		},
-		persistDestination: func() error {
-			return service.flushCollection(ctx, collectionName)
-		},
-		deleteSource: func() error {
-			// The deleted-row count is not part of the copy's result, which
-			// reports the rows written at the destination.
-			_, deleteErr := service.deleteByRelativePaths(
-				ctx,
-				collectionName,
-				[]string{srcRelativePath},
-			)
-			return deleteErr
-		},
-		persistSourceDelete: func() error {
-			return service.flushCollection(ctx, collectionName)
-		},
-	}
-	if err := runCopyChunkMutations(mutations); err != nil {
+	rewritten, destinationIDs, splitPartsRecorded := rewriteCopiedRows(source, chunkCopy.Destination)
+	// The insert reuses stored dense vectors and embedding models without calling
+	// an embedding API. In a hybrid collection, Milvus derives sparse vectors again
+	// from the copied content with its BM25 function.
+	if err := service.insertBatchWithIDs(
+		ctx,
+		collectionName,
+		rewritten,
+		destinationIDs,
+		source.vectors,
+		source.embeddingModels,
+		splitPartsRecorded,
+		CodeColumns(),
+	); err != nil {
 		return 0, err
 	}
-	slog.InfoContext(ctx, "semantic.copy_chunks", "collection", collectionName, "src", srcRelativePath, "dst", dstRelativePath, "rows", len(rewritten), "peer", peerInfo.String())
 	return len(rewritten), nil
 }
 
-type copyChunkMutation func() error
-
-type copyChunkMutations struct {
-	insertDestination   copyChunkMutation
-	persistDestination  copyChunkMutation
-	deleteSource        copyChunkMutation
-	persistSourceDelete copyChunkMutation
-}
-
-func runCopyChunkMutations(mutations copyChunkMutations) error {
-	if err := mutations.insertDestination(); err != nil {
-		return err
-	}
-	if err := mutations.persistDestination(); err != nil {
-		return err
-	}
-	if err := mutations.deleteSource(); err != nil {
-		return err
-	}
-	if err := mutations.persistSourceDelete(); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Milvus rejects flushes less than 10 seconds apart by default with rate limit exceeded.
-// CopyChunks flushes one collection twice.
-// Eight attempts 2 seconds apart wait up to 14 seconds per flush.
+// Milvus returns a rate limit error when a flush occurs less than 10 seconds
+// after the previous flush of the same collection. An earlier CopyChunks call or
+// another Milvus client, such as the upstream TypeScript adapter, can perform
+// that previous flush. flushCollection retries only rate limit errors, with 8
+// total attempts 2 seconds apart. Each flush can wait up to 14 seconds.
 const (
 	flushRateLimitRetryWait   = 2 * time.Second
 	flushRateLimitMaxAttempts = 8
@@ -172,8 +167,14 @@ func (service *Service) requestFlush(
 		}
 		flushErr := classifyFlushError(err)
 		var rateLimited flushRateLimitError
-		if !errors.As(flushErr, &rateLimited) || attempt >= flushRateLimitMaxAttempts || !reconnectSleep(ctx, flushRateLimitRetryWait) {
+		if !errors.As(flushErr, &rateLimited) || attempt >= flushRateLimitMaxAttempts {
 			return nil, attempt, wrapStoreError(ctx, flushErr, "flush Milvus collection "+collectionName)
+		}
+		if !reconnectSleep(ctx, flushRateLimitRetryWait) {
+			// When the context ends during the retry wait, the returned error preserves
+			// both the context error and the last Milvus rate limit error. Callers use
+			// errors.Is to distinguish cancellation from a Milvus failure.
+			return nil, attempt, wrapStoreError(ctx, errors.Join(ctx.Err(), flushErr), "flush Milvus collection "+collectionName)
 		}
 	}
 }

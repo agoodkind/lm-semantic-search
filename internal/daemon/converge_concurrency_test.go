@@ -534,11 +534,19 @@ func (f *fakeSemantic) BackfillCollectionScalars(context.Context, string, collec
 	return 0, 0, nil
 }
 
-func (f *fakeSemantic) CopyChunks(ctx context.Context, codebasePath string, src string, dst string) (int, error) {
-	if f.copyChunks != nil {
-		return f.copyChunks(ctx, codebasePath, src, dst)
+func (f *fakeSemantic) CopyChunks(ctx context.Context, codebasePath string, copies []semantic.ChunkCopy) ([]int, error) {
+	copiedRowCounts := make([]int, len(copies))
+	if f.copyChunks == nil {
+		return copiedRowCounts, nil
 	}
-	return 0, nil
+	for index, chunkCopy := range copies {
+		copied, err := f.copyChunks(ctx, codebasePath, chunkCopy.Source, chunkCopy.Destination)
+		if err != nil {
+			return nil, err
+		}
+		copiedRowCounts[index] = copied
+	}
+	return copiedRowCounts, nil
 }
 
 func (f *fakeSemantic) PruneToCurrent(context.Context, string, []string) error { return nil }
