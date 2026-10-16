@@ -353,6 +353,9 @@ func TestAcceptanceSourceSelectionMeasurement(t *testing.T) {
 			automatic.SelectionMilliseconds = selectionDuration.Milliseconds()
 			automatic.SourceBuildMS = sourceBuilds.Milliseconds()
 			appendSelectionReport(t, automatic)
+			if automaticSource != worktrees.near {
+				t.Errorf("GetIndex recorded automatic reuse source path %q instead of the expected near worktree path %q.", automaticSource, worktrees.near)
+			}
 
 			if os.Getenv("LMS_SOURCE_SELECTION_AUTOMATIC_ONLY") != "" {
 				return
