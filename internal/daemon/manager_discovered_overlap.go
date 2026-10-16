@@ -2,6 +2,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -57,14 +60,7 @@ func (manager *Manager) discoveredSourceOverlaps(
 	}
 
 	sampledPaths := sampleSnapshotPaths(snapshots)
-	worktreeHashes := make(map[string]string, len(sampledPaths))
-	for _, relativePath := range sampledPaths {
-		data, err := os.ReadFile(filepath.Join(info.WorktreeRoot, relativePath))
-		if err != nil {
-			continue
-		}
-		worktreeHashes[relativePath] = merkle.ContentHash(data)
-	}
+	worktreeHashes := hashSampledWorktreeFiles(ctx, info.WorktreeRoot, sampledPaths)
 
 	overlaps := make(map[string]discoveredSourceOverlap, len(snapshots))
 	for codebaseID, snapshot := range snapshots {
@@ -79,6 +75,33 @@ func (manager *Manager) discoveredSourceOverlaps(
 		overlaps[codebaseID] = discoveredSourceOverlap{matches: matches, sampled: len(sampledPaths)}
 	}
 	return overlaps
+}
+
+// hashSampledWorktreeFiles returns content hashes for sampled files it can read
+// from worktreeRoot. It skips missing files without logging. It omits files with
+// other read errors and logs one warning with their count and the first error.
+func hashSampledWorktreeFiles(ctx context.Context, worktreeRoot string, sampledPaths []string) map[string]string {
+	worktreeHashes := make(map[string]string, len(sampledPaths))
+	unreadableCount := 0
+	var firstReadErr error
+	for _, relativePath := range sampledPaths {
+		data, err := os.ReadFile(filepath.Join(worktreeRoot, relativePath))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			unreadableCount++
+			if firstReadErr == nil {
+				firstReadErr = err
+			}
+			continue
+		}
+		worktreeHashes[relativePath] = merkle.ContentHash(data)
+	}
+	if unreadableCount > 0 {
+		slog.WarnContext(ctx, "discover worktree: read sampled files failed", "path", worktreeRoot, "count", unreadableCount, "sampled", len(sampledPaths), "err", firstReadErr)
+	}
+	return worktreeHashes
 }
 
 func sampleSnapshotPaths(snapshots map[string]merkle.Snapshot) []string {
