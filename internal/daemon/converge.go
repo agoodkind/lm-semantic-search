@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -174,10 +175,12 @@ func (manager *Manager) convergeClassifiedPaths(
 	reportProgress func(bool, bool) bool,
 ) (bool, error) {
 	changed := false
+	renames := make([]pendingRenameCopy, 0)
 	for _, classifiedPath := range classifiedPaths {
-		// A cancel stops the walk here rather than mid-path, so the snapshot
-		// written below covers exactly the paths that reached the index. The
-		// paths not reached become drift, which the periodic sync repairs.
+		// Cancellation stops the walk between paths. The caller writes only completed
+		// snapshot changes. Queued rename destinations remain absent from the
+		// snapshot because cancellation returns before applyRenameCopies runs.
+		// Periodic sync repairs skipped paths and queued destinations as drift.
 		select {
 		case <-ctx.Done():
 			return changed, nil
@@ -197,6 +200,7 @@ func (manager *Manager) convergeClassifiedPaths(
 			snapshot,
 			admission,
 			lstat,
+			&renames,
 		)
 		if err != nil {
 			return changed, err
@@ -213,28 +217,37 @@ func (manager *Manager) convergeClassifiedPaths(
 			break
 		}
 	}
-	return changed, nil
+	// Cancellation skips the queued rename batch.
+	select {
+	case <-ctx.Done():
+		return changed, nil
+	default:
+	}
+	renamed := manager.applyRenameCopies(ctx, codebase.CanonicalPath, renames, snapshot, admission)
+	if renamed == 0 {
+		return changed, nil
+	}
+	outcome.PathsConverged += renamed
+	if checkpointErr := manager.checkpointJob(ctx); checkpointErr != nil {
+		return true, checkpointErr
+	}
+	return true, nil
 }
 
-// convergeOnePath converges a single path against the snapshot and
-// returns true when the snapshot was mutated. Non-absence filesystem and
-// indexing errors stop the batch before it reports a successful completion.
+// convergeOnePath returns true when it changes the snapshot and returns an error
+// for a filesystem failure other than absence or an indexing failure.
 //
-// The decision routine:
-//
-//  1. The indexability resolver gates a present path first; a tracked
-//     path that has become excluded, out of scope, or oversize is removed.
-//  2. A file whose (device, inode) matches a different path already in
-//     the snapshot with the same content hash is treated as a rename or
-//     hardlink: CopyChunks rewrites the Milvus key, skipping a re-embed.
-//  3. A file whose snapshot entry matches its current content hash is a
-//     no-op (but the inode sidecar is refreshed when newer).
-//  4. Any remaining mismatch is an upsert (Reindex with the new chunks).
-//
-// InodeTrackingDisabled on the codebase short-circuits steps 3 and the
-// inode-stamp branch so unstable-inode filesystems still converge
-// correctly using path + content-hash identity.
-func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Codebase, relativePath string, snapshot *merkle.Snapshot, admission *admissionState, lstat convergeLstatFunc) (bool, error) {
+//  1. The indexability resolver checks a present path and removes a tracked
+//     path that is now excluded, out of scope, or oversize.
+//  2. For a new path with the same device, inode, and content hash as a
+//     snapshot path, the function queues a copy for convergeClassifiedPaths and
+//     returns false; InodeTrackingDisabled prevents this match.
+//  3. For a tracked file with an unchanged content hash, the function skips
+//     indexing and refreshes a stale inode stamp only when inode tracking is
+//     enabled.
+//  4. The function calls convergeUpsert for any other file to replace its
+//     chunks through Reindex.
+func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Codebase, relativePath string, snapshot *merkle.Snapshot, admission *admissionState, lstat convergeLstatFunc, renames *[]pendingRenameCopy) (bool, error) {
 	root := codebase.CanonicalPath
 	cfg := codebase.EffectiveConfig
 
@@ -251,6 +264,7 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 			return manager.convergeRemoveExcluded(ctx, root, relativePath, string(decision.Reason), snapshot), nil
 		}
 	} else if !errors.Is(statErr, os.ErrNotExist) {
+		slog.ErrorContext(ctx, "converge.lstat_failed", "component", "daemon", "subcomponent", "converge", "path", relativePath, "err", statErr)
 		return false, fmt.Errorf("lstat converge path %q: %w", relativePath, statErr)
 	}
 	fileResult, indexErr := manager.runner.IndexOne(ctx, manager.indexability, codebase.ID, root, relativePath, cfg)
@@ -275,23 +289,36 @@ func (manager *Manager) convergeOnePath(ctx context.Context, codebase model.Code
 		return false, nil
 	}
 
-	if !previouslyTracked && manager.tryRenameCopy(ctx, root, relativePath, currentInode, fileResult.FileHash, snapshot) {
-		return true, nil
+	if !previouslyTracked {
+		if source := renameCopySource(currentInode, fileResult.FileHash, snapshot); source != "" {
+			*renames = append(*renames, pendingRenameCopy{
+				source:       source,
+				destination:  relativePath,
+				fileResult:   fileResult,
+				currentInode: currentInode,
+			})
+			return false, nil
+		}
 	}
 
+	return manager.convergeUpsert(ctx, root, relativePath, fileResult, currentInode, snapshot, admission), nil
+}
+
+// convergeUpsert updates the snapshot only after admission and Reindex succeed.
+func (manager *Manager) convergeUpsert(ctx context.Context, root string, relativePath string, fileResult indexer.OneFileResult, currentInode merkle.InodeRef, snapshot *merkle.Snapshot, admission *admissionState) bool {
 	if admissionErr := admission.Admit(fileResult.Chunks); admissionErr != nil {
 		slog.WarnContext(ctx, "converge.admission_halt", "component", "daemon", "subcomponent", "converge", "path", relativePath, "err", admissionErr)
-		return false, nil
+		return false
 	}
 	if upErr := manager.semantic.Reindex(ctx, root, fileResult.Chunks, semantic.RemovePaths([]string{relativePath}), nil, nil, semantic.CodeColumns()); upErr != nil {
 		manager.logConvergeReindexErr(ctx, relativePath, "upsert", upErr)
-		return false, nil
+		return false
 	}
 	snapshot.Files[relativePath] = fileResult.FileHash
 	snapshot.RecordInode(relativePath, currentInode)
 	metrics.ConvergeUpsert()
 	slog.InfoContext(ctx, "converge.upsert", "component", "daemon", "subcomponent", "converge", "path", relativePath, "chunks", len(fileResult.Chunks))
-	return true, nil
+	return true
 }
 
 // convergeRemoveExcluded removes a path the indexability resolver declined and
@@ -312,36 +339,58 @@ func (manager *Manager) convergeRemoveExcluded(ctx context.Context, root string,
 	return true
 }
 
-// tryRenameCopy attempts to lift the existing chunk rows of a renamed or
-// hard-linked file into a new key via CopyChunks. Returns true when the
-// copy succeeded and the snapshot was updated; the caller short-circuits
-// the embed path in that case. A miss (no inode sibling, no hash match,
-// CopyChunks unavailable, or a non-missing-collection error) falls
-// through to the normal embed flow.
-func (manager *Manager) tryRenameCopy(ctx context.Context, root string, relativePath string, currentInode merkle.InodeRef, freshHash string, snapshot *merkle.Snapshot) bool {
+// pendingRenameCopy stores a rename request and the values needed to update the
+// destination's snapshot entry after a successful copy or fallback upsert.
+type pendingRenameCopy struct {
+	source       string
+	destination  string
+	fileResult   indexer.OneFileResult
+	currentInode merkle.InodeRef
+}
+
+// renameCopySource requires both an inode match and a content hash match before
+// selecting a source path.
+func renameCopySource(currentInode merkle.InodeRef, freshHash string, snapshot *merkle.Snapshot) string {
 	siblings := snapshot.LookupByInode(currentInode)
 	if len(siblings) == 0 {
-		return false
+		return ""
 	}
-	source := pickRenameSource(siblings, snapshot.Files, freshHash)
-	if source == "" {
-		return false
+	return pickRenameSource(siblings, snapshot.Files, freshHash)
+}
+
+// applyRenameCopies copies queued renames in one batch and counts destinations
+// that succeed through a copy or fallback upsert. A copy error or a zero row
+// count triggers an upsert that replaces any destination rows the copy already
+// inserted.
+func (manager *Manager) applyRenameCopies(ctx context.Context, root string, pending []pendingRenameCopy, snapshot *merkle.Snapshot, admission *admissionState) int32 {
+	if len(pending) == 0 {
+		return 0
 	}
-	copied, copyErr := manager.semantic.CopyChunks(ctx, root, source, relativePath)
-	if copyErr != nil {
-		if !errors.Is(copyErr, semantic.ErrCollectionMissing) {
-			slog.WarnContext(ctx, "converge.copy_chunks_fallback", "component", "daemon", "subcomponent", "converge", "src", source, "dst", relativePath, "err", copyErr)
+	copies := make([]semantic.ChunkCopy, 0, len(pending))
+	for _, rename := range pending {
+		copies = append(copies, semantic.ChunkCopy{Source: rename.source, Destination: rename.destination})
+	}
+	copiedRowCounts, copyErr := manager.semantic.CopyChunks(ctx, root, copies)
+	if copyErr != nil && !errors.Is(copyErr, semantic.ErrCollectionMissing) {
+		slog.WarnContext(ctx, "converge.copy_chunks_fallback", "component", "daemon", "subcomponent", "converge", "copies", len(copies), "err", copyErr)
+	}
+	var copied int32
+	var upserted int32
+	for index, rename := range pending {
+		if copyErr == nil && copiedRowCounts[index] > 0 {
+			snapshot.Files[rename.destination] = rename.fileResult.FileHash
+			snapshot.RecordInode(rename.destination, rename.currentInode)
+			metrics.ConvergeCopyChunks()
+			slog.DebugContext(ctx, "converge.copy_chunks_path", "component", "daemon", "subcomponent", "converge", "src", rename.source, "dst", rename.destination, "rows", copiedRowCounts[index])
+			copied++
+			continue
 		}
-		return false
+		if manager.convergeUpsert(ctx, root, rename.destination, rename.fileResult, rename.currentInode, snapshot, admission) {
+			upserted++
+		}
 	}
-	if copied == 0 {
-		return false
-	}
-	snapshot.Files[relativePath] = freshHash
-	snapshot.RecordInode(relativePath, currentInode)
-	metrics.ConvergeCopyChunks()
-	slog.InfoContext(ctx, "converge.copy_chunks", "component", "daemon", "subcomponent", "converge", "src", source, "dst", relativePath, "rows", copied)
-	return true
+	slog.InfoContext(ctx, "converge.copy_chunks", "component", "daemon", "subcomponent", "converge", "renames", len(pending), "copied", copied, "upserted", upserted)
+	return copied + upserted
 }
 
 // stampInodeForPath returns the current (device, inode) for the converge

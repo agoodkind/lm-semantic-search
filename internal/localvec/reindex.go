@@ -135,38 +135,43 @@ func (store *Store) PromoteStaging(
 	return nil
 }
 
-// CopyChunks rewrites stored chunks from one relative path to another.
+// CopyChunks applies all copies in one rewrite of the stored collection. A later
+// copy can rewrite rows that an earlier copy renamed.
 func (store *Store) CopyChunks(
 	ctx context.Context,
 	codebasePath string,
-	srcRelativePath string,
-	dstRelativePath string,
-) (int, error) {
+	copies []semantic.ChunkCopy,
+) ([]int, error) {
 	if err := operationContextError(ctx, "copy local vector chunks"); err != nil {
-		return 0, err
+		return nil, err
 	}
-	if srcRelativePath == dstRelativePath {
-		return 0, nil
-	}
+	copiedRowCounts := make([]int, len(copies))
 	stored, err := store.collectionForName(store.CollectionName(codebasePath), false)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	copied := 0
 	err = stored.rewrite(true, func(rows []row) ([]row, error) {
-		for index := range rows {
-			if rows[index].RelativePath != srcRelativePath {
+		for copyIndex, chunkCopy := range copies {
+			if chunkCopy.Source == chunkCopy.Destination {
 				continue
 			}
-			destinationID := copiedRowID(rows[index], dstRelativePath)
-			rows[index].RelativePath = dstRelativePath
-			rows[index].ID = destinationID
-			rows[index].Label = 0
-			copied++
+			for index := range rows {
+				if rows[index].RelativePath != chunkCopy.Source {
+					continue
+				}
+				destinationID := copiedRowID(rows[index], chunkCopy.Destination)
+				rows[index].RelativePath = chunkCopy.Destination
+				rows[index].ID = destinationID
+				rows[index].Label = 0
+				copiedRowCounts[copyIndex]++
+			}
 		}
 		return rows, nil
 	})
-	return copied, err
+	if err != nil {
+		return nil, err
+	}
+	return copiedRowCounts, nil
 }
 
 // PruneToCurrent removes chunks whose paths are no longer current.

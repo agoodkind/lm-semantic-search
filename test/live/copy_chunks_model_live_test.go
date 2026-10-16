@@ -5,6 +5,7 @@ package live
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/milvus-io/milvus/client/v2/entity"
@@ -72,14 +73,13 @@ func TestCopyChunksWritesEachSourceRowModelOnTheCopiedRow(t *testing.T) {
 	copiedRows, err := service.CopyChunks(
 		context.Background(),
 		codebasePath,
-		sourceRelativePath,
-		destinationRelativePath,
+		[]semantic.ChunkCopy{{Source: sourceRelativePath, Destination: destinationRelativePath}},
 	)
 	if err != nil {
 		t.Fatalf("CopyChunks from source path %s to destination path %s in collection %s returned error %v.", sourceRelativePath, destinationRelativePath, collectionName, err)
 	}
-	if copiedRows != 2 {
-		t.Fatalf("CopyChunks reported %d copied rows instead of 2.", copiedRows)
+	if !slices.Equal(copiedRows, []int{2}) {
+		t.Fatalf("CopyChunks reported %v copied rows instead of [2].", copiedRows)
 	}
 
 	legacyCopy := onlyRowForContent(t, harness, collectionName, legacyContent)

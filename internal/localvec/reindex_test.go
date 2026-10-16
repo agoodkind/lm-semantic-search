@@ -357,14 +357,13 @@ func TestSplitRowsRoundTripAndCopyWithDistinctIdentities(t *testing.T) {
 	copied, err := store.CopyChunks(
 		context.Background(),
 		codebasePath,
-		sourcePath,
-		destinationPath,
+		[]semantic.ChunkCopy{{Source: sourcePath, Destination: destinationPath}},
 	)
 	if err != nil {
 		t.Fatalf("CopyChunks returned error: %v", err)
 	}
-	if copied != 2 {
-		t.Fatalf("CopyChunks copied %d rows, want 2", copied)
+	if !slices.Equal(copied, []int{2}) {
+		t.Fatalf("CopyChunks copied %v rows, want [2]", copied)
 	}
 	stored, err := store.collectionForName(store.CollectionName(codebasePath), false)
 	if err != nil {
