@@ -3,10 +3,12 @@
 package live
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +29,16 @@ const (
 	copyBatchDestFormat     = "batch/destination%d.txt"
 	copyBatchContentFormat  = "batched copy content for path %d part %d %s"
 	copyBatchCodebasePrefix = "copy-chunks-batch-"
+	copyBatchContentField   = "content"
+	copyBatchStartLineField = "startLine"
+	copyBatchEndLineField   = "endLine"
 )
+
+type copyBatchRow struct {
+	content   string
+	startLine int64
+	endLine   int64
+}
 
 func TestCopyChunksBatchFlushesOnceBeforeOneSourceDelete(t *testing.T) {
 	harness := newONNXHarness(t)
@@ -46,6 +57,8 @@ func TestCopyChunksBatchFlushesOnceBeforeOneSourceDelete(t *testing.T) {
 	runID := randomID()
 	copies := make([]semantic.ChunkCopy, 0, copyBatchPathCount)
 	chunks := make([]model.StoredChunk, 0, copyBatchPathCount*copyBatchRowsPerPath)
+	stagedRows := make(map[string][]copyBatchRow, copyBatchPathCount)
+	contentSources := make(map[string]string, copyBatchPathCount*copyBatchRowsPerPath)
 	for pathIndex := range copyBatchPathCount {
 		chunkCopy := semantic.ChunkCopy{
 			Source:      fmt.Sprintf(copyBatchSourceFormat, pathIndex),
@@ -53,13 +66,21 @@ func TestCopyChunksBatchFlushesOnceBeforeOneSourceDelete(t *testing.T) {
 		}
 		copies = append(copies, chunkCopy)
 		for partIndex := range int32(copyBatchRowsPerPath) {
-			chunks = append(chunks, model.StoredChunk{
+			chunk := model.StoredChunk{
 				Content:      fmt.Sprintf(copyBatchContentFormat, pathIndex, partIndex, runID),
 				RelativePath: chunkCopy.Source,
 				StartLine:    partIndex + 1,
 				EndLine:      partIndex + 1,
+			}
+			chunks = append(chunks, chunk)
+			stagedRows[chunkCopy.Source] = append(stagedRows[chunkCopy.Source], copyBatchRow{
+				content:   chunk.Content,
+				startLine: int64(chunk.StartLine),
+				endLine:   int64(chunk.EndLine),
 			})
+			contentSources[chunk.Content] = chunkCopy.Source
 		}
+		slices.SortFunc(stagedRows[chunkCopy.Source], compareCopyBatchRows)
 	}
 	if err := service.StageReindex(
 		context.Background(),
@@ -132,7 +153,68 @@ func TestCopyChunksBatchFlushesOnceBeforeOneSourceDelete(t *testing.T) {
 		if remainingSourceRows != 0 {
 			t.Fatalf("Expected source path %s to have no rows after the copy, but the count query returned %d rows.", chunkCopy.Source, remainingSourceRows)
 		}
+		copiedRows := copyBatchPathRows(t, harness, collectionName, chunkCopy.Destination)
+		for _, copiedRow := range copiedRows {
+			stagedSource := contentSources[copiedRow.content]
+			if stagedSource != chunkCopy.Source {
+				t.Fatalf("Destination path %s contains unexpected content %q. The matching staged source path is %q, where an empty string means the test did not stage this content. The test expected content staged for source path %s.", chunkCopy.Destination, copiedRow.content, stagedSource, chunkCopy.Source)
+			}
+		}
+		if !slices.Equal(copiedRows, stagedRows[chunkCopy.Source]) {
+			t.Fatalf("Destination path %s has rows %v, but the test expected the rows staged for source path %s: %v.", chunkCopy.Destination, copiedRows, chunkCopy.Source, stagedRows[chunkCopy.Source])
+		}
 	}
+}
+
+func compareCopyBatchRows(left copyBatchRow, right copyBatchRow) int {
+	return cmp.Or(
+		strings.Compare(left.content, right.content),
+		cmp.Compare(left.startLine, right.startLine),
+		cmp.Compare(left.endLine, right.endLine),
+	)
+}
+
+func copyBatchPathRows(t *testing.T, harness *harness, collectionName string, relativePath string) []copyBatchRow {
+	t.Helper()
+	queryContext, cancel := context.WithTimeout(context.Background(), copyBatchCountTimeout)
+	defer cancel()
+	filter := fmt.Sprintf("%s == %q", relativePathField, relativePath)
+	result, err := harness.milvus.Query(
+		queryContext,
+		milvusclient.NewQueryOption(collectionName).
+			WithFilter(filter).
+			WithOutputFields(copyBatchContentField, copyBatchStartLineField, copyBatchEndLineField).
+			WithConsistencyLevel(entity.ClStrong),
+	)
+	if err != nil {
+		t.Fatalf("The test expected the row query for collection %s with filter %q to succeed, but the query returned an error: %v.", collectionName, filter, err)
+	}
+	contentColumn := result.GetColumn(copyBatchContentField)
+	startLineColumn := result.GetColumn(copyBatchStartLineField)
+	endLineColumn := result.GetColumn(copyBatchEndLineField)
+	for _, field := range []string{copyBatchContentField, copyBatchStartLineField, copyBatchEndLineField} {
+		if result.GetColumn(field) == nil {
+			t.Fatalf("The test expected field %s in the row query result for collection %s with filter %q, but the result does not contain that field.", field, collectionName, filter)
+		}
+	}
+	rows := make([]copyBatchRow, 0, result.ResultCount)
+	for rowIndex := range result.ResultCount {
+		content, contentErr := contentColumn.GetAsString(rowIndex)
+		if contentErr != nil {
+			t.Fatalf("The test expected to read field %s from result row %d for collection %s with filter %q, but reading the value returned an error: %v.", copyBatchContentField, rowIndex, collectionName, filter, contentErr)
+		}
+		startLine, startLineErr := startLineColumn.GetAsInt64(rowIndex)
+		if startLineErr != nil {
+			t.Fatalf("The test expected to read field %s from result row %d for collection %s with filter %q, but reading the value returned an error: %v.", copyBatchStartLineField, rowIndex, collectionName, filter, startLineErr)
+		}
+		endLine, endLineErr := endLineColumn.GetAsInt64(rowIndex)
+		if endLineErr != nil {
+			t.Fatalf("The test expected to read field %s from result row %d for collection %s with filter %q, but reading the value returned an error: %v.", copyBatchEndLineField, rowIndex, collectionName, filter, endLineErr)
+		}
+		rows = append(rows, copyBatchRow{content: content, startLine: startLine, endLine: endLine})
+	}
+	slices.SortFunc(rows, compareCopyBatchRows)
+	return rows
 }
 
 func copyBatchMutationMethods(calls []milvusCall, collectionName string) []string {
