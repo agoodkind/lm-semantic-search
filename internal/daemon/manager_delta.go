@@ -898,9 +898,9 @@ func (manager *Manager) writeCheckpoint(ctx context.Context, state deltaState, l
 	}
 }
 
-// checkpointSnapshot returns a Merkle snapshot with configDigest and files.
-// It copies each nonzero InodeRef from capturedInodes for paths in files.
-// When inodeTrackingDisabled is true, it does not copy inode entries.
+// checkpointSnapshot keeps captured inode entries in full build and delta sync
+// snapshots. The converge operation matches those entries in the Merkle snapshot
+// to find the source path of a renamed file.
 func checkpointSnapshot(configDigest string, files map[string]string, capturedInodes map[string]merkle.InodeRef, inodeTrackingDisabled bool) merkle.Snapshot {
 	snapshot := merkle.Snapshot{ConfigDigest: configDigest, Files: files, Inodes: nil}
 	if inodeTrackingDisabled {
