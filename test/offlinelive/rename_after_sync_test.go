@@ -90,7 +90,7 @@ func TestRenameAfterFullBuildAndSyncCopiesChunks(t *testing.T) {
 	if err := os.Rename(sourcePath, destinationPath); err != nil {
 		t.Fatalf("rename %s to %s: %v", sourcePath, destinationPath, err)
 	}
-	harness.waitForRenameConverge(directory, before)
+	harness.waitForRenameConverge(directory, renamedSourceName)
 	after := metrics.Read()
 
 	copied := after.ConvergeCopyChunksTotal - before.ConvergeCopyChunksTotal
@@ -168,10 +168,10 @@ func (harness *harness) waitForScheduledSync(codebaseID string, earlierJobs map[
 	}
 }
 
-// waitForRenameConverge waits until a converge after the baseline metrics
-// snapshot records a chunk copy or upsert for a path and the codebase at
-// directory has no active job.
-func (harness *harness) waitForRenameConverge(directory string, before metrics.Snapshot) {
+// waitForRenameConverge waits until the live Merkle snapshot of the codebase
+// at directory records the destination path and the codebase does not have
+// an active job.
+func (harness *harness) waitForRenameConverge(directory string, destination string) {
 	harness.t.Helper()
 
 	waitContext, cancel := context.WithTimeout(context.Background(), renameConvergeTimeout)
@@ -179,11 +179,13 @@ func (harness *harness) waitForRenameConverge(directory string, before metrics.S
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for {
-		current := metrics.Read()
-		converged := current.ConvergeCopyChunksTotal > before.ConvergeCopyChunksTotal ||
-			current.ConvergeUpsertTotal > before.ConvergeUpsertTotal
 		status := harness.indexStatusAt(directory)
-		if converged && status.GetActiveJob() == nil {
+		snapshotPath := status.GetCodebase().GetMerkleSnapshotPath()
+		snapshot, err := merkle.ReadSnapshot(snapshotPath)
+		if err != nil {
+			harness.t.Fatalf("read the live Merkle snapshot %s after the rename: %v", snapshotPath, err)
+		}
+		if snapshot.HasFile(destination) && status.GetActiveJob() == nil {
 			return
 		}
 		select {
