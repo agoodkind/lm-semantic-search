@@ -434,6 +434,12 @@ func Equal(left Snapshot, right Snapshot) bool {
 	return true
 }
 
+// ContentHash returns the hexadecimal SHA-256 hash that Capture stores for file
+// bytes.
+func ContentHash(data []byte) string {
+	return digestBytes(data)
+}
+
 func digestBytes(data []byte) string {
 	hashBytes := sha256.Sum256(data)
 	return hex.EncodeToString(hashBytes[:])

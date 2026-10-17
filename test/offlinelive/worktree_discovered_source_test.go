@@ -3,6 +3,8 @@
 package offlinelive
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -18,6 +20,8 @@ const (
 	otherCommitTargetBranch = "other-commit-target"
 	earlierIndexedBranch    = "alpha"
 	laterIndexedBranch      = "beta"
+
+	revisedSourceCount = 10
 )
 
 func addNestedWorktreeFrom(t *testing.T, repository string, branch string, startPoint string) string {
@@ -151,6 +155,81 @@ func TestDiscoveredWorktreeSelectsLatestIndexedSiblingWithoutIndexedMainCheckout
 	harness.indexInOrder(earlierIndexed, laterIndexed)
 
 	discovered := harness.requireDiscoveredSource(target, laterIndexed)
+
+	harness.waitForAutomaticBuild(discovered)
+}
+
+func rewriteGeneratedSourceRange(t *testing.T, directory string, first int, count int) {
+	t.Helper()
+
+	for index := first; index < first+count; index++ {
+		path := filepath.Join(directory, generatedSourceName(index))
+		content := fmt.Sprintf(
+			"package pkg\n\n// Revised%04d returns the largest of the readings above %d.\nfunc Revised%04d(readings []int) int {\n\tlargest := %d\n\tfor _, reading := range readings {\n\t\tif reading > largest {\n\t\t\tlargest = reading\n\t\t}\n\t}\n\treturn largest\n}\n",
+			index, index, index, index,
+		)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("Writing the revised source file %s failed with error %v.", path, err)
+		}
+	}
+}
+
+func newRepositoryWithRevisedSiblingAndTarget(t *testing.T) (string, string, string) {
+	t.Helper()
+
+	repository := newSmallCommittedRepository(t)
+	sibling := addNamedNestedWorktree(t, repository, siblingWorktreeBranch)
+	rewriteGeneratedSourceRange(t, sibling, 0, revisedSourceCount)
+	gitCommitAll(t, sibling, "revise sources")
+	target := addNestedWorktreeFrom(t, repository, otherCommitTargetBranch, siblingWorktreeBranch)
+	writeGeneratedSourceRange(t, target, targetOnlySourceIndex, 1)
+	gitCommitAll(t, target, "add target source")
+	return repository, sibling, target
+}
+
+func (harness *harness) removeMerkleSnapshot(path string) {
+	harness.t.Helper()
+
+	codebase, found := harness.codebaseAt(path)
+	if !found {
+		harness.t.Fatalf("The registry does not contain the expected codebase at %s.", path)
+	}
+	snapshotPath := filepath.Join(harness.config.MerkleDir, codebase.GetId()+".json")
+	if err := os.Remove(snapshotPath); err != nil {
+		harness.t.Fatalf("Removing the Merkle snapshot %s for the codebase at %s failed with error %v.", snapshotPath, path, err)
+	}
+}
+
+func TestDiscoveredWorktreeSelectsSiblingWithLargestContentOverlapOverMainCheckout(t *testing.T) {
+	harness := newHarness(t)
+	repository, sibling, target := newRepositoryWithRevisedSiblingAndTarget(t)
+	harness.indexInOrder(sibling, repository)
+	siblingChunks := harness.indexStatusAt(sibling).GetCodebase().GetLastSuccessfulRun().GetTotalChunks()
+	if siblingChunks <= 0 {
+		t.Fatalf("The sibling worktree at %s recorded %d chunks in its last successful build instead of more than 0.", sibling, siblingChunks)
+	}
+
+	discovered := harness.requireDiscoveredSource(target, sibling)
+
+	targetRun := harness.waitForAutomaticBuild(discovered)
+	if reused := targetRun.GetProgress().GetChunksReused(); reused != siblingChunks {
+		t.Fatalf("The target worktree's automatic build reused %d chunks instead of the sibling build's %d chunks.", reused, siblingChunks)
+	}
+	targetChunks := harness.indexStatusAt(target).GetCodebase().GetLastSuccessfulRun().GetTotalChunks()
+	wantEmbedded := targetChunks - siblingChunks
+	if embedded := targetRun.GetProgress().GetChunksEmbedded(); wantEmbedded <= 0 || embedded != wantEmbedded {
+		t.Fatalf("The target worktree's automatic build embedded %d chunks instead of the required positive count %d. The chunk totals are %d for the target and %d for the sibling.", embedded, wantEmbedded, targetChunks, siblingChunks)
+	}
+}
+
+func TestDiscoveredWorktreeSelectsMainCheckoutWhenCandidateSnapshotsAreAbsent(t *testing.T) {
+	harness := newHarness(t)
+	repository, sibling, target := newRepositoryWithRevisedSiblingAndTarget(t)
+	harness.indexInOrder(sibling, repository)
+	harness.removeMerkleSnapshot(repository)
+	harness.removeMerkleSnapshot(sibling)
+
+	discovered := harness.requireDiscoveredSource(target, repository)
 
 	harness.waitForAutomaticBuild(discovered)
 }
