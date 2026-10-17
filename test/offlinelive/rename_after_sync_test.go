@@ -168,9 +168,8 @@ func (harness *harness) waitForScheduledSync(codebaseID string, earlierJobs map[
 	}
 }
 
-// waitForRenameConverge waits until a converge after before stores a path
-// through a chunk copy or an upsert and the codebase at directory has no
-// active job.
+// waitForRenameConverge waits until a converge after before records a chunk
+// copy or upsert for a path and the codebase at directory has no active job.
 func (harness *harness) waitForRenameConverge(directory string, before metrics.Snapshot) {
 	harness.t.Helper()
 

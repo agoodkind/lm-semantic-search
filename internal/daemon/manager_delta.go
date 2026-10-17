@@ -88,7 +88,7 @@ type deltaState struct {
 	// short-circuit for them. See forcedItemsSet.
 	forced map[string]struct{}
 	// inodeTrackingDisabled records model.Codebase.InodeTrackingDisabled for
-	// the job's codebase. When it is true, writeCheckpoint does not write inode
+	// the job's codebase. When it is true, checkpointSnapshot does not copy inode
 	// entries.
 	inodeTrackingDisabled bool
 }
