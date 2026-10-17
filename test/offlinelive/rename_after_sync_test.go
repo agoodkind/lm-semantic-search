@@ -46,7 +46,7 @@ const (
 // TestRenameAfterFullBuildAndSyncCopiesChunks indexes a directory with a full
 // build, edits one tracked file, and waits for the sync job that the periodic
 // sweep starts. It restarts the daemon with the file watcher on, renames
-// another tracked file, and waits for the watcher converge. The live Merkle
+// another tracked file, and waits for the watcher to converge. The live Merkle
 // snapshot must record an inode entry for each file after the full build, after
 // the sweep sync job, and after the restart. The converge must copy the stored
 // chunks to the new path without an embedder call, and a search must return
