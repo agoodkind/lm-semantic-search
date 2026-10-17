@@ -153,6 +153,10 @@ func (snapshot *Snapshot) CoversPath(relativePath string) bool {
 // matches the indexer's. The resolver and codebaseID are threaded into
 // discovery and the gate choke so the walk uses the daemon's one shared
 // indexability resolver.
+//
+// Capture also records the (device, inode) entry of each recorded regular file
+// from the stat result that the size gate reads. Capture does not record an
+// entry for a symbolic link or on a platform without inode identity.
 func Capture(
 	ctx context.Context,
 	resolver *indexability.Resolver,
@@ -165,13 +169,25 @@ func Capture(
 		return Snapshot{}, fmt.Errorf("discover sync files under %s: %w", root, err)
 	}
 
-	files := make(map[string]string, len(discoveryResult.Files))
+	snapshot := Snapshot{
+		ConfigDigest: "",
+		Files:        make(map[string]string, len(discoveryResult.Files)),
+		Inodes:       nil,
+	}
 	for _, path := range discoveryResult.Files {
 		if err := ctx.Err(); err != nil {
 			return Snapshot{}, fmt.Errorf("capture snapshot cancelled: %w", err)
 		}
 
-		info, err := os.Stat(path)
+		// Capture calls os.Lstat to read a regular file's metadata for
+		// resolver.Decide and inodeFromFileInfo. For a symbolic link, Capture calls
+		// os.Stat to read the target metadata for resolver.Decide. Capture does not
+		// record an inode entry for a symbolic link.
+		info, err := os.Lstat(path)
+		symlink := err == nil && info.Mode()&os.ModeSymlink != 0
+		if symlink {
+			info, err = os.Stat(path)
+		}
 		if err != nil {
 			// A file the walk listed can vanish before the stat (a delete or a
 			// dangling symlink between discovery and capture). Skip it like the
@@ -224,10 +240,11 @@ func Capture(
 		if !resolver.DecideContent(data).Indexed {
 			continue
 		}
-		files[relativePath] = digestBytes(data)
+		snapshot.Files[relativePath] = digestBytes(data)
+		if !symlink {
+			snapshot.RecordInode(relativePath, inodeFromFileInfo(info))
+		}
 	}
-
-	snapshot := Snapshot{ConfigDigest: "", Files: files, Inodes: nil}
 	return snapshot, nil
 }
 

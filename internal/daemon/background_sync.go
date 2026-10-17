@@ -552,6 +552,7 @@ func (syncer *BackgroundSync) executeWatcherConverge(
 			TotalBytes:        0,
 			Chunks:            nil,
 			FileHashes:        nil,
+			FileInodes:        nil,
 			SkippedFiles:      nil,
 			SkippedOversize:   0,
 			SkippedUnreadable: 0,

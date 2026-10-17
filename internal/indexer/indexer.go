@@ -15,6 +15,7 @@ import (
 	"goodkind.io/gksyntax/chunk"
 	"goodkind.io/lm-semantic-search/internal/discovery"
 	"goodkind.io/lm-semantic-search/internal/indexability"
+	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
@@ -33,11 +34,14 @@ type Runner struct {
 // to be valid UTF-8 on the gRPC wire) or when its size exceeds the
 // per-file cap.
 type Result struct {
-	IndexedFiles      int32
-	TotalChunks       int32
-	TotalBytes        int64
-	Chunks            []model.StoredChunk
-	FileHashes        map[string]string
+	IndexedFiles int32
+	TotalChunks  int32
+	TotalBytes   int64
+	Chunks       []model.StoredChunk
+	FileHashes   map[string]string
+	// FileInodes stores device and inode numbers by path from the captured
+	// snapshot. Index and IndexFiles return nil for this field.
+	FileInodes        map[string]merkle.InodeRef
 	SkippedFiles      []string
 	SkippedOversize   int32
 	SkippedUnreadable int32
@@ -417,6 +421,7 @@ func (runner *Runner) Index(ctx context.Context, resolver *indexability.Resolver
 		TotalBytes:        accumulator.totalBytes,
 		Chunks:            accumulator.storedChunks,
 		FileHashes:        accumulator.fileHashes,
+		FileInodes:        nil,
 		SkippedFiles:      accumulator.skippedFiles,
 		SkippedOversize:   accumulator.skippedOversize,
 		SkippedUnreadable: accumulator.skippedUnreadable,
@@ -480,6 +485,7 @@ func (runner *Runner) IndexFiles(ctx context.Context, resolver *indexability.Res
 		TotalBytes:        accumulator.totalBytes,
 		Chunks:            accumulator.storedChunks,
 		FileHashes:        accumulator.fileHashes,
+		FileInodes:        nil,
 		SkippedFiles:      accumulator.skippedFiles,
 		SkippedOversize:   accumulator.skippedOversize,
 		SkippedUnreadable: accumulator.skippedUnreadable,

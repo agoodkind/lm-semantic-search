@@ -87,6 +87,10 @@ type deltaState struct {
 	// fingerprint is unchanged, so applyDeltaChanges skips its hash-equality
 	// short-circuit for them. See forcedItemsSet.
 	forced map[string]struct{}
+	// inodeTrackingDisabled records model.Codebase.InodeTrackingDisabled for
+	// the job's codebase. When it is true, writeCheckpoint does not write inode
+	// entries.
+	inodeTrackingDisabled bool
 }
 
 // chunkCounters accumulates the reuse-vs-embed split across one run's per-file
@@ -265,6 +269,7 @@ func (manager *Manager) planSyncDiff(ctx context.Context, job model.Job, codebas
 			TotalBytes:        totalBytes,
 			Chunks:            nil,
 			FileHashes:        captured.Files,
+			FileInodes:        captured.Inodes,
 			SkippedFiles:      nil,
 			SkippedOversize:   0,
 			SkippedUnreadable: 0,
@@ -344,18 +349,19 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 
 	semanticReady := manager.semantic != nil && manager.semantic.Available()
 	state := deltaState{
-		plan:             plan,
-		snapshotPath:     manager.merklePath(codebase.ID),
-		working:          make(map[string]string, len(plan.seedSnapshot.Files)),
-		source:           source,
-		semantic:         semanticReady,
-		itemReuseEnabled: manager.resolveItemReusePolicy(ctx, job, false, semanticReady),
-		staging:          false,
-		reuse:            nil,
-		chunkCounts:      &chunkCounters{processed: 0, reused: 0, embedded: 0, dropped: 0, reuseVectorsLoaded: 0},
-		seededReuse:      0,
-		admission:        manager.admissionForJob(job),
-		forced:           forcedItemsSet(plan.forced),
+		plan:                  plan,
+		snapshotPath:          manager.merklePath(codebase.ID),
+		working:               make(map[string]string, len(plan.seedSnapshot.Files)),
+		source:                source,
+		semantic:              semanticReady,
+		itemReuseEnabled:      manager.resolveItemReusePolicy(ctx, job, false, semanticReady),
+		staging:               false,
+		reuse:                 nil,
+		chunkCounts:           &chunkCounters{processed: 0, reused: 0, embedded: 0, dropped: 0, reuseVectorsLoaded: 0},
+		seededReuse:           0,
+		admission:             manager.admissionForJob(job),
+		forced:                forcedItemsSet(plan.forced),
+		inodeTrackingDisabled: codebase.InodeTrackingDisabled,
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -391,6 +397,7 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 	}
 
 	result.FileHashes = state.working
+	result.FileInodes = plan.currentSnapshot.Inodes
 	fileCount, chunkCount := manager.codebaseTotals(ctx, job.CanonicalPath, state.working, result.TotalChunks)
 	result.IndexedFiles = fileCount
 	result.TotalChunks = chunkCount
@@ -475,7 +482,8 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 		seededReuse:      0,
 		admission:        manager.admissionForJob(job),
 		// A bootstrap re-embeds every item, so nothing needs per-item forcing.
-		forced: nil,
+		forced:                nil,
+		inodeTrackingDisabled: codebase.InodeTrackingDisabled,
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -651,6 +659,7 @@ func (manager *Manager) applyDeltaChanges(ctx context.Context, job model.Job, st
 		TotalBytes:        0,
 		Chunks:            make([]model.StoredChunk, 0),
 		FileHashes:        nil,
+		FileInodes:        nil,
 		SkippedFiles:      []string{},
 		SkippedOversize:   0,
 		SkippedUnreadable: 0,
@@ -882,11 +891,27 @@ func bootstrapReasonForEmptyDiffFallback(evidence collectionEvidence) bootstrapR
 }
 
 func (manager *Manager) writeCheckpoint(ctx context.Context, state deltaState, label string) {
-	snapshot := merkle.Snapshot{ConfigDigest: state.plan.configDigest, Files: state.working, Inodes: nil}
+	snapshot := checkpointSnapshot(state.plan.configDigest, state.working, state.plan.currentSnapshot.Inodes, state.inodeTrackingDisabled)
 	if err := merkle.WriteSnapshot(state.snapshotPath, snapshot); err != nil {
 		slog.ErrorContext(ctx, "checkpoint write failed", "path", state.snapshotPath, "label", label, "err", err)
 		return
 	}
+}
+
+// checkpointSnapshot returns a Merkle snapshot with configDigest and files.
+// It copies each nonzero InodeRef from capturedInodes for paths in files.
+// When inodeTrackingDisabled is true, it does not copy inode entries.
+func checkpointSnapshot(configDigest string, files map[string]string, capturedInodes map[string]merkle.InodeRef, inodeTrackingDisabled bool) merkle.Snapshot {
+	snapshot := merkle.Snapshot{ConfigDigest: configDigest, Files: files, Inodes: nil}
+	if inodeTrackingDisabled {
+		return snapshot
+	}
+	for relativePath := range files {
+		if ref, found := capturedInodes[relativePath]; found {
+			snapshot.RecordInode(relativePath, ref)
+		}
+	}
+	return snapshot
 }
 
 // phaseReindexingChanged is the job phase while the per-file embed loop runs,
