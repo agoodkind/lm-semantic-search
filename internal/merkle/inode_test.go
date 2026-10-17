@@ -11,9 +11,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-// TestCaptureRecordsInodeForRegularFileAndNotForSymlink proves Capture records
-// the (device, inode) entry that StatInode reads for a regular file. Capture
-// must not record an inode entry for a symbolic link to that file.
 func TestCaptureRecordsInodeForRegularFileAndNotForSymlink(t *testing.T) {
 	root := t.TempDir()
 	regularPath := filepath.Join(root, "regular.go")
