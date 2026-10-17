@@ -116,8 +116,8 @@ func TestRenameAfterFullBuildAndSyncCopiesChunks(t *testing.T) {
 // directory and fails unless the snapshot records one inode entry for each
 // recorded file. A full build writes its staging checkpoint and then renames
 // that file to the live path. The check after a full build therefore reads the
-// staging checkpoint content. The job argument is the label of the job that
-// wrote the snapshot in the log line and the failure messages.
+// staging checkpoint content. The job argument labels the snapshot in the log
+// line and failure messages.
 func (harness *harness) requireInodeEntryPerFile(directory string, job string) {
 	harness.t.Helper()
 
