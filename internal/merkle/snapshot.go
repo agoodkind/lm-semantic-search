@@ -179,10 +179,10 @@ func Capture(
 			return Snapshot{}, fmt.Errorf("capture snapshot cancelled: %w", err)
 		}
 
-		// Capture calls os.Lstat to read a regular file's metadata for
-		// resolver.Decide and inodeFromFileInfo. For a symbolic link, Capture calls
-		// os.Stat to read the target metadata for resolver.Decide. Capture does not
-		// record an inode entry for a symbolic link.
+		// Capture calls os.Lstat to identify symbolic links and read regular-file
+		// metadata for resolver.Decide and inodeFromFileInfo. For a symbolic link,
+		// Capture calls os.Stat to read the target metadata for resolver.Decide.
+		// Capture does not record an inode entry for a symbolic link.
 		info, err := os.Lstat(path)
 		symlink := err == nil && info.Mode()&os.ModeSymlink != 0
 		if symlink {

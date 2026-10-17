@@ -7,9 +7,6 @@ import (
 	"goodkind.io/lm-semantic-search/internal/merkle"
 )
 
-// statInode calls merkle.StatInode to read the device and inode numbers for
-// path and returns them as an inodeIdentity. It returns an error if
-// merkle.StatInode fails.
 func statInode(path string) (inodeIdentity, error) {
 	ref, err := merkle.StatInode(path)
 	if err != nil {
