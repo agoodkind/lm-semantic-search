@@ -130,6 +130,9 @@ func (harness *harness) requireInodeEntryPerFile(directory string, job string) {
 	if len(snapshot.Files) == 0 {
 		harness.t.Fatalf("The live Merkle snapshot after the %s records 0 files.", job)
 	}
+	if len(snapshot.Inodes) != len(snapshot.Files) {
+		harness.t.Fatalf("The live Merkle snapshot after the %s records %d inode entries for %d files. The test expected one inode entry for each recorded file.", job, len(snapshot.Inodes), len(snapshot.Files))
+	}
 	for relativePath := range snapshot.Files {
 		if _, found := snapshot.Inodes[relativePath]; !found {
 			harness.t.Fatalf("The live Merkle snapshot after the %s records file %s without an inode entry. It records %d files and %d inode entries.", job, relativePath, len(snapshot.Files), len(snapshot.Inodes))
