@@ -508,7 +508,7 @@ func (manager *Manager) writeCompletedArtifacts(ctx context.Context, codebase mo
 		}
 	}
 	if len(result.FileHashes) != 0 {
-		snapshot := merkle.Snapshot{ConfigDigest: codebase.EffectiveConfig.IgnoreDigest, Files: result.FileHashes, Inodes: nil}
+		snapshot := checkpointSnapshot(codebase.EffectiveConfig.IgnoreDigest, result.FileHashes, result.FileInodes, codebase.InodeTrackingDisabled)
 		if err := merkle.WriteSnapshot(codebase.MerkleSnapshotPath, snapshot); err != nil {
 			slog.ErrorContext(ctx, "write Merkle snapshot failed", "job_id", jobID, "err", err)
 		}
