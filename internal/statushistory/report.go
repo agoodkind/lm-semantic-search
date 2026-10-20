@@ -642,7 +642,7 @@ func buildTiming(spans []span, jobs map[string]model.Job, window Window, warning
 	}
 	if rootDuration > jobDuration {
 		*warnings = append(*warnings, "instrumented stage time exceeds measured job duration")
-		rootDuration = jobDuration
+		return list, nil
 	}
 	unattributed := jobDuration - rootDuration
 	return list, &unattributed
