@@ -189,6 +189,11 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) (*graphIndexTa
 		return nil, false
 	}
 
+	if err := manager.indexingDependencyError(); err != nil {
+		manager.updateJobFailed(ctx, job.ID, err)
+		return nil, false
+	}
+
 	if err := manager.updateJobRunning(job); err != nil {
 		slog.ErrorContext(ctx, "start job persistence failed", "job_id", job.ID, "err", err)
 		return nil, errors.Is(err, errRetryJobStart)

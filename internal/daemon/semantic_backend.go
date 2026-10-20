@@ -35,3 +35,11 @@ func newSemanticIndex(ctx context.Context, cfg config.Config) (semanticIndex, er
 		return service, nil
 	}
 }
+
+func (manager *Manager) indexingDependencyError() error {
+	service, configured := manager.semantic.(*semantic.Service)
+	if configured && service.Degraded() {
+		return semantic.ErrUnavailable
+	}
+	return nil
+}
