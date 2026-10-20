@@ -210,7 +210,7 @@ func registerStatusTool(mcpServer *server.MCPServer, socketPath string, outputMo
 	mcpServer.AddTool(
 		mcp.NewTool(
 			"get_indexing_status",
-			mcp.WithDescription("Get one codebase's indexing status, waiting up to 300 seconds while indexing progresses"),
+			mcp.WithDescription("Get one codebase's current indexing status without waiting for indexing to finish"),
 			mcp.WithString("absolutePath", mcp.Required(), mcp.Description("absolute path to the codebase directory")),
 		),
 		wrapTool("get_indexing_status", func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -218,17 +218,9 @@ func registerStatusTool(mcpServer *server.MCPServer, socketPath string, outputMo
 			if !ok {
 				return errResult, nil
 			}
-			timeout := time.Duration(defaultIndexWaitSeconds) * time.Second
-			result, waitErr := wait.ForIndexStatusWithClientInfo(ctx, socketPath, absolutePath, timeout, mcpClientInfo())
-			if result == nil {
-				message := "get indexing status returned no status"
-				if waitErr != nil {
-					message = "get indexing status: " + waitErr.Error()
-				}
-				slog.ErrorContext(ctx, "get indexing status returned no status", "path", absolutePath, "err", waitErr)
-				return toolErrorResult(message), nil
-			}
-			return renderToolResponse(outputMode, result)
+			return callDaemonTool(ctx, socketPath, outputMode, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (proto.Message, error) {
+				return client.GetIndex(ctx, &pb.GetIndexRequest{Path: absolutePath, Client: mcpClientInfo()})
+			})
 		}),
 	)
 }
