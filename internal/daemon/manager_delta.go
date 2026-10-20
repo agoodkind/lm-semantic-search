@@ -127,7 +127,7 @@ func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job,
 	// split is added on top, and the post-call fold below makes the total exact.
 	accProcessed, accReused, accEmbedded, accDropped, _ := state.chunkSplit()
 	var fileProcessed, fileReused, fileEmbedded, fileDropped int32
-	progressFn := func(progress semantic.Progress) {
+	progressFn := manager.trackJobWrites(job.ID, func(progress semantic.Progress) {
 		fileProcessed = progress.ChunksProcessed
 		fileReused = progress.ChunksReused
 		fileEmbedded = progress.ChunksEmbedded
@@ -142,7 +142,7 @@ func (manager *Manager) applyReindexForState(ctx context.Context, job model.Job,
 			progress.EmbeddingBatchesCompleted,
 			progress.CollectionRowsWritten,
 		)
-	}
+	})
 	columnSet := state.source.columnSet()
 	var err error
 	if state.staging {

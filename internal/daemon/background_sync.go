@@ -533,6 +533,7 @@ func (syncer *BackgroundSync) executeWatcherConverge(
 	codebaseID string,
 	relativePaths []string,
 ) {
+	runCtx = withWriteTotalsJob(runCtx, registration.job.ID)
 	outcome, runErr := syncer.manager.ConvergePaths(
 		runCtx,
 		codebaseID,

@@ -213,6 +213,10 @@ func Build(input Input) (Report, error) {
 	}
 	report.Metrics = buildMetrics(history.snapshots, current, window, resets)
 	report.Metrics = append(report.Metrics, jobMetrics(history.jobs, window)...)
+	if !jobWriteTotalsKnown(history.jobs, window) {
+		report.Coverage.Complete = false
+		report.Warnings = append(report.Warnings, "retained jobs do not include complete write totals")
+	}
 	if journalMismatch(history.snapshots, current, history.jobs, window) {
 		report.Coverage.Complete = false
 		report.Warnings = append(report.Warnings, "job journal retention does not cover terminal job counters")
@@ -559,8 +563,10 @@ func jobMetrics(jobs map[string]model.Job, window Window) []Metric {
 		values["chunks_processed"] += int64(job.Progress.ChunksProcessed)
 		values["chunks_reused"] += int64(job.Progress.ChunksReused)
 		values["chunks_embedded"] += int64(job.Progress.ChunksEmbedded)
-		values["embedding_batches"] += int64(job.Progress.EmbeddingBatchesCompleted)
-		values["collection_rows_written"] += int64(job.Progress.CollectionRowsWritten)
+		if totals := job.Progress.WriteTotals; totals != nil {
+			values["embedding_batches"] += totals.EmbeddingBatchesCompleted
+			values["collection_rows_written"] += totals.CollectionRowsWritten
+		}
 		if job.State == model.JobStateFailed {
 			values["job_failures"]++
 		}
@@ -571,6 +577,10 @@ func jobMetrics(jobs map[string]model.Job, window Window) []Metric {
 		metric.Name = name
 		metric.Unit = journalMetricUnit(name)
 		metric.Kind = metricKindCounter
+		if (name == "embedding_batches" || name == "collection_rows_written") && !jobWriteTotalsKnown(jobs, window) {
+			list = append(list, metric)
+			continue
+		}
 		metric.Delta = &value
 		rate := float64(value) / window.End.Sub(window.Start).Seconds()
 		metric.RatePerSecond = &rate
@@ -578,6 +588,15 @@ func jobMetrics(jobs map[string]model.Job, window Window) []Metric {
 	}
 	slices.SortFunc(list, func(left Metric, right Metric) int { return strings.Compare(left.Name, right.Name) })
 	return list
+}
+
+func jobWriteTotalsKnown(jobs map[string]model.Job, window Window) bool {
+	for _, job := range jobs {
+		if jobInWindow(job, window) && job.Progress.WriteTotals == nil {
+			return false
+		}
+	}
+	return true
 }
 
 func buildTiming(spans []span, jobs map[string]model.Job, window Window, warnings *[]string) ([]Duration, *int64) {

@@ -310,7 +310,8 @@ func (manager *Manager) convergeUpsert(ctx context.Context, root string, relativ
 		slog.WarnContext(ctx, "converge.admission_halt", "component", "daemon", "subcomponent", "converge", "path", relativePath, "err", admissionErr)
 		return false
 	}
-	if upErr := manager.semantic.Reindex(ctx, root, fileResult.Chunks, semantic.RemovePaths([]string{relativePath}), nil, nil, semantic.CodeColumns()); upErr != nil {
+	progress := manager.trackJobWrites(writeTotalsJobID(ctx), nil)
+	if upErr := manager.semantic.Reindex(ctx, root, fileResult.Chunks, semantic.RemovePaths([]string{relativePath}), progress, nil, semantic.CodeColumns()); upErr != nil {
 		manager.logConvergeReindexErr(ctx, relativePath, "upsert", upErr)
 		return false
 	}
@@ -378,6 +379,7 @@ func (manager *Manager) applyRenameCopies(ctx context.Context, root string, pend
 	var upserted int32
 	for index, rename := range pending {
 		if copyErr == nil && copiedRowCounts[index] > 0 {
+			manager.addJobWriteTotals(writeTotalsJobID(ctx), int64(copiedRowCounts[index]), 0)
 			snapshot.Files[rename.destination] = rename.fileResult.FileHash
 			snapshot.RecordInode(rename.destination, rename.currentInode)
 			metrics.ConvergeCopyChunks()
