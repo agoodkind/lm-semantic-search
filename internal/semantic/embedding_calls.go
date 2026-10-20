@@ -15,7 +15,6 @@ type embeddingCallCounter struct {
 	completed int32
 }
 
-// embedBatchWithProgress records successful calls within one write operation.
 func (service *Service) embedBatchWithProgress(ctx context.Context, texts []string) (embedding.BatchResult, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	result, err := service.embedder.EmbedBatch(ctx, texts)
