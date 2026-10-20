@@ -1,0 +1,5 @@
+quotaAndLimits:
+  dml:
+    enabled: true
+    insertRate:
+      max: 0.000001

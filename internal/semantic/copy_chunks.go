@@ -34,6 +34,8 @@ type ChunkCopy struct {
 // before the flush leaves the source rows in Milvus. After the flush, the
 // destination rows stay in Milvus even when the delete fails or its result is
 // uncertain.
+// On error, returned counts include acknowledged inserts and do not prove that
+// the flush or source deletion completed.
 func (service *Service) CopyChunks(ctx context.Context, codebasePath string, copies []ChunkCopy) ([]int, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	if !service.Available() {
@@ -67,7 +69,7 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, cop
 		}
 		inserted, insertErr := service.insertCopiedRows(ctx, collectionName, chunkCopy)
 		if insertErr != nil {
-			return nil, insertErr
+			return copiedRowCounts, insertErr
 		}
 		copiedRowCounts[index] = inserted
 		if inserted > 0 && !slices.Contains(copiedSources, chunkCopy.Source) {
@@ -79,11 +81,11 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, cop
 	}
 	// The flush makes all destination rows durable before any source row deletion.
 	if err := service.flushCollection(ctx, collectionName); err != nil {
-		return nil, err
+		return copiedRowCounts, err
 	}
 	// The delete applies to later queries without another flush.
 	if _, err := service.deleteByRelativePaths(ctx, collectionName, copiedSources); err != nil {
-		return nil, err
+		return copiedRowCounts, err
 	}
 	slog.InfoContext(ctx, "semantic.copy_chunks", "collection", collectionName, "copies", len(copies), "sources_deleted", len(copiedSources), "peer", peerInfo.String())
 	return copiedRowCounts, nil

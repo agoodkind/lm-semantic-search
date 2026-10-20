@@ -22,9 +22,9 @@ func (manager *Manager) trackJobWrites(jobID string, next func(semantic.Progress
 	var reportedRows, reportedBatches int32
 	return func(progress semantic.Progress) {
 		rows := max(progress.CollectionRowsWritten-reportedRows, 0)
-		batches := max(progress.EmbeddingBatchesCompleted-reportedBatches, 0)
+		batches := max(progress.EmbeddingCallsCompleted-reportedBatches, 0)
 		reportedRows = max(reportedRows, progress.CollectionRowsWritten)
-		reportedBatches = max(reportedBatches, progress.EmbeddingBatchesCompleted)
+		reportedBatches = max(reportedBatches, progress.EmbeddingCallsCompleted)
 		manager.addJobWriteTotals(jobID, int64(rows), int64(batches))
 		if next != nil {
 			next(progress)

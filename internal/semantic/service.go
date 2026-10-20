@@ -56,11 +56,14 @@ type Progress struct {
 	OverallPercent            float64
 	EmbeddingBatchesTotal     int32
 	EmbeddingBatchesCompleted int32
-	CollectionRowsWritten     int32
-	ChunksProcessed           int32
-	ChunksReused              int32
-	ChunksEmbedded            int32
-	ChunksDropped             int32
+	// EmbeddingCallsCompleted counts successful provider calls, including split
+	// retries. A completed pack can reuse every vector without calling a provider.
+	EmbeddingCallsCompleted int32
+	CollectionRowsWritten   int32
+	ChunksProcessed         int32
+	ChunksReused            int32
+	ChunksEmbedded          int32
+	ChunksDropped           int32
 }
 
 // CollectionFacts reports the live store facts for one collection name.

@@ -315,6 +315,7 @@ func emitProgress(
 		OverallPercent:            100,
 		EmbeddingBatchesTotal:     safeInt32(batches),
 		EmbeddingBatchesCompleted: safeInt32(batches),
+		EmbeddingCallsCompleted:   safeInt32(batches),
 		CollectionRowsWritten:     rows,
 		ChunksProcessed:           rows,
 		ChunksReused:              safeInt32(reused),

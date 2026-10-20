@@ -270,16 +270,21 @@ func (service *Service) packForEmbedding(chunks []model.StoredChunk, reuse map[s
 func (service *Service) insertChunksBatched(ctx context.Context, collectionName string, chunks []model.StoredChunk, collectionReady bool, phase string, progress func(Progress), reuse map[string]model.ReuseVector, columnSet StoreColumnSet) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.insertChunksBatched")
 	defer done(&err)
+	embeddingCalls := &embeddingCallCounter{completed: 0}
+	ctx = context.WithValue(ctx, embeddingCallCounterKey{}, embeddingCalls)
 
 	embeddingPacks := service.packForEmbedding(chunks, reuse)
 	totalEmbeddingBatches := len(embeddingPacks)
 	totalInsertBatches := 0
-	var writtenRows int32
-	var reusedRows int32
-	var embeddedRows int32
-	var droppedInputs int32
+	current := initialInsertProgress(phase, totalEmbeddingBatches)
 	var refusedEmptyInputs int32
 	var newCollectionLease CollectionLease
+	defer func() {
+		if err != nil && progress != nil {
+			current.EmbeddingCallsCompleted = embeddingCalls.completed
+			progress(current)
+		}
+	}()
 	defer func() {
 		if newCollectionLease != nil {
 			newCollectionLease.Release()
@@ -312,7 +317,7 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 				oversized,
 				config.ActiveEmbedTokenLimit(service.cfg),
 				NewChunkPacker(service.cfg.EmbeddingBatchSize, service.cfg.EmbeddingBatchTokenBudget),
-				service.embedder.EmbedBatch,
+				service.embedBatchWithProgress,
 			)
 			if retryErr != nil {
 				return retryErr
@@ -323,7 +328,7 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 				keptModels = append(keptModels, service.cfg.EmbeddingModel)
 			}
 			addReuseCatalogVectors(catalogVectors, retryChunks, retryVectors)
-			droppedInputs += safeInt32FromInt(dropped)
+			current.ChunksDropped += safeInt32FromInt(dropped)
 		}
 		writeResult, writeErr := service.writeEmbeddedChunkBatch(
 			ctx,
@@ -338,33 +343,42 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 		if writeResult.lease != nil {
 			newCollectionLease = writeResult.lease
 		}
+		totalInsertBatches += writeResult.insertBatches
+		current.CollectionRowsWritten += writeResult.writtenRows
+		current.ChunksProcessed = current.CollectionRowsWritten
 		if writeErr != nil {
 			return writeErr
 		}
 		collectionReady = writeResult.collectionReady
-		totalInsertBatches += writeResult.insertBatches
-		writtenRows += writeResult.writtenRows
+		current.EmbeddingBatchesCompleted = safeInt32FromInt(embeddingBatchIndex + 1)
+		current.EmbeddingCallsCompleted = embeddingCalls.completed
+		current.OverallPercent = 90 + (float64(embeddingBatchIndex+1)/float64(totalEmbeddingBatches))*10
 		if writeResult.writtenRows > 0 {
-			reusedRows += safeInt32FromInt(reused)
-			embeddedRows += safeInt32FromInt(len(keptChunks) - reused)
+			current.ChunksReused += safeInt32FromInt(reused)
+			current.ChunksEmbedded += safeInt32FromInt(len(keptChunks) - reused)
 		}
 		if progress != nil {
-			progress(Progress{
-				Phase:                     phase,
-				OverallPercent:            90 + (float64(embeddingBatchIndex+1)/float64(totalEmbeddingBatches))*10,
-				EmbeddingBatchesTotal:     safeInt32FromInt(totalEmbeddingBatches),
-				EmbeddingBatchesCompleted: safeInt32FromInt(embeddingBatchIndex + 1),
-				CollectionRowsWritten:     writtenRows,
-				ChunksProcessed:           writtenRows,
-				ChunksReused:              reusedRows,
-				ChunksEmbedded:            embeddedRows,
-				ChunksDropped:             droppedInputs,
-			})
+			progress(current)
 		}
 	}
-	logEmbedRunExceptions(ctx, collectionName, droppedInputs, refusedEmptyInputs)
-	slog.InfoContext(ctx, "semantic.chunks_written", "collection", collectionName, "embedding_batches", totalEmbeddingBatches, "insert_batches", totalInsertBatches, "chunks", writtenRows, "embedded", embeddedRows, "reused", reusedRows)
+	logEmbedRunExceptions(ctx, collectionName, current.ChunksDropped, refusedEmptyInputs)
+	slog.InfoContext(ctx, "semantic.chunks_written", "collection", collectionName, "embedding_batches", totalEmbeddingBatches, "insert_batches", totalInsertBatches, "chunks", current.CollectionRowsWritten, "embedded", current.ChunksEmbedded, "reused", current.ChunksReused)
 	return nil
+}
+
+func initialInsertProgress(phase string, totalBatches int) Progress {
+	return Progress{
+		Phase:                     phase,
+		OverallPercent:            90,
+		EmbeddingBatchesTotal:     safeInt32FromInt(totalBatches),
+		EmbeddingBatchesCompleted: 0,
+		EmbeddingCallsCompleted:   0,
+		CollectionRowsWritten:     0,
+		ChunksProcessed:           0,
+		ChunksReused:              0,
+		ChunksEmbedded:            0,
+		ChunksDropped:             0,
+	}
 }
 
 type embeddedChunkWriteResult struct {
@@ -630,12 +644,11 @@ func (service *Service) embedMissedTexts(ctx context.Context, missTexts []string
 	defer done(&err)
 	slog.InfoContext(ctx, "semantic.embed_batch_started", "inputs", len(missTexts), "estimated_tokens", estimatedBatchTokenCount(missTexts), "reused", reusedCount, "peer", peerInfo.String())
 
-	result, err = service.embedder.EmbedBatch(ctx, missTexts)
+	result, err = service.embedBatchWithProgress(ctx, missTexts)
 	if err != nil {
 		// EmbedBatch already returns a typed adapterr error; %w keeps that class
 		// visible to errors.As so the index and search paths classify an embedding
 		// failure the same way.
-		slog.ErrorContext(ctx, "embed batch failed", "peer", peerInfo.String(), "err", err)
 		return embedding.BatchResult{}, fmt.Errorf("embed chunk batch: %w", err)
 	}
 	if len(result.Vectors) != len(missTexts) {

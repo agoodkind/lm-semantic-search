@@ -372,6 +372,9 @@ func (manager *Manager) applyRenameCopies(ctx context.Context, root string, pend
 		copies = append(copies, semantic.ChunkCopy{Source: rename.source, Destination: rename.destination})
 	}
 	copiedRowCounts, copyErr := manager.semantic.CopyChunks(ctx, root, copies)
+	for _, count := range copiedRowCounts {
+		manager.addJobWriteTotals(writeTotalsJobID(ctx), int64(count), 0)
+	}
 	if copyErr != nil && !errors.Is(copyErr, semantic.ErrCollectionMissing) {
 		slog.WarnContext(ctx, "converge.copy_chunks_fallback", "component", "daemon", "subcomponent", "converge", "copies", len(copies), "err", copyErr)
 	}
@@ -379,7 +382,6 @@ func (manager *Manager) applyRenameCopies(ctx context.Context, root string, pend
 	var upserted int32
 	for index, rename := range pending {
 		if copyErr == nil && copiedRowCounts[index] > 0 {
-			manager.addJobWriteTotals(writeTotalsJobID(ctx), int64(copiedRowCounts[index]), 0)
 			snapshot.Files[rename.destination] = rename.fileResult.FileHash
 			snapshot.RecordInode(rename.destination, rename.currentInode)
 			metrics.ConvergeCopyChunks()
