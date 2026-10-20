@@ -190,14 +190,15 @@ type displayRule struct {
 // displayRules is the ordered base-display decision table. It is read top to
 // bottom; the first rule whose predicate holds decides the base display. The
 // live-job rules come first because a live job overrides the persisted status.
-// A codebase that matches no rule (NotIndexed or Indexing with no live job, an
-// interrupted build the background pass re-queues) defaults to preparing.
+// An interrupted indexing record reports stale until a live job resumes it.
+// The default display is preparing.
 var displayRules = []displayRule{
 	{func(in Inputs) bool { return in.HasActiveJob && in.JobPaused }, DisplayWaiting},
 	{func(in Inputs) bool { return in.HasActiveJob && in.BackgroundSyncReconcile }, DisplayIndexed},
 	{func(in Inputs) bool { return in.HasActiveJob && in.JobQueued }, DisplayPending},
 	{func(in Inputs) bool { return in.HasActiveJob && in.JobScopeKnown }, DisplayIndexing},
 	{func(in Inputs) bool { return in.HasActiveJob }, DisplayPreparing},
+	{func(in Inputs) bool { return in.Status == model.CodebaseStatusIndexing }, DisplayStale},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusPending }, DisplayPending},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusDiscovered }, DisplayDiscovered},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusQuarantined }, DisplayQuarantined},
@@ -225,7 +226,8 @@ func baseDisplay(in Inputs) Display {
 // stay as they are because the dependency does not change a local terminal state.
 func ResolveDisplay(in Inputs) Display {
 	base := baseDisplay(in)
-	if in.Dependency.Degraded() && (base == DisplayPreparing || base == DisplayIndexed) {
+	interrupted := in.Status == model.CodebaseStatusIndexing && !in.HasActiveJob
+	if in.Dependency.Degraded() && (base == DisplayPreparing || base == DisplayIndexed || interrupted) {
 		return DisplayWaiting
 	}
 	if !in.Dependency.Degraded() && base == DisplayIndexed {
