@@ -46,7 +46,9 @@ func TestIndexingStatusReturnsCurrentProgressWithoutWaiting(t *testing.T) {
 			socketPath, codebasePath := startStatusTestDaemon(t, state)
 			client := newStatusTestClient(t, socketPath)
 			started := time.Now()
-			status := callStatusTestTool(t, client, "get_indexing_status", codebasePath)
+			status := callStatusTestTool(t, client, "get_indexing_status", map[string]any{
+				"absolutePath": codebasePath,
+			})
 			elapsed := time.Since(started)
 			t.Logf("get_indexing_status state=%s searchable=%t elapsed=%s", status.GetCodebase().GetStatus(), status.GetSearchable(), elapsed)
 			if elapsed >= statusResponseLimit {
@@ -63,7 +65,10 @@ func TestWaitForIndexingStillWaitsForCurrentProgress(t *testing.T) {
 	socketPath, codebasePath := startStatusTestDaemon(t, model.CodebaseStatusPending)
 	client := newStatusTestClient(t, socketPath)
 	started := time.Now()
-	status := callStatusTestTool(t, client, "wait_for_indexing", codebasePath)
+	status := callStatusTestTool(t, client, "wait_for_indexing", map[string]any{
+		"absolutePath":         codebasePath,
+		"wait_timeout_seconds": 1,
+	})
 	elapsed := time.Since(started)
 	t.Logf("wait_for_indexing state=%s searchable=%t elapsed=%s", status.GetCodebase().GetStatus(), status.GetSearchable(), elapsed)
 	if elapsed < statusResponseLimit {
@@ -91,7 +96,9 @@ func TestIndexingStatusReturnsQueuedJobWithoutWaiting(t *testing.T) {
 		t.Fatalf("queue index_codebase result=%v error=%v", result, err)
 	}
 	started := time.Now()
-	status := callStatusTestTool(t, client, "get_indexing_status", codebasePath)
+	status := callStatusTestTool(t, client, "get_indexing_status", map[string]any{
+		"absolutePath": codebasePath,
+	})
 	elapsed := time.Since(started)
 	t.Logf("get_indexing_status state=%s job=%s searchable=%t elapsed=%s", status.GetCodebase().GetStatus(), status.GetActiveJob().GetState(), status.GetSearchable(), elapsed)
 	if elapsed >= statusResponseLimit || status.GetSearchable() || status.GetActiveJob().GetState() != string(model.JobStateQueued) {
@@ -119,14 +126,10 @@ func TestIndexingStatusReportsUnavailableDaemon(t *testing.T) {
 	t.Logf("get_indexing_status unavailable daemon: %s", text)
 }
 
-func callStatusTestTool(t *testing.T, client *mcpclient.Client, toolName, codebasePath string) *pb.GetIndexResponse {
+func callStatusTestTool(t *testing.T, client *mcpclient.Client, toolName string, arguments map[string]any) *pb.GetIndexResponse {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*statusResponseLimit)
 	defer cancel()
-	arguments := map[string]any{"absolutePath": codebasePath}
-	if toolName == "wait_for_indexing" {
-		arguments["wait_timeout_seconds"] = 1
-	}
 	request := statusToolRequest(arguments)
 	request.Params.Name = toolName
 	result, err := client.CallTool(ctx, request)

@@ -37,6 +37,9 @@ type semanticCollectionInspector interface {
 // semanticHealthReader probes whether search can serve a query, both globally
 // (store reachability) and per-path (the queried collection's load state).
 type semanticHealthReader interface {
+	// Degraded reports whether a required backend is unavailable. An
+	// intentionally unconfigured backend returns false.
+	Degraded() bool
 	// ProbeHealth actively checks that the store is reachable now, returning an
 	// adapterr-classified error when it is not. It is the global shared-dependency
 	// probe for surfaces without a single path.

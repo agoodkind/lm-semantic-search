@@ -190,8 +190,6 @@ type displayRule struct {
 // displayRules is the ordered base-display decision table. It is read top to
 // bottom; the first rule whose predicate holds decides the base display. The
 // live-job rules come first because a live job overrides the persisted status.
-// An interrupted indexing record reports stale until a live job resumes it.
-// The default display is preparing.
 var displayRules = []displayRule{
 	{func(in Inputs) bool { return in.HasActiveJob && in.JobPaused }, DisplayWaiting},
 	{func(in Inputs) bool { return in.HasActiveJob && in.BackgroundSyncReconcile }, DisplayIndexed},

@@ -148,6 +148,11 @@ func (store *Store) Available() bool {
 	return store != nil && store.available
 }
 
+// Degraded treats the embedded vector store as required for the offline profile.
+func (store *Store) Degraded() bool {
+	return !store.Available()
+}
+
 // AcquireCollection protects a local collection, which is always resident.
 func (store *Store) AcquireCollection(
 	ctx context.Context,
