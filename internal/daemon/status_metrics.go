@@ -405,7 +405,7 @@ func jobActivityRow(job model.Job) *pb.ActivityRow {
 		wire.GetState(),
 		wire.GetSchedulingReason(),
 	)
-	return &pb.ActivityRow{Metrics: []*pb.Metric{
+	row := &pb.ActivityRow{Metrics: []*pb.Metric{
 		stringMetric(statusGroupActivity, "job_id", wire.GetId()),
 		stringMetric(statusGroupActivity, "source", activitySourceJob),
 		stringMetric(statusGroupActivity, "codebase_id", wire.GetCodebaseId()),
@@ -439,6 +439,14 @@ func jobActivityRow(job model.Job) *pb.ActivityRow {
 		protoTimeMetric(statusGroupActivity, "last_event_at", progress.GetLastEventAt()),
 		protoTimeMetric(statusGroupActivity, "heartbeat_at", progress.GetHeartbeatAt()),
 	}}
+	rowsMetric := absentMetric(statusGroupActivity, "collection_rows_written_total")
+	batchesMetric := absentMetric(statusGroupActivity, "embedding_batches_completed_total")
+	if totals := job.Progress.WriteTotals; totals != nil {
+		rowsMetric = intMetric(statusGroupActivity, "collection_rows_written_total", totals.CollectionRowsWritten, unitRows)
+		batchesMetric = intMetric(statusGroupActivity, "embedding_batches_completed_total", totals.EmbeddingBatchesCompleted, unitBatches)
+	}
+	row.Metrics = append(row.Metrics, rowsMetric, batchesMetric)
+	return row
 }
 
 // pendingActivityRow projects one coalesced request waiting on its codebase's

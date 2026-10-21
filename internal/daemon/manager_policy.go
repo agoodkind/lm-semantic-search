@@ -62,6 +62,7 @@ func newQueuedJob(
 			EmbeddingBatchesTotal:     0,
 			EmbeddingBatchesCompleted: 0,
 			CollectionRowsWritten:     0,
+			WriteTotals:               &model.WriteTotals{CollectionRowsWritten: 0, EmbeddingBatchesCompleted: 0},
 			LastEventAt:               now,
 			HeartbeatAt:               now,
 			ModelDownload:             nil,

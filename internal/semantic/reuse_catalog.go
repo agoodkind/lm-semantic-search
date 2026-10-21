@@ -14,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"google.golang.org/grpc/peer"
@@ -284,7 +285,7 @@ func (service *Service) getReuseCatalogModelKeys(
 			"peer", peerInfo.String(),
 			"err", err,
 		)
-		return nil, fmt.Errorf("get content vector reuse catalog: %w", err)
+		return nil, service.reuseCatalogReadError(collectionName, err, "get content vector reuse catalog")
 	}
 	rowKeyColumn := resultSet.GetColumn(reuseCatalogRowKeyFieldName)
 	vectorColumn := resultSet.GetColumn(denseVectorFieldName)
@@ -339,7 +340,7 @@ func (service *Service) queryReuseCatalogKeys(
 			"peer", peerInfo.String(),
 			"err", err,
 		)
-		return nil, fmt.Errorf("query content vector reuse catalog: %w", err)
+		return nil, service.reuseCatalogReadError(collectionName, err, "query content vector reuse catalog")
 	}
 	return readReuseCatalogEntries(ctx, resultSet, entries)
 }
@@ -406,10 +407,11 @@ func (service *Service) loadReuseCatalogRowKeys(
 	if err != nil {
 		wrappedErr := fmt.Errorf("query content vector catalog row keys: %w", err)
 		slog.ErrorContext(ctx, "query content vector catalog row keys failed", "peer", peerInfo.String(), "err", wrappedErr)
-		if storeUnavailable(err) {
-			return nil, adapterr.NewMilvusUnavailable(wrappedErr)
-		}
-		return nil, wrappedErr
+		return nil, service.reuseCatalogReadError(
+			reuseCatalogCollectionName(service.cfg, dimension),
+			err,
+			"query content vector catalog row keys",
+		)
 	}
 	rowKeyColumn := resultSet.GetColumn(reuseCatalogRowKeyFieldName)
 	if resultSet.ResultCount > 0 && rowKeyColumn == nil {
@@ -423,6 +425,24 @@ func (service *Service) loadReuseCatalogRowKeys(
 		existing[rowKey] = struct{}{}
 	}
 	return existing, nil
+}
+
+// reuseCatalogReadError keeps shared catalog outages resumable. A readiness
+// failure invalidates the catalog's cached residency before the next attempt.
+func (service *Service) reuseCatalogReadError(
+	collectionName string,
+	err error,
+	operation string,
+) error {
+	wrappedErr := fmt.Errorf("%s: %w", operation, err)
+	if errors.Is(err, merr.ErrCollectionNotLoaded) || errors.Is(err, merr.ErrCollectionOnRecovering) {
+		service.residency.Forget(collectionName)
+		return adapterr.NewMilvusUnavailable(wrappedErr)
+	}
+	if storeUnavailable(err) {
+		return adapterr.NewMilvusUnavailable(wrappedErr)
+	}
+	return wrappedErr
 }
 
 func (service *Service) appendReuseCatalog(

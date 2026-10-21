@@ -1,0 +1,9 @@
+quotaAndLimits:
+  limits:
+    complexDeleteLimitEnable: true
+    allocRetryTimes: 1
+    allocWaitInterval: 10
+  dml:
+    enabled: true
+    deleteRate:
+      max: 0.000001

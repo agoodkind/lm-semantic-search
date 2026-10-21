@@ -114,6 +114,12 @@ func TestCopyChunksFailsAfterEveryFlushAttemptIsRateLimited(t *testing.T) {
 	if elapsed < flushRetryMinimumWait {
 		t.Fatalf("CopyChunks returned after %s, but the test expected at least %s of retry waits.", elapsed.Round(time.Millisecond), flushRetryMinimumWait)
 	}
+	if len(copied) != 1 || copied[0] != flushRetryRows {
+		t.Fatalf("CopyChunks acknowledged row counts %v, want [%d] despite the later flush failure", copied, flushRetryRows)
+	}
+	if destinationRows := fixture.pathRowCount(t, flushRetryDestinationPath); destinationRows != flushRetryRows {
+		t.Fatalf("Milvus stored %d acknowledged destination rows, want %d", destinationRows, flushRetryRows)
+	}
 	fixture.assertSourceRowsKept(t)
 }
 
@@ -183,7 +189,12 @@ type copyChunksResult struct {
 // count.
 func startFlushRetryFixture(t *testing.T) flushRetryFixture {
 	t.Helper()
-	stack := startThrowawayStackWithMilvusConfig(t, flushRetryMilvusMemory, flushRetryMilvusConfig)
+	return startCopyFixtureWithConfig(t, flushRetryMilvusConfig)
+}
+
+func startCopyFixtureWithConfig(t *testing.T, userConfig string) flushRetryFixture {
+	t.Helper()
+	stack := startThrowawayStackWithMilvusConfig(t, flushRetryMilvusMemory, userConfig)
 	milvus := dialMilvus(t, stack)
 	recorder := &milvusCallRecorder{}
 	service := newService(t, integrationConfig(t, stack, nil), recorder)
@@ -207,8 +218,6 @@ func startFlushRetryFixture(t *testing.T) flushRetryFixture {
 	if err := service.PromoteStaging(setupContext, codebasePath); err != nil {
 		t.Fatalf("PromoteStaging for codebase path %s returned the error %v while the test wrote the source rows.", codebasePath, err)
 	}
-	// This flush uses the one flush that flushRetryMilvusConfig allows for the
-	// collection. Milvus then rejects every flush that CopyChunks requests.
 	flushCollection(t, setupContext, milvus, collectionName)
 
 	fixture := flushRetryFixture{
@@ -224,6 +233,28 @@ func startFlushRetryFixture(t *testing.T) flushRetryFixture {
 		t.Fatalf("Source path %s has %d rows after setup, but the test wrote %d rows.", flushRetrySourcePath, fixture.sourceRows, flushRetryRows)
 	}
 	return fixture
+}
+
+func TestCopyChunksPreservesAcknowledgedRowsWhenSourceDeleteFails(t *testing.T) {
+	requireIntegration(t)
+	fixture := startCopyFixtureWithConfig(t, readMilvusTestConfig(t, "delete-limit.yaml"))
+	fixture.recorder.reset()
+	copied, err := fixture.service.CopyChunks(context.Background(), fixture.codebasePath, flushRetryCopies())
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "rate limit") {
+		t.Fatalf("Milvus must reject source deletion at its configured rate limit: %v", err)
+	}
+	if len(copied) != 1 || copied[0] != flushRetryRows {
+		t.Fatalf("CopyChunks acknowledged row counts %v, want [%d] despite the later deletion failure", copied, flushRetryRows)
+	}
+	if fixture.recorder.count(deleteMethod, fixture.collectionName) == 0 {
+		t.Fatal("CopyChunks did not request source deletion.")
+	}
+	for _, relativePath := range []string{flushRetrySourcePath, flushRetryDestinationPath} {
+		if count := fixture.pathRowCount(t, relativePath); count != flushRetryRows {
+			t.Fatalf("Milvus stores %d rows for %s, want %d", count, relativePath, flushRetryRows)
+		}
+	}
+	t.Logf("Milvus rejected source deletion after acknowledging %d copied rows. Both source and destination retain %d rows.", copied[0], flushRetryRows)
 }
 
 func flushRetryCopies() []semantic.ChunkCopy {

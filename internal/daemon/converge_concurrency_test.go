@@ -140,6 +140,10 @@ func (f *fakeSemantic) EmbeddingProviderName() model.EmbeddingProvider {
 }
 
 func (f *fakeSemantic) Available() bool { return !f.unavailable }
+
+// Degraded permits the metadata-only runs that existing fixtures configure.
+func (f *fakeSemantic) Degraded() bool { return false }
+
 func (f *fakeSemantic) ProbeHealth(ctx context.Context) error {
 	f.probeCount.Add(1)
 	if f.probe != nil {

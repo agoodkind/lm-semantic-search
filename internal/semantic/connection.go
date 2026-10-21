@@ -195,6 +195,7 @@ func (service *Service) reconcileResidency(
 		service.handleReconciliationError(ctx, err, "list collections")
 		return
 	}
+	loading := make([]string, 0)
 	for _, collectionName := range collections {
 		if isRecoveryCollection(collectionName) {
 			continue
@@ -233,7 +234,11 @@ func (service *Service) reconcileResidency(
 			collectionName,
 			state,
 		)
+		if state == collectionResidencyLoading {
+			loading = append(loading, collectionName)
+		}
 	}
+	service.refreshLoadingResidency(ctx, client, generation, loading)
 }
 
 func (service *Service) handleReconciliationError(

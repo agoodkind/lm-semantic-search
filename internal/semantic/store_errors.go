@@ -29,10 +29,7 @@ func storeUnavailable(err error) bool {
 // deterministically from [GetLoadState]; this single message match exists only
 // so a user-facing search that races a just-unloaded collection returns the
 // ErrCollectionNotReady retry hint instead of an opaque internal error. It is
-// not part of the searchable gating decision. The typed milvus sentinel
-// (merr.ErrCollectionNotLoaded) would be exact, but importing milvus's merr
-// package crashes the gate's govulncheck on its generics, so this keeps the
-// single stable message instead.
+// not part of the searchable gating decision.
 const collectionNotLoadedMessage = "collection not loaded"
 
 // storeSearchSentinel maps a milvus search failure to a typed error the daemon
@@ -70,7 +67,6 @@ func (err flushRateLimitError) Unwrap() error {
 }
 
 // classifyFlushError wraps Milvus Flush errors containing "rate limit exceeded" in flushRateLimitError and returns every other error unchanged.
-// The text match replaces merr.ErrServiceRateLimit because importing merr crashes the govulncheck gate.
 func classifyFlushError(err error) error {
 	if err == nil {
 		return nil

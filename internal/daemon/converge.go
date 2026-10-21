@@ -310,7 +310,8 @@ func (manager *Manager) convergeUpsert(ctx context.Context, root string, relativ
 		slog.WarnContext(ctx, "converge.admission_halt", "component", "daemon", "subcomponent", "converge", "path", relativePath, "err", admissionErr)
 		return false
 	}
-	if upErr := manager.semantic.Reindex(ctx, root, fileResult.Chunks, semantic.RemovePaths([]string{relativePath}), nil, nil, semantic.CodeColumns()); upErr != nil {
+	progress := manager.trackJobWrites(writeTotalsJobID(ctx), nil)
+	if upErr := manager.semantic.Reindex(ctx, root, fileResult.Chunks, semantic.RemovePaths([]string{relativePath}), progress, nil, semantic.CodeColumns()); upErr != nil {
 		manager.logConvergeReindexErr(ctx, relativePath, "upsert", upErr)
 		return false
 	}
@@ -371,6 +372,9 @@ func (manager *Manager) applyRenameCopies(ctx context.Context, root string, pend
 		copies = append(copies, semantic.ChunkCopy{Source: rename.source, Destination: rename.destination})
 	}
 	copiedRowCounts, copyErr := manager.semantic.CopyChunks(ctx, root, copies)
+	for _, count := range copiedRowCounts {
+		manager.addJobWriteTotals(writeTotalsJobID(ctx), int64(count), 0)
+	}
 	if copyErr != nil && !errors.Is(copyErr, semantic.ErrCollectionMissing) {
 		slog.WarnContext(ctx, "converge.copy_chunks_fallback", "component", "daemon", "subcomponent", "converge", "copies", len(copies), "err", copyErr)
 	}

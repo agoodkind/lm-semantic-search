@@ -830,7 +830,6 @@ func TestCancelQueuedJobBehindCapReachesCancelled(t *testing.T) {
 
 func TestCancelPausedJobWakesSchedulerWaiter(t *testing.T) {
 	manager, _ := newTestManagerWithCap(t, 1)
-	manager.semantic = nil
 	lowRepo := newCapTestRepo(t)
 	highRepo := newCapTestRepo(t)
 	lowEntered := make(chan struct{})

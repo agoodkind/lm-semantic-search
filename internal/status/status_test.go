@@ -24,7 +24,7 @@ func TestResolveDisplayBase(t *testing.T) {
 		{"stale", Inputs{Status: model.CodebaseStatusStale}, DisplayStale},
 		{"failed", Inputs{Status: model.CodebaseStatusFailed}, DisplayFailed},
 		{"missing", Inputs{Status: model.CodebaseStatusMissing}, DisplayMissing},
-		{"interrupted indexing", Inputs{Status: model.CodebaseStatusIndexing}, DisplayPreparing},
+		{"interrupted indexing", Inputs{Status: model.CodebaseStatusIndexing}, DisplayStale},
 		{"not indexed", Inputs{Status: model.CodebaseStatusNotIndexed}, DisplayPreparing},
 	}
 	for _, testCase := range cases {

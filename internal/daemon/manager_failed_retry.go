@@ -11,6 +11,9 @@ import (
 const maxFailedBuildRetries = 3
 
 func (manager *Manager) retryFailedBuild(ctx context.Context, codebase model.Codebase) {
+	if manager.indexingDependencyError() != nil {
+		return
+	}
 	manager.mu.Lock()
 	if manager.failedBuildRetries == nil {
 		manager.failedBuildRetries = map[string]int{}

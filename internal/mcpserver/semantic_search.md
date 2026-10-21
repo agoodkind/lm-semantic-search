@@ -88,8 +88,11 @@ comma-separated string.
 - search_code(absolutePath: string, query: string, limit?: number,
   extensionFilter?: string[]) returns ranked chunks. `extensionFilter` is a JSON
   array of extensions like `[".go"]`; omit it or pass `[]` to search all files.
-- get_indexing_status(absolutePath: string) reports status and file or chunk
-  counts.
+- get_indexing_status(absolutePath: string) reports current status and file or
+  chunk counts without waiting for indexing to finish.
+- wait_for_indexing(absolutePath: string, wait_timeout_seconds?: number) waits
+  until the codebase becomes searchable or indexing stops. On timeout, the tool
+  returns current progress. The default timeout is 300 seconds.
 - index_codebase(absolutePath: string, force?: boolean, splitter?: string,
   ignorePatterns?: string[], wait?: boolean,
   wait_timeout_seconds?: number) bootstraps the index when the codebase is not

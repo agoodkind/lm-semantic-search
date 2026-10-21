@@ -193,6 +193,15 @@ type Progress struct {
 	// ModelDownload contains progress while a queued job waits for model files.
 	// The field is nil otherwise.
 	ModelDownload *DownloadProgress `json:"model_download,omitempty"`
+	// WriteTotals counts writes across the job. Nil means an older daemon did
+	// not measure these totals.
+	WriteTotals *WriteTotals `json:"write_totals,omitempty"`
+}
+
+// WriteTotals records completed writes across every item in a job.
+type WriteTotals struct {
+	CollectionRowsWritten     int64 `json:"collection_rows_written"`
+	EmbeddingBatchesCompleted int64 `json:"embedding_batches_completed"`
 }
 
 // DownloadProgress reports bytes on disk for one artifact.

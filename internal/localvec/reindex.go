@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"goodkind.io/lm-semantic-search/embedding"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -12,6 +13,13 @@ import (
 )
 
 const localEmbeddingPhase = "Generating embeddings and writing local vectors..."
+
+type rowEmbedding struct {
+	rows    []row
+	reused  int
+	dropped int
+	batches int
+}
 
 // Reindex applies changed chunks and removals to a live collection.
 func (store *Store) Reindex(
@@ -35,14 +43,16 @@ func (store *Store) Reindex(
 	} else if !exists {
 		return semantic.ErrCollectionMissing
 	}
-	rows, reused, dropped, err := store.embedRows(ctx, addedOrModifiedChunks, reuse)
+	embedded, err := store.embedRows(ctx, addedOrModifiedChunks, reuse)
 	if err != nil {
+		emitProgress(progress, 0, 0, 0, embedded.batches)
 		return err
 	}
-	if err := stored.mutate(removal, rows, true); err != nil {
+	if err := stored.mutate(removal, embedded.rows, true); err != nil {
+		emitProgress(progress, 0, 0, 0, embedded.batches)
 		return err
 	}
-	emitProgress(progress, len(rows), reused, dropped)
+	emitProgress(progress, len(embedded.rows), embedded.reused, embedded.dropped, embedded.batches)
 	return nil
 }
 
@@ -63,14 +73,16 @@ func (store *Store) StageReindex(
 	if err != nil {
 		return err
 	}
-	rows, reused, dropped, err := store.embedRows(ctx, chunks, reuse)
+	embedded, err := store.embedRows(ctx, chunks, reuse)
 	if err != nil {
+		emitProgress(progress, 0, 0, 0, embedded.batches)
 		return err
 	}
-	if err := stored.mutate(removal, rows, false); err != nil {
+	if err := stored.mutate(removal, embedded.rows, false); err != nil {
+		emitProgress(progress, 0, 0, 0, embedded.batches)
 		return err
 	}
-	emitProgress(progress, len(rows), reused, dropped)
+	emitProgress(progress, len(embedded.rows), embedded.reused, embedded.dropped, embedded.batches)
 	return nil
 }
 
@@ -212,13 +224,14 @@ func (store *Store) embedRows(
 	ctx context.Context,
 	chunks []model.StoredChunk,
 	reuse map[string]model.ReuseVector,
-) ([]row, int, int, error) {
+) (rowEmbedding, error) {
+	result := rowEmbedding{rows: nil, reused: 0, dropped: 0, batches: 0}
 	if len(chunks) == 0 {
-		return nil, 0, 0, nil
+		return result, nil
 	}
 	provider, err := store.embeddingProvider(ctx)
 	if err != nil {
-		return nil, 0, 0, err
+		return result, err
 	}
 
 	// Pre-split oversized chunks at the active model's real input limit before the
@@ -232,18 +245,16 @@ func (store *Store) embedRows(
 		slog.InfoContext(ctx, "localvec.split_over_token_budget", "byte_budget", byteBudget, "chunks_split", splitCount, "expanded_from", len(chunks), "expanded_to", len(splitChunks))
 	}
 
-	rows := make([]row, 0, len(splitChunks))
+	result.rows = make([]row, 0, len(splitChunks))
 	missChunks := make([]model.StoredChunk, 0, len(splitChunks))
-	reused := 0
-	dropped := 0
 	for _, chunk := range splitChunks {
 		if reusedVector, found := reuse[semantic.ContentVectorKey(chunk.Content)]; found {
 			stored, rowErr := newRow(chunk, append([]float32(nil), reusedVector.Vector...))
 			if rowErr != nil {
-				return nil, 0, 0, rowErr
+				return result, rowErr
 			}
-			rows = append(rows, stored)
-			reused++
+			result.rows = append(result.rows, stored)
+			result.reused++
 			continue
 		}
 		missChunks = append(missChunks, chunk)
@@ -252,7 +263,7 @@ func (store *Store) embedRows(
 	// moves on this backend too. Without it a status read shows
 	// embed_chunks_reused_total at zero while the job's own chunks_reused rises,
 	// and the two numbers on one screen contradict each other.
-	metrics.ChunksReused(reused)
+	metrics.ChunksReused(result.reused)
 
 	if len(missChunks) > 0 {
 		// EmbedChunksSplittingOversize re-splits and retries any chunk the endpoint
@@ -260,24 +271,32 @@ func (store *Store) embedRows(
 		// dense chunk; the offline ONNX embedder never rejects because the pre-split
 		// already kept every piece under the preset limit.
 		pack := semantic.NewChunkPacker(store.cfg.EmbeddingBatchSize, store.cfg.EmbeddingBatchTokenBudget)
-		embeddedChunks, vectors, droppedCount, embedErr := semantic.EmbedChunksSplittingOversize(ctx, missChunks, config.ActiveEmbedTokenLimit(store.cfg), pack, provider.EmbedBatch)
+		embedBatch := func(batchContext context.Context, texts []string) (embedding.BatchResult, error) {
+			vectors, embedErr := provider.EmbedBatch(batchContext, texts)
+			if embedErr != nil {
+				return vectors, fmt.Errorf("embed local vector batch: %w", embedErr)
+			}
+			result.batches++
+			return vectors, nil
+		}
+		embeddedChunks, vectors, droppedCount, embedErr := semantic.EmbedChunksSplittingOversize(ctx, missChunks, config.ActiveEmbedTokenLimit(store.cfg), pack, embedBatch)
 		if embedErr != nil {
 			slog.ErrorContext(ctx, "embed local vector chunks failed", "chunks", len(missChunks), "err", embedErr)
-			return nil, 0, 0, fmt.Errorf("embed local vector chunks: %w", embedErr)
+			return result, fmt.Errorf("embed local vector chunks: %w", embedErr)
 		}
-		dropped = droppedCount
+		result.dropped = droppedCount
 		if droppedCount > 0 {
 			slog.WarnContext(ctx, "local vector rows dropped as indivisible", "dropped", droppedCount, "chunks", len(missChunks))
 		}
 		for index := range embeddedChunks {
 			stored, rowErr := newRow(embeddedChunks[index], vectors[index])
 			if rowErr != nil {
-				return nil, 0, 0, rowErr
+				return result, rowErr
 			}
-			rows = append(rows, stored)
+			result.rows = append(result.rows, stored)
 		}
 	}
-	return rows, reused, dropped, nil
+	return result, nil
 }
 
 func emitProgress(
@@ -285,16 +304,18 @@ func emitProgress(
 	rowCount int,
 	reused int,
 	dropped int,
+	batches int,
 ) {
-	if progress == nil || rowCount == 0 && dropped == 0 {
+	if progress == nil || rowCount == 0 && dropped == 0 && batches == 0 {
 		return
 	}
 	rows := safeInt32(rowCount)
 	progress(semantic.Progress{
 		Phase:                     localEmbeddingPhase,
 		OverallPercent:            100,
-		EmbeddingBatchesTotal:     1,
-		EmbeddingBatchesCompleted: 1,
+		EmbeddingBatchesTotal:     safeInt32(batches),
+		EmbeddingBatchesCompleted: safeInt32(batches),
+		EmbeddingCallsCompleted:   safeInt32(batches),
 		CollectionRowsWritten:     rows,
 		ChunksProcessed:           rows,
 		ChunksReused:              safeInt32(reused),
