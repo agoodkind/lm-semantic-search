@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,9 +32,6 @@ const (
 	renameQueueSyncClient       = "daemon-sync"
 	renameQueueWatcherClient    = "daemon-watcher"
 	renameQueueStepTimeout      = 2 * time.Minute
-	renameQueueSettleTime       = 6 * time.Second
-	renameQueueSweepGrace       = time.Second
-	renameQueueGatePoll         = 10 * time.Millisecond
 )
 
 type renameQueueMode string
@@ -92,31 +89,46 @@ type renameQueueMeasurement struct {
 	DestinationsRecorded    int              `json:"destinations_recorded"`
 }
 
-// renameQueueGate wraps the live harness embedGate. Its goroutine answers each
-// embed request immediately unless the atomic field holding is true. When
-// holding is true, the goroutine sets held to 1 and waits until holding becomes
-// false before answering the request.
+// renameQueueGate wraps the live harness embedGate. Its goroutine waits on the
+// open channel before answering each embed request. hold replaces open with a
+// new channel, and release closes it.
 type renameQueueGate struct {
-	gate    *embedGate
-	holding atomic.Bool
-	held    atomic.Int64
+	gate  *embedGate
+	mutex sync.Mutex
+	open  chan struct{}
 }
 
 func newRenameQueueGate() *renameQueueGate {
-	controller := &renameQueueGate{gate: &embedGate{arrived: make(chan int), release: make(chan struct{})}}
+	open := make(chan struct{})
+	close(open)
+	controller := &renameQueueGate{gate: &embedGate{arrived: make(chan int), release: make(chan struct{})}, open: open}
 	go controller.run()
 	return controller
 }
 
 func (controller *renameQueueGate) run() {
 	for range controller.gate.arrived {
-		for controller.holding.Load() {
-			controller.held.Store(1)
-			time.Sleep(renameQueueGatePoll)
-		}
-		controller.held.Store(0)
+		<-controller.current()
 		controller.gate.release <- struct{}{}
 	}
+}
+
+func (controller *renameQueueGate) current() chan struct{} {
+	controller.mutex.Lock()
+	defer controller.mutex.Unlock()
+	return controller.open
+}
+
+func (controller *renameQueueGate) hold() {
+	controller.mutex.Lock()
+	defer controller.mutex.Unlock()
+	controller.open = make(chan struct{})
+}
+
+func (controller *renameQueueGate) release() {
+	controller.mutex.Lock()
+	defer controller.mutex.Unlock()
+	close(controller.open)
 }
 
 func runRenameQueueScenario(t *testing.T, scenario renameQueueScenario) renameQueueMeasurement {
@@ -163,10 +175,14 @@ func runRenameQueueScenario(t *testing.T, scenario renameQueueScenario) renameQu
 
 	var blockerJobID string
 	if scenario.mode == renameQueueBusy {
-		controller.holding.Store(true)
+		controller.hold()
 		blockerJobID = startRenameQueueIndexAsync(t, liveHarness, blocker)
-		waitForRenameQueueCondition(t, "the blocker build to wait on its first embed request", func() bool {
-			return controller.held.Load() == 1
+		waitForRenameQueueCondition(t, "the blocker build to run", func() bool {
+			response, err := liveHarness.client.GetJob(correlatedContext(), &pb.GetJobRequest{JobId: blockerJobID})
+			if err != nil {
+				t.Fatalf("get job %s: %v", blockerJobID, err)
+			}
+			return response.GetJob().GetState() == "running"
 		})
 	}
 
@@ -179,10 +195,15 @@ func runRenameQueueScenario(t *testing.T, scenario renameQueueScenario) renameQu
 		waitForRenameQueueCondition(t, "a queued watcher converge for the renamed files", func() bool {
 			return renameQueueHasJob(t, liveHarness, codebaseID, knownJobs, renameQueueWatcherClient, "queued")
 		})
-		waitForRenameQueueSweep(t)
-		time.Sleep(renameQueueSweepGrace)
+		skippedBefore := metrics.Read().SyncSkippedInflightTotal
+		waitForRenameQueueCondition(t, "a periodic sweep to skip the codebase or start a sync for it", func() bool {
+			if metrics.Read().SyncSkippedInflightTotal > skippedBefore {
+				return true
+			}
+			return renameQueueHasJob(t, liveHarness, codebaseID, knownJobs, renameQueueSyncClient, "")
+		})
 		measurement.QueueAtSweep = renameQueueJobsSince(t, liveHarness, knownJobs)
-		controller.holding.Store(false)
+		controller.release()
 		requirePublicCompleted(t, waitForRenameQueueJob(t, liveHarness, blockerJobID), "blocker build")
 	case renameQueueSyncOnly:
 		waitForRenameQueueCondition(t, "a scheduled sync for the renamed files", func() bool {
@@ -192,8 +213,7 @@ func runRenameQueueScenario(t *testing.T, scenario renameQueueScenario) renameQu
 	}
 
 	waitForRenameQueueDestinations(t, liveHarness, repository)
-	time.Sleep(renameQueueSettleTime)
-	waitForRenameQueueIdle(t, liveHarness, codebaseID)
+	waitForRenameQueueQuiet(t, liveHarness)
 
 	after := metrics.Read()
 	measurement.JobsAfterRename = renameQueueJobsSince(t, liveHarness, knownJobs)
@@ -284,7 +304,6 @@ func renameQueueFileContent(marker string, packageName string, fileIndex int) st
 	for functionIndex := range renameQueueFunctionsPerFile {
 		name := fmt.Sprintf("Measure%s%02d%02d", marker, fileIndex, functionIndex)
 		limit := fileIndex*100 + functionIndex
-		fmt.Fprintf(&builder, "// %s counts readings above and at or below the limit %d, then returns the larger count minus the smaller count and two index numbers for marker %s.\n", name, limit, marker)
 		fmt.Fprintf(&builder, "func %s(readings []int) (int, int) {\n\tabove := 0\n\tbelow := 0\n", name)
 		fmt.Fprintf(&builder, "\tfor _, reading := range readings {\n\t\tif reading > %d {\n\t\t\tabove++\n\t\t\tcontinue\n\t\t}\n\t\tbelow++\n\t}\n", limit)
 		fmt.Fprintf(&builder, "\tif above > below {\n\t\treturn above - below, %d\n\t}\n\treturn below - above, %d\n}\n\n", fileIndex, functionIndex)
@@ -465,6 +484,19 @@ func waitForRenameQueueIdle(t *testing.T, liveHarness *harness, codebaseID strin
 			}
 		}
 		return true
+	})
+}
+
+// waitForRenameQueueQuiet waits until GetStatus returns an empty activity list.
+// At that point, the daemon does not have live jobs or pending watcher paths.
+func waitForRenameQueueQuiet(t *testing.T, liveHarness *harness) {
+	t.Helper()
+	waitForRenameQueueCondition(t, "the daemon to report no activity", func() bool {
+		response, err := liveHarness.client.GetStatus(correlatedContext(), &pb.GetStatusRequest{})
+		if err != nil {
+			t.Fatalf("get daemon status: %v", err)
+		}
+		return len(response.GetActivity()) == 0
 	})
 }
 
