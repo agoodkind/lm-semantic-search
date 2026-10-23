@@ -284,7 +284,7 @@ func renameQueueFileContent(marker string, packageName string, fileIndex int) st
 	for functionIndex := range renameQueueFunctionsPerFile {
 		name := fmt.Sprintf("Measure%s%02d%02d", marker, fileIndex, functionIndex)
 		limit := fileIndex*100 + functionIndex
-		fmt.Fprintf(&builder, "// %s counts readings above the limit %d for marker %s.\n", name, limit, marker)
+		fmt.Fprintf(&builder, "// %s counts readings above and at or below the limit %d, then returns the larger count minus the smaller count and two index numbers for marker %s.\n", name, limit, marker)
 		fmt.Fprintf(&builder, "func %s(readings []int) (int, int) {\n\tabove := 0\n\tbelow := 0\n", name)
 		fmt.Fprintf(&builder, "\tfor _, reading := range readings {\n\t\tif reading > %d {\n\t\t\tabove++\n\t\t\tcontinue\n\t\t}\n\t\tbelow++\n\t}\n", limit)
 		fmt.Fprintf(&builder, "\tif above > below {\n\t\treturn above - below, %d\n\t}\n\treturn below - above, %d\n}\n\n", fileIndex, functionIndex)
