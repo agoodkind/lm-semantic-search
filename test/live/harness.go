@@ -134,6 +134,13 @@ const (
 type liveDaemonOptions struct {
 	embedder    harnessEmbedder
 	fileWatcher bool
+	// backgroundSync enables the daemon's periodic sweep when true. The daemon
+	// runs the first sweep five seconds after startup. Later sweeps repeat at the
+	// interval in syncIntervalMS.
+	backgroundSync bool
+	// syncIntervalMS sets CLAUDE_CONTEXT_SYNC_INTERVAL_MS for the daemon when
+	// positive. A value of zero keeps the daemon default.
+	syncIntervalMS int
 }
 
 type milvusInventory map[string]map[string]string
@@ -495,7 +502,7 @@ func newHarnessWithDaemonOptions(
 			fakeEmbeddingDimension,
 			embeddingRecorder,
 		)
-		cfg = resolveLiveConfig(
+		cfg = resolveLiveConfigFor(
 			t,
 			stateRoot,
 			socketPath,
@@ -505,6 +512,7 @@ func newHarnessWithDaemonOptions(
 			databaseName,
 			harnessID,
 			idleTimeout,
+			daemonOptions,
 		)
 	}
 	for _, dir := range sandbox.Directories(cfg) {
@@ -1171,7 +1179,7 @@ func resolveLiveConfigFor(
 		// the platform's socket path limit.
 		{name: "CLAUDE_CONTEXTD_SOCKET_PATH", value: socketPath},
 		// Background work is off so a scenario observes only what it asked for.
-		{name: "CLAUDE_CONTEXT_BACKGROUND_SYNC", value: "false"},
+		{name: "CLAUDE_CONTEXT_BACKGROUND_SYNC", value: strconv.FormatBool(daemonOptions.backgroundSync)},
 		{name: "CLAUDE_CONTEXT_TRIGGER_WATCHER", value: "false"},
 		{name: "CLAUDE_CONTEXT_FILE_WATCHER", value: strconv.FormatBool(daemonOptions.fileWatcher)},
 		{name: "CLAUDE_CONTEXT_DEBUG_LISTENER", value: "false"},
@@ -1179,6 +1187,9 @@ func resolveLiveConfigFor(
 		{name: "CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS", value: "1"},
 		{name: "CLAUDE_CONTEXT_RESUME_ON_BOOT", value: "false"},
 		{name: "CLAUDE_CONTEXT_MILVUS_COLLECTION_IDLE_TIMEOUT_MS", value: strconv.FormatInt(idleTimeout.Milliseconds(), 10)},
+	}
+	if daemonOptions.syncIntervalMS > 0 {
+		chosen = append(chosen, liveSetting{name: "CLAUDE_CONTEXT_SYNC_INTERVAL_MS", value: strconv.Itoa(daemonOptions.syncIntervalMS)})
 	}
 	switch embedder {
 	case harnessEmbedderONNX:
@@ -1241,13 +1252,13 @@ func resolveLiveConfigFor(
 }
 
 // startDaemonServices starts the background sync coordinator when fileWatcher is
-// true, then starts the daemon gRPC server. It returns a function that cancels
-// the background sync context and then stops the gRPC server. The caller closes
-// the manager afterward.
+// true or cfg.BackgroundSyncEnabled is true. It then starts the daemon gRPC
+// server. It returns a function that cancels the background sync context before
+// stopping the gRPC server. The caller closes the manager afterward.
 func startDaemonServices(t *testing.T, manager *daemon.Manager, cfg config.Config, fileWatcher bool) func() {
 	t.Helper()
 	backgroundContext, stopBackground := context.WithCancel(context.Background())
-	if fileWatcher {
+	if fileWatcher || cfg.BackgroundSyncEnabled {
 		daemon.NewBackgroundSync(cfg, manager).Start(backgroundContext)
 	}
 	stopListener := startInProcessServer(t, manager, cfg.SocketPath)
