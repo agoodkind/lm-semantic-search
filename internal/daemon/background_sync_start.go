@@ -24,6 +24,17 @@ func (syncer *BackgroundSync) startSweepSync(ctx context.Context, codebase model
 	syncer.manager.startAutomaticSync(ctx, codebase, model.ClientInfo{Name: "daemon-sync", PID: 0})
 }
 
+// convergeAdmitted reports whether BackgroundSync.converging contains the
+// codebase ID. beginConverge adds the entry before watcher job registration,
+// and endConverge removes it when the converge ends. The entry remains while
+// the converge waits for an index slot.
+func (syncer *BackgroundSync) convergeAdmitted(codebaseID string) bool {
+	syncer.convergeMu.Lock()
+	defer syncer.convergeMu.Unlock()
+	_, admitted := syncer.converging[codebaseID]
+	return admitted
+}
+
 // startBuildAfterEmptyRun starts a sync in place of a watcher converge for a
 // codebase whose last completed run indexed no file, and reports whether it
 // handled the batch. That run created no collection, so a per-path converge

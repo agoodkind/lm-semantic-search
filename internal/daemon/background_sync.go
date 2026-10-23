@@ -352,6 +352,13 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 		if !changed {
 			continue
 		}
+		// Skip this codebase while its watcher converge waits or runs. After the
+		// converge ends, a later sweep starts a sync if the codebase still differs
+		// from its snapshot.
+		if syncer.convergeAdmitted(codebase.ID) {
+			metrics.SyncSkippedInflight()
+			continue
+		}
 
 		syncer.startSweepSync(iterCtx, codebase)
 	}
