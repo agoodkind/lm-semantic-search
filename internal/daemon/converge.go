@@ -362,7 +362,12 @@ func renameCopySource(currentInode merkle.InodeRef, freshHash string, snapshot *
 // applyRenameCopies copies queued renames in one batch and counts destinations
 // that succeed through a copy or fallback upsert. A copy error or a zero row
 // count triggers an upsert that replaces any destination rows the copy already
-// inserted.
+// inserted. When CopyChunks returns without an error and reports a nonzero row
+// count for a pair, applyRenameCopies deletes the source path from snapshot.Files
+// and deletes its inode entry before recording the destination hash and inode.
+// CopyChunks deletes the source rows after copying them. The fallback upsert
+// does not delete the source path or its inode entry from the snapshot and does
+// not delete the stored source rows.
 func (manager *Manager) applyRenameCopies(ctx context.Context, root string, pending []pendingRenameCopy, snapshot *merkle.Snapshot, admission *admissionState) int32 {
 	if len(pending) == 0 {
 		return 0
@@ -382,6 +387,8 @@ func (manager *Manager) applyRenameCopies(ctx context.Context, root string, pend
 	var upserted int32
 	for index, rename := range pending {
 		if copyErr == nil && copiedRowCounts[index] > 0 {
+			delete(snapshot.Files, rename.source)
+			snapshot.ForgetInode(rename.source)
 			snapshot.Files[rename.destination] = rename.fileResult.FileHash
 			snapshot.RecordInode(rename.destination, rename.currentInode)
 			metrics.ConvergeCopyChunks()
