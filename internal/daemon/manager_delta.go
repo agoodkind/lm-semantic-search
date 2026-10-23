@@ -91,6 +91,8 @@ type deltaState struct {
 	// the job's codebase. When it is true, checkpointSnapshot does not copy inode
 	// entries.
 	inodeTrackingDisabled bool
+	// renamedPaths maps each source path that applyDeltaRenameCopies copied to its destination path.
+	renamedPaths map[string]string
 }
 
 // chunkCounters accumulates the reuse-vs-embed split across one run's per-file
@@ -362,16 +364,17 @@ func (manager *Manager) runDeltaSync(ctx context.Context, job model.Job, source 
 		admission:             manager.admissionForJob(job),
 		forced:                forcedItemsSet(plan.forced),
 		inodeTrackingDisabled: codebase.InodeTrackingDisabled,
+		renamedPaths:          make(map[string]string),
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
-	if outcome := manager.applyDeltaRemovals(ctx, job, state); outcome.fallback {
+	if outcome := manager.applyDeltaRemovals(ctx, job, &state); outcome.fallback {
 		return false, nil
 	} else if outcome.handled {
 		return true, nil
 	}
 
-	if len(plan.diff.Added) > 0 && state.semantic {
+	if len(state.plan.diff.Added) > 0 && state.semantic {
 		reuse, seeded, _, reuseErr := manager.resolveReuseSeed(ctx, job)
 		if reuseErr != nil {
 			manager.finishJobForReuseFailure(ctx, job.ID, reuseErr)
@@ -484,6 +487,7 @@ func (manager *Manager) runBootstrap(ctx context.Context, job model.Job, source 
 		// A bootstrap re-embeds every item, so nothing needs per-item forcing.
 		forced:                nil,
 		inodeTrackingDisabled: codebase.InodeTrackingDisabled,
+		renamedPaths:          nil,
 	}
 	maps.Copy(state.working, plan.seedSnapshot.Files)
 
@@ -623,24 +627,6 @@ func (manager *Manager) promoteBootstrap(ctx context.Context, job model.Job, sta
 		} else {
 			manager.updateJobFailed(ctx, job.ID, fmt.Errorf("promote staging collection: %w", err))
 		}
-		return deltaOutcome{fallback: false, handled: true, progressed: false}
-	}
-	return deltaOutcome{fallback: false, handled: false, progressed: false}
-}
-
-func (manager *Manager) applyDeltaRemovals(ctx context.Context, job model.Job, state deltaState) deltaOutcome {
-	removed := state.plan.diff.Removed
-	if len(removed) == 0 || !state.semantic {
-		return deltaOutcome{fallback: false, handled: false, progressed: false}
-	}
-	if outcome := manager.applyReindexForState(ctx, job, state, nil, state.source.removalFor(removed), "delta removal"); outcome.fallback || outcome.handled {
-		return outcome
-	}
-	for _, path := range removed {
-		delete(state.working, path)
-	}
-	manager.writeCheckpoint(ctx, state, "removals")
-	if err := manager.checkpointJob(ctx); err != nil {
 		return deltaOutcome{fallback: false, handled: true, progressed: false}
 	}
 	return deltaOutcome{fallback: false, handled: false, progressed: false}
@@ -977,13 +963,6 @@ func (manager *Manager) pruneAfterStreaming(ctx context.Context, job model.Job, 
 		}
 	}
 	return deltaOutcome{fallback: false, handled: false, progressed: false}
-}
-
-func maxInt(a int, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // safeInt32 clamps int to int32 for protobuf-bound progress fields.
