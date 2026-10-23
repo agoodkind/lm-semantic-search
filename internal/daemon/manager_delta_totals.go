@@ -85,6 +85,11 @@ func (manager *Manager) deltaChunkCache(ctx context.Context, codebase model.Code
 	replacedPaths := replacedDeltaPaths(state, changedChunks)
 	normalizedChunks := make([]model.StoredChunk, 0, len(existingChunks)+len(changedChunks))
 	for _, chunk := range existingChunks {
+		if destination, renamed := state.renamedPaths[chunk.RelativePath]; renamed {
+			chunk.RelativePath = destination
+			normalizedChunks = append(normalizedChunks, chunk)
+			continue
+		}
 		if _, replaced := replacedPaths[chunk.RelativePath]; replaced {
 			continue
 		}
@@ -92,6 +97,13 @@ func (manager *Manager) deltaChunkCache(ctx context.Context, codebase model.Code
 	}
 	normalizedChunks = append(normalizedChunks, changedChunks...)
 	return normalizedChunks, true, nil
+}
+
+func maxInt(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func replacedDeltaPaths(state deltaState, changedChunks []model.StoredChunk) map[string]struct{} {
