@@ -22,6 +22,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/daemon"
 	"goodkind.io/lm-semantic-search/internal/debugserver"
+	"goodkind.io/lm-semantic-search/internal/embedding/onnx"
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
 	"goodkind.io/lm-semantic-search/internal/logcleanup"
 	"goodkind.io/lm-semantic-search/internal/metrics"
@@ -32,8 +33,8 @@ import (
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "version" {
-		if err := writeVersion(os.Stdout); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "write version output: %v\n", err)
+		if err := runVersion(os.Stdout); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 		return
@@ -54,6 +55,17 @@ func main() {
 		slog.ErrorContext(rootContext, "daemon failed", "err", err)
 		os.Exit(1)
 	}
+}
+
+// runVersion opens ONNX Runtime before writing the daemon version.
+// The installer and update apply use version to check each staged daemon.
+// runVersion returns an error without writing output if the library cannot open.
+func runVersion(writer io.Writer) error {
+	if _, err := onnx.LoadRuntimeLibrary(); err != nil {
+		slog.Error("open ONNX Runtime for version failed", "err", err)
+		return fmt.Errorf("open ONNX Runtime: %w", err)
+	}
+	return writeVersion(writer)
 }
 
 func writeVersion(writer io.Writer) error {
