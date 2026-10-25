@@ -2,6 +2,8 @@ module goodkind.io/lm-semantic-search
 
 go 1.27
 
+toolchain go1.27.3
+
 require (
 	charm.land/bubbletea/v2 v2.1.0
 	charm.land/lipgloss/v2 v2.0.6
