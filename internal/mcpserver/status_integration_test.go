@@ -16,6 +16,7 @@ import (
 	"goodkind.io/lm-semantic-search/internal/daemon"
 	"goodkind.io/lm-semantic-search/internal/mcpserver"
 	"goodkind.io/lm-semantic-search/internal/model"
+	"goodkind.io/lm-semantic-search/internal/response"
 	"goodkind.io/lm-semantic-search/internal/sandbox"
 	"goodkind.io/lm-semantic-search/internal/store"
 	"google.golang.org/grpc"
@@ -23,8 +24,9 @@ import (
 )
 
 const (
-	statusResponseLimit = time.Second
-	statusProcessEnv    = "LMS_STATUS_TEST_PROCESS"
+	statusResponseLimit  = time.Second
+	statusProcessEnv     = "LMS_STATUS_TEST_PROCESS"
+	statusTestCodebaseID = "status-test"
 )
 
 func TestStatusMCPProcess(t *testing.T) {
@@ -152,13 +154,18 @@ func callStatusTestTool(t *testing.T, client *mcpclient.Client, toolName string,
 
 func newStatusTestClient(t *testing.T, socketPath string) *mcpclient.Client {
 	t.Helper()
+	return newMCPProcessClient(t, socketPath, response.ModeJSON)
+}
+
+func newMCPProcessClient(t *testing.T, socketPath string, outputMode response.Mode) *mcpclient.Client {
+	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatalf("find test executable: %v", err)
 	}
 	client, err := mcpclient.NewStdioMCPClient(executable, []string{
 		"CLAUDE_CONTEXTD_SOCKET_PATH=" + socketPath,
-		"CLAUDE_CONTEXT_MCP_OUTPUT=json",
+		"CLAUDE_CONTEXT_MCP_OUTPUT=" + string(outputMode),
 		statusProcessEnv + "=1",
 	}, "-test.run=^TestStatusMCPProcess$")
 	if err != nil {
@@ -206,7 +213,7 @@ func startStatusTestDaemon(t *testing.T, state model.CodebaseStatus) (string, st
 	}
 	if err := store.WriteRegistry(cfg.RegistryPath, model.RegistryFile{
 		Codebases: []model.Codebase{{
-			ID:               "status-test",
+			ID:               statusTestCodebaseID,
 			CanonicalPath:    codebasePath,
 			Status:           state,
 			SchedulingPolicy: model.DefaultSchedulingPolicy(),

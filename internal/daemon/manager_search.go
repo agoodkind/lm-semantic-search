@@ -150,7 +150,7 @@ func (manager *Manager) searchPreconditions(extensionFilter []string) ([]string,
 }
 
 func discoveredSearchNote(selection worktreeReuseSelection) string {
-	note := "🔎 This worktree was just discovered and is not indexed yet; its build is starting now"
+	note := "This worktree was just discovered and is not indexed yet; its build is starting now"
 	switch {
 	case selection.unavailable != view.WorktreeReuseAvailable:
 		note += fmt.Sprintf(" (source reuse unavailable because of %s)", selection.unavailable)
@@ -160,14 +160,14 @@ func discoveredSearchNote(selection worktreeReuseSelection) string {
 	return note + ". Search again shortly."
 }
 
-const heldForSourceSearchNote = "🔎 The build for the discovered, unindexed worktree starts after the recorded source finishes its first index. The next search should run after the worktree build finishes."
+const heldForSourceSearchNote = "The build for the discovered, unindexed worktree starts after the recorded source finishes its first index. The next search should run after the worktree build finishes."
 
 func quarantinedSearchNote(quarantine *model.QuarantineState) string {
 	if quarantine == nil {
-		return "🔎 Search is serving the last known-good index while destructive sync is paused after a suspicious large disappearance."
+		return "Search is serving the last known-good index while destructive sync is paused after a suspicious large disappearance."
 	}
 	return fmt.Sprintf(
-		"🔎 Search is serving the last known-good index while destructive sync is paused after a suspicious large disappearance (%d of %d tracked files in the last %s observation).",
+		"Search is serving the last known-good index while destructive sync is paused after a suspicious large disappearance (%d of %d tracked files in the last %s observation).",
 		quarantine.LastMissingCount,
 		quarantine.LastTotalCount,
 		defaultQuarantineTrigger(quarantine.LastTrigger),

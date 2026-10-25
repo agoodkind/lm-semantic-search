@@ -578,7 +578,6 @@ type RawStatus struct {
 	HasFailure      bool
 	FailureMessage  string
 	FailureJobID    string
-	FailureTraceID  string
 	FailureFailedAt string
 
 	GraphState     string

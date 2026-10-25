@@ -45,7 +45,7 @@ func (server *GRPCServer) ListIndexes(ctx context.Context, request *pb.ListIndex
 	}
 	health := server.manager.DependencyHealth()
 	response.DependencyHealth = toDependencyHealth(health)
-	response.DisplayText = server.envelopeText(ctx, health, render.ListIndexes(rows))
+	response.DisplayText = server.envelopeText(health, render.ListIndexes(rows))
 	return response, nil
 }
 

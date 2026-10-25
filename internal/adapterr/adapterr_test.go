@@ -80,14 +80,11 @@ func TestRespondUnknownSanitizesAndReferencesTrace(t *testing.T) {
 	if strings.Contains(msg, "stack overflow") {
 		t.Fatalf("unknown message should be sanitized, got %q", msg)
 	}
-	if !strings.HasPrefix(msg, correlation.HeaderMarker) {
-		t.Fatalf("message should start with the correlation header, got %q", msg)
+	if !strings.HasPrefix(msg, "internal error") || !strings.Contains(msg, string(corr.TraceID)) {
+		t.Fatalf("message should start with %q and contain the trace id %q, got %q", "internal error", corr.TraceID, msg)
 	}
-	if !strings.Contains(msg, "trace_id="+string(corr.TraceID)) {
-		t.Fatalf("message should reference trace_id, got %q", msg)
-	}
-	if !strings.Contains(msg, "job_id=job-xyz") {
-		t.Fatalf("message should reference job_id, got %q", msg)
+	if strings.Contains(msg, "trace_id=") || strings.Contains(msg, correlation.HeaderMarker) {
+		t.Fatalf("message should not contain the correlation header, got %q", msg)
 	}
 }
 
@@ -161,8 +158,8 @@ func TestRespondMCPKnown(t *testing.T) {
 	if !strings.Contains(mcp.Message, "not indexed") {
 		t.Fatalf("message should describe the error, got %q", mcp.Message)
 	}
-	if !strings.HasPrefix(mcp.Message, correlation.HeaderMarker) {
-		t.Fatalf("message should start with the correlation header, got %q", mcp.Message)
+	if strings.Contains(mcp.Message, string(corr.TraceID)) {
+		t.Fatalf("known error message should omit the trace id, got %q", mcp.Message)
 	}
 	if mcp.TraceID != string(corr.TraceID) {
 		t.Fatalf("trace id mismatch")
@@ -186,8 +183,8 @@ func TestRespondMCPUnknown(t *testing.T) {
 	if strings.Contains(mcp.Message, "opaque") {
 		t.Fatalf("unknown message should be sanitized, got %q", mcp.Message)
 	}
-	if !strings.HasPrefix(mcp.Message, correlation.HeaderMarker) {
-		t.Fatalf("message should start with the correlation header, got %q", mcp.Message)
+	if !strings.Contains(mcp.Message, mcp.TraceID) || strings.Contains(mcp.Message, "trace_id=") {
+		t.Fatalf("message = %q, want the trace id without the correlation header", mcp.Message)
 	}
 	if mcp.TraceID == "" {
 		t.Fatalf("trace_id should be set")

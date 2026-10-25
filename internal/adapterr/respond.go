@@ -11,7 +11,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const errorInfoDomain = "goodkind.io/lm-semantic-search"
+const (
+	errorInfoDomain      = "goodkind.io/lm-semantic-search"
+	internalErrorMessage = "internal error"
+)
 
 type grpcError struct {
 	response *status.Status
@@ -28,9 +31,8 @@ func (err *grpcError) GRPCStatus() *status.Status {
 // Respond classifies err, logs it on the daemon side with the active
 // correlation, and returns the gRPC code plus message for the
 // boundary's [status.Error] call. A nil err returns ([codes.OK], "").
-// Known classes return the safe-for-client message and hint; unknown
-// classes return a sanitized message that references the daemon log
-// by trace_id and job_id.
+// Known classes return the client-safe message and hint; unknown classes
+// return a generic message with the trace id of the daemon log entry.
 func Respond(ctx context.Context, err error) (codes.Code, string) {
 	if err == nil {
 		return codes.OK, ""
@@ -44,7 +46,7 @@ func Respond(ctx context.Context, err error) (codes.Code, string) {
 	adapterErr := classify(err)
 	logRespond(ctx, adapterErr)
 	if adapterErr.SafeForClient {
-		return CodeFor(adapterErr.Class), formatKnown(adapterErr, ctx)
+		return CodeFor(adapterErr.Class), formatKnown(adapterErr)
 	}
 	return CodeFor(adapterErr.Class), formatUnknown(ctx)
 }
@@ -105,11 +107,7 @@ func respondContextError(
 	cause error,
 ) (codes.Code, string) {
 	slog.WarnContext(ctx, "adapter.context_error.responded", "code", code.String(), "cause", cause)
-	message := publicError.Error()
-	if refs := formatDiagRefs(ctx); refs != "" {
-		message = refs + "\n" + message
-	}
-	return code, message
+	return code, publicError.Error()
 }
 
 // RespondMCP classifies err, logs it on the daemon side with the
@@ -124,7 +122,7 @@ func RespondMCP(ctx context.Context, err error) error {
 	corr := correlation.FromContext(ctx)
 	message := formatUnknown(ctx)
 	if adapterErr.SafeForClient {
-		message = formatKnown(adapterErr, ctx)
+		message = formatKnown(adapterErr)
 	}
 	return &MCPError{
 		Class:   adapterErr.Class,
@@ -153,7 +151,7 @@ func SafeMessage(err error) string {
 	}
 	adapterErr := classify(err)
 	if !adapterErr.SafeForClient {
-		return "internal error"
+		return internalErrorMessage
 	}
 	if adapterErr.Hint != "" {
 		return adapterErr.Message + "; " + adapterErr.Hint
@@ -221,31 +219,26 @@ func IsInfraFailure(err error) bool {
 	return classify(err).Class == ClassEmbedderRejected
 }
 
-func formatKnown(adapterErr *AdapterError, ctx context.Context) string {
-	base := adapterErr.Message
+func formatKnown(adapterErr *AdapterError) string {
 	if adapterErr.Hint != "" {
-		base = adapterErr.Message + "; " + adapterErr.Hint
+		return adapterErr.Message + "; " + adapterErr.Hint
 	}
-	if refs := formatDiagRefs(ctx); refs != "" {
-		return refs + "\n" + base
-	}
-	return base
+	return adapterErr.Message
 }
 
+// formatUnknown returns the client message for an error that is not safe to
+// show to a client. When ctx does not contain a trace id, the message is
+// "internal error". When ctx contains a trace id, the message adds
+// "see daemon logs for trace <id>".
+//
+// The daemon log entry for the error contains the full cause and the same
+// trace id.
 func formatUnknown(ctx context.Context) string {
-	if refs := formatDiagRefs(ctx); refs != "" {
-		return refs + "\ninternal error; see daemon logs"
+	traceID := string(correlation.FromContext(ctx).TraceID)
+	if traceID == "" {
+		return internalErrorMessage
 	}
-	return "internal error"
-}
-
-// formatDiagRefs renders the correlation header from ctx so error messages
-// carry a greppable handle to the daemon log. Returns "" when no ids are
-// available. The MCP client layer relies on the daemon embedding these in
-// the message so it can stay a pure relay.
-func formatDiagRefs(ctx context.Context) string {
-	corr := correlation.FromContext(ctx)
-	return correlation.HeaderLine(corr, "job_id", corr.IdentityAttributeValue("job_id"))
+	return internalErrorMessage + "; see daemon logs for trace " + traceID
 }
 
 func logRespond(ctx context.Context, adapterErr *AdapterError) {

@@ -84,6 +84,11 @@ func startMaintenanceTestDaemon(t *testing.T) string {
 	return socketPath
 }
 
+type capturedStdout struct {
+	output []byte
+	err    error
+}
+
 // runCLICapturingStdout runs one CLI invocation and returns what it printed.
 // The response printer writes to the process stdout rather than cobra's
 // writer, so the test swaps that stream for a pipe while the command runs.
@@ -93,6 +98,11 @@ func runCLICapturingStdout(t *testing.T, args []string) string {
 	if err != nil {
 		t.Fatalf("os.Pipe returned error: %v", err)
 	}
+	captured := make(chan capturedStdout, 1)
+	go func() {
+		output, readErr := io.ReadAll(reader)
+		captured <- capturedStdout{output: output, err: readErr}
+	}()
 	previousStdout := os.Stdout
 	os.Stdout = writer
 	root, _, _ := testRoot()
@@ -102,7 +112,8 @@ func runCLICapturingStdout(t *testing.T, args []string) string {
 	if closeErr := writer.Close(); closeErr != nil {
 		t.Fatalf("close pipe writer: %v", closeErr)
 	}
-	output, readErr := io.ReadAll(reader)
+	result := <-captured
+	output, readErr := result.output, result.err
 	if readErr != nil {
 		t.Fatalf("read captured stdout: %v", readErr)
 	}
