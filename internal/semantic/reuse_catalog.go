@@ -10,11 +10,11 @@ import (
 
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
 
-	"github.com/milvus-io/milvus/client/v2/column"
-	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/client/v2/index"
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/milvus-io/milvus/pkg/v2/util/merr"
+	"github.com/milvus-io/milvus/client/v3/column"
+	"github.com/milvus-io/milvus/client/v3/entity"
+	"github.com/milvus-io/milvus/client/v3/index"
+	"github.com/milvus-io/milvus/client/v3/milvusclient"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"google.golang.org/grpc/peer"
@@ -435,7 +435,8 @@ func (service *Service) reuseCatalogReadError(
 	operation string,
 ) error {
 	wrappedErr := fmt.Errorf("%s: %w", operation, err)
-	if errors.Is(err, merr.ErrCollectionNotLoaded) || errors.Is(err, merr.ErrCollectionOnRecovering) {
+	errorCode := milvusclient.ErrorCode(err)
+	if errorCode == merr.Code(merr.ErrCollectionNotLoaded) || errorCode == merr.Code(merr.ErrCollectionOnRecovering) {
 		service.residency.Forget(collectionName)
 		return adapterr.NewMilvusUnavailable(wrappedErr)
 	}

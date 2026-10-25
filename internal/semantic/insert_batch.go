@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/milvus-io/milvus/client/v3/milvusclient"
 	"goodkind.io/lm-semantic-search/collection"
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
 	"goodkind.io/lm-semantic-search/internal/model"

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 )
 
 // Test hooks for the external reconnect test, which lives in package

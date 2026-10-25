@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/milvus-io/milvus/client/v2/column"
+	"github.com/milvus-io/milvus/client/v3/column"
 	"goodkind.io/lm-semantic-search/collection"
 	milvusstore "goodkind.io/lm-semantic-search/collection/milvus"
 )

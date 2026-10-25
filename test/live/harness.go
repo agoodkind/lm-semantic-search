@@ -42,7 +42,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/milvus-io/milvus/client/v3/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/daemon"
@@ -380,9 +380,10 @@ func newHarnessWithDaemonOptions(
 	// so the whole scenario is blocked on the environment rather than the code.
 	dialCtx, dialCancel := context.WithTimeout(operatorContext, 5*time.Second)
 	operatorMilvus, err := milvusclient.New(dialCtx, &milvusclient.ClientConfig{
-		Address:     milvusAddress,
-		APIKey:      defaultConfig.MilvusToken,
-		DialOptions: milvusgrpc.DialOptions(operatorContext, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
+		TelemetryConfig: &milvusclient.TelemetryConfig{Enabled: false},
+		Address:         milvusAddress,
+		APIKey:          defaultConfig.MilvusToken,
+		DialOptions:     milvusgrpc.DialOptions(operatorContext, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
 	})
 	dialCancel()
 	if err != nil {
@@ -447,10 +448,11 @@ func newHarnessWithDaemonOptions(
 	)
 	dialCtx, dialCancel = context.WithTimeout(sandboxContext, 5*time.Second)
 	sandboxMilvus, err = milvusclient.New(dialCtx, &milvusclient.ClientConfig{
-		Address:     milvusAddress,
-		APIKey:      defaultConfig.MilvusToken,
-		DBName:      databaseName,
-		DialOptions: milvusgrpc.DialOptions(sandboxContext, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
+		TelemetryConfig: &milvusclient.TelemetryConfig{Enabled: false},
+		Address:         milvusAddress,
+		APIKey:          defaultConfig.MilvusToken,
+		DBName:          databaseName,
+		DialOptions:     milvusgrpc.DialOptions(sandboxContext, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
 	})
 	dialCancel()
 	if err != nil {

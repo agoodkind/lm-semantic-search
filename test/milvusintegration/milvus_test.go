@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/client/v2/index"
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/milvus-io/milvus/client/v3/entity"
+	"github.com/milvus-io/milvus/client/v3/index"
+	"github.com/milvus-io/milvus/client/v3/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -103,8 +103,9 @@ func dialMilvus(t *testing.T, stack throwawayStack) *milvusclient.Client {
 	for {
 		dialCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		client, err := milvusclient.New(dialCtx, &milvusclient.ClientConfig{
-			Address:     stack.milvusAddress(),
-			DialOptions: milvusgrpc.DialOptions(context.Background(), slog.Default(), milvusgrpc.DefaultCallTimeouts()),
+			TelemetryConfig: &milvusclient.TelemetryConfig{Enabled: false},
+			Address:         stack.milvusAddress(),
+			DialOptions:     milvusgrpc.DialOptions(context.Background(), slog.Default(), milvusgrpc.DefaultCallTimeouts()),
 		})
 		if err == nil {
 			_, err = client.ListCollections(dialCtx, milvusclient.NewListCollectionOption())

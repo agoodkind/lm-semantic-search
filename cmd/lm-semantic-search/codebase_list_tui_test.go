@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 )
@@ -17,7 +17,7 @@ func TestListModelViewShowsRecords(t *testing.T) {
 	}
 	model := newListModel(cliOptions{}, codebases, nil)
 
-	view := model.View()
+	view := model.View().Content
 	for _, want := range []string{"cb_1_aaaa", "cb_2_bbbb", "alpha", "beta", "indexed", "stale", "12", "NAME", "STATUS", "PATH"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() missing %q\n%s", want, view)
@@ -41,7 +41,7 @@ func TestListModelViewShowsStoredSchedulingPolicy(t *testing.T) {
 	model := newListModel(cliOptions{}, codebases, nil)
 	model.width = 160
 
-	output := model.View()
+	output := model.View().Content
 	for _, want := range []string{
 		"Stored policy:",
 		"priority=low · quiet=on · idle_after=10m",
@@ -61,7 +61,7 @@ func TestListRowRendersDaemonTokens(t *testing.T) {
 	}
 	model := newListModel(cliOptions{}, codebases, nil)
 
-	view := model.View()
+	view := model.View().Content
 	for _, want := range []string{"⋯", "waiting"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() missing daemon token %q\n%s", want, view)
@@ -77,7 +77,7 @@ func TestListRowDoesNotFallbackToRawStatusWithoutTokens(t *testing.T) {
 	}
 	model := newListModel(cliOptions{}, codebases, nil)
 
-	view := model.View()
+	view := model.View().Content
 	if strings.Contains(view, "indexed") {
 		t.Errorf("View() rendered fallback raw status:\n%s", view)
 	}
@@ -92,7 +92,7 @@ func TestListViewShowsDegradedBanner(t *testing.T) {
 		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed", DisplayStatus: "waiting", GlyphToken: "⋯", StatusLabel: "waiting"},
 	}
 	degraded := newListModel(cliOptions{}, codebases, &pb.DependencyHealth{Degraded: true, Mode: "embedder_unreachable"})
-	view := degraded.View()
+	view := degraded.View().Content
 	if !strings.Contains(view, "🟥") {
 		t.Errorf("degraded list view missing banner marker:\n%s", view)
 	}
@@ -101,8 +101,8 @@ func TestListViewShowsDegradedBanner(t *testing.T) {
 	}
 
 	healthy := newListModel(cliOptions{}, codebases, &pb.DependencyHealth{Degraded: false})
-	if strings.Contains(healthy.View(), "🟥") {
-		t.Errorf("healthy list view should carry no banner:\n%s", healthy.View())
+	if strings.Contains(healthy.View().Content, "🟥") {
+		t.Errorf("healthy list view should carry no banner:\n%s", healthy.View().Content)
 	}
 }
 
@@ -150,7 +150,7 @@ func TestListModelNavigationMovesSelection(t *testing.T) {
 		t.Fatalf("initial cursor = %d, want 0", model.cursor)
 	}
 
-	downModel, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	downModel, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	moved, ok := downModel.(listModel)
 	if !ok {
 		t.Fatalf("Update did not return a listModel")
@@ -159,7 +159,7 @@ func TestListModelNavigationMovesSelection(t *testing.T) {
 		t.Errorf("cursor after down = %d, want 1", moved.cursor)
 	}
 
-	upModel, _ := moved.Update(tea.KeyMsg{Type: tea.KeyUp})
+	upModel, _ := moved.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	back, ok := upModel.(listModel)
 	if !ok {
 		t.Fatalf("Update did not return a listModel")
@@ -194,7 +194,7 @@ func TestListModelQuitKeySignalsQuit(t *testing.T) {
 		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed"},
 	}
 	model := newListModel(cliOptions{}, codebases, nil)
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	quit, ok := updated.(listModel)
 	if !ok {
 		t.Fatalf("Update did not return a listModel")

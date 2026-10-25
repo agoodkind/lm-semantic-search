@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mark3labs/mcp-go/server"
+	"github.com/mark3labs/mcp-go/v2/server"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/response"
 	"google.golang.org/grpc"

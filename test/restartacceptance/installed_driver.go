@@ -29,9 +29,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
-	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus/client/v3/entity"
+	"github.com/milvus-io/milvus/client/v3/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
 	"goodkind.io/lm-semantic-search/internal/tshash"
@@ -1871,7 +1871,8 @@ func codeCollectionName(path string) string {
 
 func newCloneMilvusClient(ctx context.Context) (*milvusclient.Client, error) {
 	return milvusclient.New(ctx, &milvusclient.ClientConfig{
-		Address: cloneMilvusAddress, DBName: cloneMilvusDatabase,
+		TelemetryConfig: &milvusclient.TelemetryConfig{Enabled: false},
+		Address:         cloneMilvusAddress, DBName: cloneMilvusDatabase,
 		DialOptions: milvusgrpc.DialOptions(ctx, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
 	})
 }

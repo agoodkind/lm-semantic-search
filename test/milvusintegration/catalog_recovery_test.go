@@ -4,15 +4,14 @@ package milvusintegration
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
-	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/milvus-io/milvus/pkg/v2/util/merr"
+	"github.com/milvus-io/milvus/client/v3/entity"
+	"github.com/milvus-io/milvus/client/v3/milvusclient"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
@@ -66,7 +65,7 @@ func TestCatalogReadRecoversAfterExternalRelease(t *testing.T) {
 	waitForLoadState(t, milvus, catalogName, entity.LoadStateNotLoad)
 	started := time.Now()
 	_, err = service.LoadReuseVectorsForContents(ctx, "", chunks)
-	if !errors.Is(err, merr.ErrCollectionNotLoaded) {
+	if milvusclient.ErrorCode(err) != merr.Code(merr.ErrCollectionNotLoaded) {
 		t.Fatalf("released catalog error = %v, want the real Milvus readiness response", err)
 	}
 	if !adapterr.IsInfraFailure(err) || !adapterr.IsTransient(err) {
@@ -91,7 +90,8 @@ func TestCatalogReadRecoversAfterExternalRelease(t *testing.T) {
 	if schemaErr == nil {
 		t.Fatal("the invalid field query did not return a schema error")
 	}
-	if errors.Is(schemaErr, merr.ErrCollectionNotLoaded) || errors.Is(schemaErr, merr.ErrCollectionOnRecovering) || adapterr.IsInfraFailure(schemaErr) {
+	schemaCode := milvusclient.ErrorCode(schemaErr)
+	if schemaCode == merr.Code(merr.ErrCollectionNotLoaded) || schemaCode == merr.Code(merr.ErrCollectionOnRecovering) || adapterr.IsInfraFailure(schemaErr) {
 		t.Fatalf("the invalid field query returned a readiness or infrastructure error: %v", schemaErr)
 	}
 	t.Logf("the invalid field query retained its schema error: %v", schemaErr)

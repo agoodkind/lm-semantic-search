@@ -95,18 +95,6 @@ else
 LOG_PATH := $(HOME)/.lm-semantic-search/logs/lm-semantic-search-daemon.log
 endif
 
-# go.mk runs these as order-only prerequisites of every build, lint, vet, test,
-# and govulncheck target (and install/release via the modules). GO_MK_GENERATE
-# generates the tree-sitter parser; GO_MK_WORKSPACE_USE materializes a gitignored
-# go.work that routes the gksyntax submodule into the build, so both exist before
-# any target compiles the grammar packages.
-GO_MK_GENERATE := gksyntax-grammars
-GO_MK_GENERATE_INPUTS := third_party/gksyntax
-GO_MK_GENERATE_OUTPUTS := \
-	third_party/gksyntax/treesitter/grammars/swift/upstream/src/parser.c \
-	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/parser.h \
-	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/array.h \
-	third_party/gksyntax/treesitter/grammars/swift/upstream/src/tree_sitter/alloc.h
 GO_MK_WORKSPACE_USE := . third_party/gksyntax
 
 daemon-entitlements-signer:
@@ -127,6 +115,12 @@ go-mk-cgo-dep-tokenizers:
 # at parse time and -includes them. Update path: edit go-makefile/bootstrap.mk,
 # then refresh consumer copies (one-off cp; not enshrined as infrastructure).
 include bootstrap.mk
+
+.PHONY: gksyntax-submodule
+gksyntax-submodule:
+	@git submodule update --init third_party/gksyntax
+
+go-mk-workspace: | gksyntax-submodule
 
 build install release: | daemon-entitlements-signer
 
@@ -219,58 +213,6 @@ proto:
 		exit 1; \
 	}
 	buf generate
-
-# ---------------------------------------------------------------------------
-# gksyntax submodule grammars
-# ---------------------------------------------------------------------------
-# The AST splitter and tree-sitter grammars live in goodkind.io/gksyntax, a git
-# submodule under third_party/ routed through a generated, gitignored go.work
-# (GO_MK_WORKSPACE_USE above). A plain module require is not possible because
-# gksyntax vendors the dart and swift grammars as its own submodules, whose C
-# sources are absent from a Go module zip, and a go.mod replace is rejected by
-# gomoddirectives. gksyntax commits only the swift grammar definition, not the
-# generated parser, so the parser is produced from the pinned submodule by the
-# tree-sitter CLI. The generated parser stays inside the submodule working tree
-# (gitignored there) and is never committed.
-GKS_DIR := third_party/gksyntax
-SWIFT_GRAMMAR_DIR := $(GKS_DIR)/treesitter/grammars/swift/upstream
-SWIFT_GRAMMAR_DEF := $(SWIFT_GRAMMAR_DIR)/src/grammar.json
-SWIFT_GRAMMAR_PARSER := $(SWIFT_GRAMMAR_DIR)/src/parser.c
-TREE_SITTER_ABI ?= 14
-# tree-sitter CLI lands here when the host has none on PATH. Gitignored.
-TREE_SITTER_LOCAL_DIR := $(CURDIR)/.bin
-
-.PHONY: gksyntax-grammars
-gksyntax-grammars:
-	@status="$$(git submodule status --recursive $(GKS_DIR))"; \
-	if printf '%s\n' "$$status" | grep -q '^U'; then \
-		echo "gksyntax-grammars: $(GKS_DIR) has unresolved submodule conflicts"; \
-		exit 1; \
-	fi; \
-	if printf '%s\n' "$$status" | grep -Eq '^[+-]'; then \
-		git -c url.https://github.com/.insteadOf=git@github.com: submodule update --init --recursive $(GKS_DIR); \
-	fi
-	@if [ ! -f "$(SWIFT_GRAMMAR_DEF)" ]; then \
-		echo "gksyntax-grammars: $(SWIFT_GRAMMAR_DIR) is empty; run 'git submodule update --init --recursive'"; \
-		exit 1; \
-	fi
-	@set -e; \
-	ts_bin="$$(command -v tree-sitter 2>/dev/null || true)"; \
-	if [ -z "$$ts_bin" ]; then \
-		"$(GKS_DIR)/scripts/install-tree-sitter.sh" "$(TREE_SITTER_LOCAL_DIR)"; \
-		ts_bin="$(TREE_SITTER_LOCAL_DIR)/tree-sitter"; \
-	fi; \
-	if [ ! -f "$(SWIFT_GRAMMAR_PARSER)" ] || [ "$(SWIFT_GRAMMAR_DEF)" -nt "$(SWIFT_GRAMMAR_PARSER)" ]; then \
-		echo "gksyntax-grammars: generating Swift parser (abi $(TREE_SITTER_ABI))"; \
-		( cd "$(SWIFT_GRAMMAR_DIR)" && "$$ts_bin" generate src/grammar.json --abi $(TREE_SITTER_ABI) ); \
-		git -C "$(SWIFT_GRAMMAR_DIR)" checkout -- . >/dev/null 2>&1 || true; \
-	else \
-		echo "gksyntax-grammars: Swift parser already generated"; \
-	fi
-
-# The order-only prerequisite that runs gksyntax-grammars before every compile,
-# vet, lint, test, install, and release target is wired centrally in go.mk via
-# GO_MK_GENERATE (set above), so no per-target list is maintained here.
 
 # install runs as the inherited `deploy: install` prerequisite from
 # go-build.mk; repeating it here as a recipe line runs the whole

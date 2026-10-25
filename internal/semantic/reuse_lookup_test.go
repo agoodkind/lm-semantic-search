@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
-	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
-	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/client/v2/column"
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/client/v3/column"
+	"github.com/milvus-io/milvus/client/v3/milvusclient"
 	"goodkind.io/lm-semantic-search/embedding"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -488,7 +488,8 @@ func newReuseLookupTestService(t *testing.T, rows []reuseLookupRow) (*Service, *
 	t.Cleanup(grpcServer.Stop)
 
 	client, err := milvusclient.New(context.Background(), &milvusclient.ClientConfig{
-		Address: listener.Addr().String(),
+		TelemetryConfig: &milvusclient.TelemetryConfig{Enabled: false},
+		Address:         listener.Addr().String(),
 	})
 	if err != nil {
 		t.Fatalf("construct Milvus client: %v", err)

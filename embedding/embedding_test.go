@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openai/openai-go/v2"
+	"github.com/openai/openai-go/v3"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/metrics"
 )
