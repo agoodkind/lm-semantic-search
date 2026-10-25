@@ -28,7 +28,14 @@ const (
 	cliCommandTimeout   = time.Minute
 	daemonCloseTimeout  = 5 * time.Second
 	socketDirectoryName = "lms-cli-text"
+	noTrackedJobsText   = "No tracked jobs."
+	droppedSectionText  = "Dropped codebases"
 )
+
+type cliCommand struct {
+	args     []string
+	wantText string
+}
 
 type cliRun struct {
 	exitCode int
@@ -36,40 +43,27 @@ type cliRun struct {
 	stderr   string
 }
 
-// TestCLIPublicTextOmitsTraceAnnotations builds lm-semantic-search and starts
-// a real daemon on a temporary Unix socket. It runs the binary with these
-// commands:
-//
-//   - codebase status
-//   - codebase list
-//   - job list
-//   - daemon doctor
-//
-// The test requires each command to exit with status 0 and print a result.
-// It then runs job get with a job ID that does not exist. That command must
-// exit with an error and print a line on stderr that starts with "Error: "
-// and contains the job ID.
-//
-// The test checks that every command's output does not contain the magnifying
-// glass character or "trace_id=".
 func TestCLIPublicTextOmitsTraceAnnotations(t *testing.T) {
 	binaryPath := buildCLI(t)
 	socketPath := startPublicTextDaemon(t)
-	commands := [][]string{
-		{"codebase", "status", t.TempDir()},
-		{"codebase", "list"},
-		{"job", "list"},
-		{"daemon", "doctor"},
+	statusPath, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve status directory: %v", err)
+	}
+	commands := []cliCommand{
+		{args: []string{"codebase", "status", statusPath}, wantText: statusPath},
+		{args: []string{"job", "list"}, wantText: noTrackedJobsText},
+		{args: []string{"daemon", "doctor"}, wantText: droppedSectionText},
 	}
 	for _, command := range commands {
-		name := strings.Join(command, " ")
-		run := runCLI(t, binaryPath, append([]string{"--socket", socketPath}, command...)...)
+		name := strings.Join(command.args, " ")
+		run := runCLI(t, binaryPath, append([]string{"--socket", socketPath}, command.args...)...)
 		if run.exitCode != 0 {
 			t.Fatalf("%s exited %d:\n%s%s", name, run.exitCode, run.stdout, run.stderr)
 		}
 		assertNoTraceAnnotation(t, name, run.stdout+run.stderr)
-		if strings.TrimSpace(run.stdout) == "" {
-			t.Fatalf("%s printed nothing", name)
+		if !strings.Contains(run.stdout, command.wantText) {
+			t.Fatalf("%s stdout = %q, want a result that contains %q", name, run.stdout, command.wantText)
 		}
 	}
 

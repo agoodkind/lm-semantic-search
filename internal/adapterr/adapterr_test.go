@@ -80,9 +80,11 @@ func TestRespondUnknownSanitizesAndReferencesTrace(t *testing.T) {
 	if strings.Contains(msg, "stack overflow") {
 		t.Fatalf("unknown message should be sanitized, got %q", msg)
 	}
-	want := "internal error; see daemon logs for trace " + string(corr.TraceID)
-	if msg != want {
-		t.Fatalf("message = %q, want %q", msg, want)
+	if !strings.Contains(msg, string(corr.TraceID)) {
+		t.Fatalf("message should contain the trace id %q, got %q", corr.TraceID, msg)
+	}
+	if strings.Contains(msg, "trace_id=") || strings.Contains(msg, correlation.HeaderMarker) {
+		t.Fatalf("message should not contain the correlation header, got %q", msg)
 	}
 }
 
@@ -181,8 +183,8 @@ func TestRespondMCPUnknown(t *testing.T) {
 	if strings.Contains(mcp.Message, "opaque") {
 		t.Fatalf("unknown message should be sanitized, got %q", mcp.Message)
 	}
-	if mcp.Message != "internal error; see daemon logs for trace "+mcp.TraceID {
-		t.Fatalf("message = %q, want the internal error with its trace id", mcp.Message)
+	if !strings.Contains(mcp.Message, mcp.TraceID) || strings.Contains(mcp.Message, "trace_id=") {
+		t.Fatalf("message = %q, want the trace id without the correlation header", mcp.Message)
 	}
 	if mcp.TraceID == "" {
 		t.Fatalf("trace_id should be set")

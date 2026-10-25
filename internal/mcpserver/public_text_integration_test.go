@@ -11,10 +11,12 @@ import (
 )
 
 const (
-	traceMarker     = "🔎"
-	traceIDField    = "trace_id="
-	missingJobID    = "job_missing"
-	publicToolLimit = 2 * statusResponseLimit
+	traceMarker        = "🔎"
+	traceIDField       = "trace_id="
+	missingJobID       = "job_missing"
+	noTrackedJobsText  = "No tracked jobs."
+	droppedSectionText = "Dropped codebases"
+	publicToolLimit    = 2 * statusResponseLimit
 )
 
 type publicToolCall struct {
@@ -25,25 +27,14 @@ type publicToolCall struct {
 	wantOnce  string
 }
 
-// TestPublicToolTextOmitsTraceAnnotations starts the real MCP stdio adapter
-// in human output mode against an in-process daemon.
-//
-// It calls get_indexing_status, list_indexing_statuses, list_indexing_jobs,
-// and doctor_indexing. It also calls get_indexing_job with a job id that
-// does not exist.
-//
-// It checks that each text result contains the expected result text and
-// does not contain the magnifying glass character or "trace_id=".
-// It also checks that the get_indexing_status text contains the codebase id
-// exactly once.
 func TestPublicToolTextOmitsTraceAnnotations(t *testing.T) {
 	socketPath, codebasePath := startStatusTestDaemon(t, model.CodebaseStatusDiscovered)
 	client := newMCPProcessClient(t, socketPath, response.ModeHuman)
 	calls := []publicToolCall{
 		{name: "get_indexing_status", arguments: map[string]any{"absolutePath": codebasePath}, wantText: codebasePath, wantOnce: "codebase_id=" + statusTestCodebaseID},
 		{name: "list_indexing_statuses", arguments: map[string]any{}, wantText: codebasePath},
-		{name: "list_indexing_jobs", arguments: map[string]any{}, wantText: ""},
-		{name: "doctor_indexing", arguments: map[string]any{}, wantText: ""},
+		{name: "list_indexing_jobs", arguments: map[string]any{}, wantText: noTrackedJobsText},
+		{name: "doctor_indexing", arguments: map[string]any{}, wantText: droppedSectionText},
 		{name: "get_indexing_job", arguments: map[string]any{"job_id": missingJobID}, wantError: true, wantText: missingJobID},
 	}
 	for _, call := range calls {
@@ -66,7 +57,7 @@ func TestPublicToolTextOmitsTraceAnnotations(t *testing.T) {
 		if strings.Contains(text.Text, traceMarker) || strings.Contains(text.Text, traceIDField) {
 			t.Fatalf("%s text contains a trace annotation:\n%s", call.name, text.Text)
 		}
-		if !strings.Contains(text.Text, call.wantText) || strings.TrimSpace(text.Text) == "" {
+		if !strings.Contains(text.Text, call.wantText) {
 			t.Fatalf("%s text = %q, want a result that contains %q", call.name, text.Text, call.wantText)
 		}
 		if call.wantOnce != "" && strings.Count(text.Text, call.wantOnce) != 1 {
