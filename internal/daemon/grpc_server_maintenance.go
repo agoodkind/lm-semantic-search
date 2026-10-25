@@ -35,6 +35,6 @@ func (server *GRPCServer) SetMaintenanceMode(ctx context.Context, request *pb.Se
 	return &pb.SetMaintenanceModeResponse{
 		Maintenance: toMaintenanceStatus(state),
 		ActiveJobs:  safeInt32(activeJobs),
-		DisplayText: server.envelopeText(ctx, health, render.MaintenanceAck(maintenanceView)),
+		DisplayText: server.envelopeText(health, render.MaintenanceAck(maintenanceView)),
 	}, nil
 }

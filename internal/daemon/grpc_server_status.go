@@ -65,7 +65,7 @@ func (server *GRPCServer) GetStatus(ctx context.Context, request *pb.GetStatusRe
 		Maintenance: toMaintenanceStatus(daemon.Maintenance),
 		DisplayText: "",
 	}
-	response.DisplayText = server.envelopeText(ctx, daemon.Health, statusdisplay.Dump(render.StatusSnapshot(response)))
+	response.DisplayText = server.envelopeText(daemon.Health, statusdisplay.Dump(render.StatusSnapshot(response)))
 	return response, nil
 }
 

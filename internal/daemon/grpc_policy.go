@@ -65,14 +65,8 @@ func (server *GRPCServer) UpdateCodebasePolicy(
 		TotalCount:      0,
 	}
 	return &pb.UpdateCodebasePolicyResponse{
-		Codebase: pbCodebase,
-		DisplayText: server.envelopeText(
-			ctx,
-			health,
-			render.MutationAck(ack),
-			"codebase_id",
-			codebase.ID,
-		),
+		Codebase:    pbCodebase,
+		DisplayText: server.envelopeText(health, render.MutationAck(ack)),
 	}, nil
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 
-	"goodkind.io/gklog/correlation"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -14,42 +13,26 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// appendCorrelationRef prefixes one compact diagnostics line to a display
-// text so every successful response starts with a greppable correlation
-// header. Extras are key/value pairs for ids the trace context does not
-// already carry, such as codebase_id and job_id.
-func appendCorrelationRef(displayText string, ctx context.Context, extras ...string) string {
-	corr := correlation.FromContext(ctx)
-	line := correlation.HeaderLine(corr, extras...)
-	if line == "" {
-		return displayText
-	}
-	if strings.TrimSpace(displayText) == "" {
-		return line
-	}
-	return line + "\n" + displayText
-}
-
-// envelopeText composes the human-facing display text for a read surface as the
-// shared envelope: the maintenance banner (only while the operator's mode is
-// on), the dependency-health banner (only when a shared dependency is
-// degraded), then the correlation header, then the body, joined with single
-// newlines. It is the one place the banners are prepended, so every surface
-// shows each at most once and the body renderers never carry them. The caller
-// passes the health snapshot it already read so the banner and the body agree.
-func (server *GRPCServer) envelopeText(ctx context.Context, health dependencyHealth, body string, extras ...string) string {
-	withHeader := appendCorrelationRef(body, ctx, extras...)
+// envelopeText builds the human-facing display text for a daemon response.
+// It joins the maintenance banner, dependency-health banner, and body, in
+// that order, with single newlines. The maintenance banner appears only
+// while maintenance mode is on. The dependency-health banner appears only
+// while a shared dependency is degraded.
+//
+// Only envelopeText adds these banners. Body renderers do not add them.
+// The caller passes the health snapshot it already used to build the body.
+func (server *GRPCServer) envelopeText(health dependencyHealth, body string) string {
 	banner := joinBannerLines(
 		render.MaintenanceBanner(resolveMaintenanceView(server.manager.Maintenance(), 0)),
 		render.HealthBanner(resolveBannerView(health, server.manager.config)),
 	)
 	if banner == "" {
-		return withHeader
+		return body
 	}
-	if strings.TrimSpace(withHeader) == "" {
+	if strings.TrimSpace(body) == "" {
 		return banner
 	}
-	return banner + "\n" + withHeader
+	return banner + "\n" + body
 }
 
 // joinBannerLines joins the banners that are present with single newlines, so

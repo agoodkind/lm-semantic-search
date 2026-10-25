@@ -50,23 +50,6 @@ func toDependencyHealth(health dependencyHealth) *pb.DependencyHealth {
 	return result
 }
 
-// jobIDOf returns the id of job or "" when job is nil, so callers can fold
-// optional job ids into appendCorrelationRef without nil checks.
-func jobIDOf(job *model.Job) string {
-	if job == nil {
-		return ""
-	}
-	return job.ID
-}
-
-// codebaseIDOf returns the id of codebase or "" when found is false.
-func codebaseIDOf(found bool, codebase model.Codebase) string {
-	if !found {
-		return ""
-	}
-	return codebase.ID
-}
-
 // beginRPC opens the per-RPC correlation span, emits daemon.rpc.started,
 // and returns the derived context plus a deferred completion function
 // that recovers panics through [adapterr.Respond] and emits
@@ -218,7 +201,7 @@ func (server *GRPCServer) StartIndex(ctx context.Context, request *pb.StartIndex
 		Deduplicated:       deduplicated,
 		CanonicalPath:      codebase.CanonicalPath,
 		OverlapsCodebaseId: overlapsCodebaseID,
-		DisplayText:        server.envelopeText(ctx, health, render.StartIndex(startIndexView), "codebase_id", codebase.ID, "job_id", job.ID),
+		DisplayText:        server.envelopeText(health, render.StartIndex(startIndexView)),
 	}, nil
 }
 
@@ -282,7 +265,7 @@ func (server *GRPCServer) ClearIndex(ctx context.Context, request *pb.ClearIndex
 	return &pb.ClearIndexResponse{
 		CodebaseId:  codebase.ID,
 		Cleared:     true,
-		DisplayText: server.envelopeText(ctx, health, render.MutationAck(ack), "codebase_id", codebase.ID),
+		DisplayText: server.envelopeText(health, render.MutationAck(ack)),
 	}, nil
 }
 
@@ -302,7 +285,7 @@ func (server *GRPCServer) CancelJob(ctx context.Context, request *pb.CancelJobRe
 	return &pb.CancelJobResponse{
 		JobId:       job.ID,
 		Cancelled:   job.State == model.JobStateCancelled,
-		DisplayText: server.envelopeText(ctx, health, render.MutationAck(ack), "job_id", job.ID, "codebase_id", job.CodebaseID),
+		DisplayText: server.envelopeText(health, render.MutationAck(ack)),
 	}, nil
 }
 
@@ -355,7 +338,7 @@ func (server *GRPCServer) SyncIndex(ctx context.Context, request *pb.SyncIndexRe
 		JobId:       job.ID,
 		CodebaseId:  codebase.ID,
 		State:       string(job.State),
-		DisplayText: server.envelopeText(ctx, health, render.MutationAck(ack), "codebase_id", codebase.ID, "job_id", job.ID),
+		DisplayText: server.envelopeText(health, render.MutationAck(ack)),
 	}, nil
 }
 
@@ -457,7 +440,7 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 		Searchable:          &searchable,
 		CollectionReadiness: string(readiness),
 		Maintenance:         toMaintenanceStatus(maintenance),
-		DisplayText:         server.envelopeText(ctx, health, render.GetIndex(getIndexView), "codebase_id", codebaseIDOf(found, codebase), "job_id", jobIDOf(activeJob)),
+		DisplayText:         server.envelopeText(health, render.GetIndex(getIndexView)),
 	}
 	if found {
 		pbCodebase := pbconv.ToCodebase(codebase)
@@ -487,13 +470,13 @@ func (server *GRPCServer) GetJob(ctx context.Context, request *pb.GetJobRequest)
 	return &pb.GetJobResponse{
 		Job:              toJobWithTokens(job, health.Degraded(), successorID),
 		DependencyHealth: toDependencyHealth(health),
-		DisplayText:      server.envelopeText(ctx, health, render.GetJob(entry, true), "job_id", job.ID, "codebase_id", job.CodebaseID),
+		DisplayText:      server.envelopeText(health, render.GetJob(entry, true)),
 	}, nil
 }
 
 // ListJobs returns all tracked jobs, optionally filtered by codebase id.
 func (server *GRPCServer) ListJobs(ctx context.Context, request *pb.ListJobsRequest) (resp *pb.ListJobsResponse, err error) {
-	ctx, done := beginRPC(ctx, "ListJobs")
+	_, done := beginRPC(ctx, "ListJobs")
 	defer done(&err)
 	jobs := server.manager.ListJobs(request.GetCodebaseId())
 	health := server.manager.DependencyHealth()
@@ -512,7 +495,7 @@ func (server *GRPCServer) ListJobs(ctx context.Context, request *pb.ListJobsRequ
 		}
 	}
 	response.DependencyHealth = toDependencyHealth(health)
-	response.DisplayText = server.envelopeText(ctx, health, render.ListJobs(summary, activeEntries, terminalEntries), "codebase_id", request.GetCodebaseId())
+	response.DisplayText = server.envelopeText(health, render.ListJobs(summary, activeEntries, terminalEntries))
 	return response, nil
 }
 
@@ -575,7 +558,7 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 		Codebase:         pbconv.ToCodebase(outcome.Codebase),
 		ActiveJob:        toJobPointerWithTokens(outcome.ActiveJob, health.Degraded(), ""),
 		DependencyHealth: toDependencyHealth(health),
-		DisplayText:      server.envelopeText(ctx, health, render.Search(searchView), "codebase_id", outcome.Codebase.ID, "job_id", jobIDOf(outcome.ActiveJob)),
+		DisplayText:      server.envelopeText(health, render.Search(searchView)),
 	}
 	for _, result := range outcome.Results {
 		response.Results = append(response.Results, &pb.SearchResult{
@@ -616,7 +599,7 @@ func (server *GRPCServer) Doctor(ctx context.Context, request *pb.DoctorRequest)
 		Dropped:     server.manager.DroppedCodebases(),
 		Quarantined: server.manager.quarantinedCodebases(),
 	}
-	response.DisplayText = server.envelopeText(ctx, health, render.Doctor(doctorView))
+	response.DisplayText = server.envelopeText(health, render.Doctor(doctorView))
 	return response, nil
 }
 

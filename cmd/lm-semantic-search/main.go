@@ -5,9 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
-
-	"goodkind.io/gklog/correlation"
 )
 
 func main() {
@@ -24,9 +21,5 @@ func run() int {
 }
 
 func formatCLIError(err error) string {
-	message := err.Error()
-	if strings.HasPrefix(message, correlation.HeaderMarker) {
-		return message + "\n"
-	}
-	return fmt.Sprintf("Error: %s\n", message)
+	return fmt.Sprintf("Error: %s\n", err.Error())
 }

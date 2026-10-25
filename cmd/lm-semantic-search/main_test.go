@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
-	"goodkind.io/gklog/correlation"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/offlinemodel"
 	"goodkind.io/lm-semantic-search/internal/response"
@@ -436,15 +435,6 @@ func TestDaemonRequiresSubcommand(t *testing.T) {
 	}
 	if err.Error() != "daemon requires a subcommand" {
 		t.Fatalf("error = %q", err.Error())
-	}
-}
-
-func TestFormatCLIErrorKeepsCorrelationHeaderFirst(t *testing.T) {
-	t.Parallel()
-	message := correlation.HeaderMarker + "trace_id=abc span_id=def\ninternal error; see daemon logs"
-	got := formatCLIError(assertError(message))
-	if got != message+"\n" {
-		t.Fatalf("formatCLIError returned %q", got)
 	}
 }
 

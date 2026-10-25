@@ -233,8 +233,8 @@ func rawStatusLines(getIndex view.GetIndexView) []string {
 			raw.LastRunFiles, raw.LastRunChunks, raw.LastRunCompleted))
 	}
 	if raw.HasFailure {
-		lines = append(lines, fmt.Sprintf("last_failure message=%q job_id=%s trace_id=%s failed_at=%s",
-			raw.FailureMessage, raw.FailureJobID, raw.FailureTraceID, raw.FailureFailedAt))
+		lines = append(lines, fmt.Sprintf("last_failure message=%q job_id=%s failed_at=%s",
+			raw.FailureMessage, raw.FailureJobID, raw.FailureFailedAt))
 	}
 	if raw.GraphState != "" || raw.GraphUpdatedAt != "" {
 		lines = append(lines, fmt.Sprintf("graph_state=%s graph_updated_at=%s", raw.GraphState, raw.GraphUpdatedAt))

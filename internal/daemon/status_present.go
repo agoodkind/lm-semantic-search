@@ -516,7 +516,6 @@ func blankRawStatus() view.RawStatus {
 		HasFailure:       false,
 		FailureMessage:   "",
 		FailureJobID:     "",
-		FailureTraceID:   "",
 		FailureFailedAt:  "",
 		GraphState:       "",
 		GraphUpdatedAt:   "",
@@ -564,7 +563,6 @@ func resolveRawStatus(codebase model.Codebase, activeJob *model.Job, readiness s
 		raw.HasFailure = true
 		raw.FailureMessage = failure.Message
 		raw.FailureJobID = failure.JobID
-		raw.FailureTraceID = failure.TraceID
 		raw.FailureFailedAt = formatStampWithRelative(failure.FailedAt)
 	}
 	return raw

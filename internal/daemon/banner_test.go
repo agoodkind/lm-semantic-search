@@ -129,8 +129,9 @@ func TestRenderGetJobNoEchoWhenDegraded(t *testing.T) {
 	}
 }
 
-// During a degraded pipeline, GetIndex shows exactly one banner and one
-// correlation header, with no blank lines from the envelope.
+// TestGetIndexDegradedEnvelope checks that GetIndex display text contains
+// exactly one health banner and does not contain blank lines while the
+// embedding pipeline is degraded.
 func TestGetIndexDegradedEnvelope(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	// The active health probe runs on this indexed path, so the fake must report
@@ -160,9 +161,6 @@ func TestGetIndexDegradedEnvelope(t *testing.T) {
 	}
 	if !strings.Contains(text, "Embedding server unreachable") {
 		t.Fatalf("missing unreachable banner:\n%s", text)
-	}
-	if strings.Count(text, "🔎 trace_id=") != 1 {
-		t.Fatalf("want exactly one correlation header, got:\n%s", text)
 	}
 	if strings.Contains(text, "❌") {
 		t.Fatalf("a degraded pipeline must not read as a codebase failure:\n%s", text)
