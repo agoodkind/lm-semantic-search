@@ -80,8 +80,8 @@ func TestRespondUnknownSanitizesAndReferencesTrace(t *testing.T) {
 	if strings.Contains(msg, "stack overflow") {
 		t.Fatalf("unknown message should be sanitized, got %q", msg)
 	}
-	if !strings.Contains(msg, string(corr.TraceID)) {
-		t.Fatalf("message should contain the trace id %q, got %q", corr.TraceID, msg)
+	if !strings.HasPrefix(msg, "internal error") || !strings.Contains(msg, string(corr.TraceID)) {
+		t.Fatalf("message should start with %q and contain the trace id %q, got %q", "internal error", corr.TraceID, msg)
 	}
 	if strings.Contains(msg, "trace_id=") || strings.Contains(msg, correlation.HeaderMarker) {
 		t.Fatalf("message should not contain the correlation header, got %q", msg)
