@@ -57,8 +57,12 @@ GOLANGCI_LINT_RUN_FLAGS = $(GOLANGCI_LINT_FLAGS) --allow-parallel-runners --time
 # on every compile-bearing target, and the GO_MK_CC/GO_MK_CXX toolchain
 # resolution into CC/CXX for the dep recipe.
 GO_MK_CGO_DEPS := cbm onnxruntime tokenizers
-GO_MK_CGO_CACHE_VERSIONS := onnxruntime=1.27.0 tokenizers=1.27.0
-GO_MK_CGO_CACHE_INPUTS := cmd/onnxruntime-dep internal/onnxruntimedist cmd/tokenizers-dep
+# CI can read the pinned commit from the index before initializing the submodule.
+GO_MK_CGO_CACHE_VERSIONS := \
+	cbm=$(or $(shell git rev-parse --verify :third_party/cbm),$(error Cannot read the third_party/cbm gitlink)) \
+	onnxruntime=1.27.0 tokenizers=1.27.0
+GO_MK_CGO_CACHE_INPUTS := cmd/onnxruntime-dep internal/onnxruntimedist cmd/tokenizers-dep \
+	scripts/setup-cgo-cbm.sh scripts/cbm-lib.mk scripts/cbm-call-resolution.patch
 export CGO_LDFLAGS_ALLOW := -Wl,-rpath,@loader_path
 ifeq ($(shell uname),Darwin)
 GO_MK_INSTALL_POST_CMD = \
@@ -102,7 +106,7 @@ daemon-entitlements-signer:
 	go build -o "$(SIGNING_WRAPPER_DIR)/codesign" ./cmd/daemon-entitlements-signer
 	@ln -sf codesign "$(SIGNING_WRAPPER_DIR)/quill"
 
-go-mk-cgo-dep-cbm: scripts/setup-cgo-cbm.sh scripts/cbm-lib.mk third_party/cbm/Makefile.cbm
+go-mk-cgo-dep-cbm: scripts/setup-cgo-cbm.sh scripts/cbm-lib.mk scripts/cbm-call-resolution.patch third_party/cbm/Makefile.cbm
 	"$(CURDIR)/scripts/setup-cgo-cbm.sh"
 
 go-mk-cgo-dep-onnxruntime:

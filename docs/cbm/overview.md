@@ -53,7 +53,7 @@ query_graph, trace_path, and get_architecture are read only, and manage_adr read
 
 ## How the engine is packaged
 
-The cbm engine is vendored as a git submodule under `third_party/cbm` and is compiled into the daemon as a localized static archive through the go-makefile cgo-dependency hook, so a normal `make build` produces it. Two properties matter for correctness:
+The cbm submodule pins the public DeusData/codebase-memory-mcp upstream. The build exports that commit into an ignored source cache and applies the [call-resolution patch](../../scripts/cbm-call-resolution.patch) before compiling the localized static archive through the go-makefile cgo-dependency hook. A patch failure stops the build. The submodule stays clean, and repeated builds reuse native objects for the same upstream commit, patch content, and target platform. A normal `make build` produces the archive. Two properties matter for correctness:
 
 - Only a small set of the engine's `cbm_` entry-point symbols is exported from the archive; everything else is localized. This keeps the engine's internals from colliding with the daemon's other C dependencies.
 - The engine's bundled allocator is compiled so that it does not override the Go runtime's allocator.
@@ -62,7 +62,7 @@ Cross-compiled release builds resolve the archiver and related tools from the ac
 
 ## Staying current with upstream
 
-A scheduled workflow proposes submodule pin bumps for the cbm engine. It searches the newest upstream commits, and it accepts a commit only if that commit both builds and passes the engine round-trip test. It then opens an auto-merge pull request for the bump. The workflow only ever moves the pin forward: it refuses a candidate that would move the pin backward or sideways relative to the current pin. The build-and-test search runs unprivileged and without any token, and a separate privileged step opens the pull request after re-checking the chosen commit, so an untrusted upstream build cannot reach a token or move the pin on its own.
+A scheduled workflow proposes submodule pin bumps for the cbm engine. It searches the newest upstream commits, and it accepts a commit only if the local patch applies, the patched engine builds, and the engine round-trip test passes. It then opens an auto-merge pull request for the bump. The workflow only ever moves the pin forward: it refuses a candidate that would move the pin backward or sideways relative to the current pin. The build-and-test search runs unprivileged and without any token, and a separate privileged step opens the pull request after re-checking the chosen commit, so an untrusted upstream build cannot reach a token or move the pin on its own.
 
 ## Incremental rebuild and pruning
 

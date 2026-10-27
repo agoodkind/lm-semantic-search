@@ -30,6 +30,48 @@ if [[ ! -f "${CBM_DIR}/Makefile.cbm" ]]; then
     exit 1
 fi
 
+PATCH_PATH="${ROOT_DIR}/scripts/cbm-call-resolution.patch"
+UPSTREAM_COMMIT="$(git -C "${CBM_DIR}" rev-parse HEAD)"
+PATCH_HASH="$(git hash-object "${PATCH_PATH}")"
+SOURCE_CACHE="${ROOT_DIR}/.make/cbm"
+SOURCE_KEY="${UPSTREAM_COMMIT}-${PATCH_HASH}-${TARGET_GOOS}-${TARGET_GOARCH}"
+LOCK_DIR="${SOURCE_CACHE}/${TARGET_GOOS}-${TARGET_GOARCH}.lock"
+PREPARE_DIR=""
+
+mkdir -p "${SOURCE_CACHE}"
+if ! mkdir "${LOCK_DIR}"; then
+    echo "setup-cgo-cbm: another build or a stale lock blocks ${LOCK_DIR}; retry after the active build finishes or remove the stale lock" >&2
+    exit 1
+fi
+
+cleanup_source() {
+    if [[ -n "${PREPARE_DIR}" ]]; then
+        rm -rf -- "${PREPARE_DIR}"
+    fi
+    rmdir "${LOCK_DIR}"
+}
+trap cleanup_source EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+UPSTREAM_DIR="${CBM_DIR}"
+CBM_DIR="${SOURCE_CACHE}/${SOURCE_KEY}"
+if [[ ! -d "${CBM_DIR}" ]]; then
+    PREPARE_DIR="$(mktemp -d "${SOURCE_CACHE}/prepare.XXXXXXXX")"
+    mkdir "${PREPARE_DIR}/source"
+    git -C "${UPSTREAM_DIR}" archive --format=tar \
+        --output="${PREPARE_DIR}/upstream.tar" "${UPSTREAM_COMMIT}"
+    tar -xf "${PREPARE_DIR}/upstream.tar" -C "${PREPARE_DIR}/source"
+    git -C "${ROOT_DIR}" apply \
+        --directory="${PREPARE_DIR#"${ROOT_DIR}/"}/source" "${PATCH_PATH}"
+    printf '%s\n' "${SOURCE_KEY}" >"${PREPARE_DIR}/source/.lms-source-complete"
+    mv "${PREPARE_DIR}/source" "${CBM_DIR}"
+fi
+if [[ ! -f "${CBM_DIR}/.lms-source-complete" ]]; then
+    echo "setup-cgo-cbm: incomplete source cache ${CBM_DIR}; remove it and retry" >&2
+    exit 1
+fi
+
 last_word() {
     local value="$1"
     local -a words

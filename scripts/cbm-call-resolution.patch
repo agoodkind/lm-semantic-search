@@ -1,0 +1,285 @@
+diff --git a/internal/cbm/cbm.c b/internal/cbm/cbm.c
+index af4fda31e41dbaa17383dc782afffbe8e08f4f5f..9b5c2dbc7aa7c4643694d89015077474aa7d8051 100644
+--- a/internal/cbm/cbm.c
++++ b/internal/cbm/cbm.c
+@@ -124,7 +124,16 @@ void cbm_defs_push(CBMDefArray *arr, CBMArena *a, CBMDefinition def) {
+ }
+ 
+ void cbm_calls_push(CBMCallArray *arr, CBMArena *a, CBMCall call) {
+-    GROW_ARRAY(arr, a);
++    (void)a;
++    if (arr->count >= arr->cap) {
++        int new_cap = arr->cap == 0 ? CBM_SZ_32 : arr->cap * PAIR_LEN;
++        CBMCall *new_items = realloc(arr->items, (size_t)new_cap * sizeof(*arr->items));
++        if (!new_items) {
++            return;
++        }
++        arr->items = new_items;
++        arr->cap = new_cap;
++    }
+     arr->items[arr->count++] = call;
+ }
+ 
+@@ -831,6 +840,7 @@ void cbm_free_result(CBMFileResult *result) {
+         ts_tree_delete(result->cached_tree);
+         result->cached_tree = NULL;
+     }
++    free(result->calls.items);
+     cbm_arena_destroy(&result->arena);
+     free(result);
+ }
+diff --git a/src/pipeline/lsp_resolve.h b/src/pipeline/lsp_resolve.h
+index 5c66863dfccd50b6781885fe8cb2ddef64644da1..20cd61dc83f18f5809cb9121e9b0e5b4f71902f5 100644
+--- a/src/pipeline/lsp_resolve.h
++++ b/src/pipeline/lsp_resolve.h
+@@ -24,6 +24,7 @@
+ #include "cbm.h"
+ #include "graph_buffer/graph_buffer.h"
+ #include "foundation/constants.h"
++#include "foundation/hash_table.h"
+ 
+ #include <stdio.h>
+ #include <string.h>
+@@ -131,6 +132,92 @@ static inline const CBMResolvedCall *cbm_pipeline_find_lsp_resolution(
+     return best;
+ }
+ 
++static inline void cbm_pipeline_lsp_index_free_caller(const char *key, void *value,
++                                                      void *userdata) {
++    (void)key;
++    (void)userdata;
++    cbm_ht_free(value);
++}
++
++/* All keys and resolved-call pointers borrow the completed extraction result. */
++static inline void cbm_pipeline_lsp_index_free(CBMHashTable *index) {
++    cbm_ht_foreach(index, cbm_pipeline_lsp_index_free_caller, NULL);
++    cbm_ht_free(index);
++}
++
++static inline bool cbm_pipeline_lsp_index_add(CBMHashTable *index, const char *name,
++                                              const CBMResolvedCall *resolved) {
++    CBMHashTable *callees = cbm_ht_get(index, resolved->caller_qn);
++    if (!callees) {
++        callees = cbm_ht_create(0);
++        if (!callees) {
++            return false;
++        }
++        cbm_ht_set(index, resolved->caller_qn, callees);
++        if (cbm_ht_get(index, resolved->caller_qn) != callees) {
++            cbm_ht_free(callees);
++            return false;
++        }
++    }
++    const CBMResolvedCall *existing = cbm_ht_get(callees, name);
++    if (existing && !(resolved->confidence > existing->confidence)) {
++        return true;
++    }
++    const char *key = existing ? cbm_ht_get_key(callees, name) : name;
++    cbm_ht_set(callees, key, (void *)resolved);
++    return cbm_ht_get(callees, name) == resolved;
++}
++
++/* A failed construction uses the original matcher for every lookup. */
++static inline CBMHashTable *cbm_pipeline_lsp_index_build(const CBMResolvedCallArray *arr) {
++    if (!arr || arr->count == 0) {
++        return NULL;
++    }
++    CBMHashTable *index = cbm_ht_create(0);
++    if (!index) {
++        return NULL;
++    }
++    for (int i = 0; i < arr->count; i++) {
++        const CBMResolvedCall *resolved = &arr->items[i];
++        if (!resolved->caller_qn || !resolved->callee_qn ||
++            resolved->confidence < CBM_LSP_CONFIDENCE_FLOOR) {
++            continue;
++        }
++        if (!cbm_pipeline_lsp_index_add(index, cbm_lsp_bare_segment(resolved->callee_qn),
++                                        resolved)) {
++            cbm_pipeline_lsp_index_free(index);
++            return NULL;
++        }
++        if (resolved->reason && resolved->strategy &&
++            (strcmp(resolved->strategy, "lsp_func_ptr") == 0 ||
++             strcmp(resolved->strategy, "lsp_dll_resolve") == 0 ||
++             strcmp(resolved->strategy, "lsp_method_ref_ctor") == 0 ||
++             strcmp(resolved->strategy, "lsp_method_ref_ctor_synth") == 0 ||
++             strcmp(resolved->strategy, "lsp_dict_dispatch") == 0 ||
++             strcmp(resolved->strategy, "lsp_destructor") == 0 ||
++             strcmp(resolved->strategy, "php_method_dynamic") == 0)) {
++            if (!cbm_pipeline_lsp_index_add(index, cbm_lsp_bare_segment(resolved->reason),
++                                            resolved)) {
++                cbm_pipeline_lsp_index_free(index);
++                return NULL;
++            }
++        }
++    }
++    return index;
++}
++
++static inline const CBMResolvedCall *cbm_pipeline_find_lsp_resolution_indexed(
++    const CBMResolvedCallArray *arr, const CBMHashTable *index, const CBMCall *call) {
++    if (!index) {
++        return cbm_pipeline_find_lsp_resolution(arr, call);
++    }
++    if (!arr || arr->count == 0 || !call || !call->enclosing_func_qn || !call->callee_name) {
++        return NULL;
++    }
++    const CBMHashTable *callees = cbm_ht_get(index, call->enclosing_func_qn);
++    return cbm_ht_get(callees, cbm_lsp_bare_segment(call->callee_name));
++}
++
+ /* Resolve an LSP-emitted callee_qn to a graph-buffer node.
+  *
+  * Per-file LSPs (notably py_lsp) sometimes emit `callee_qn` as the raw
+diff --git a/src/pipeline/pass_calls.c b/src/pipeline/pass_calls.c
+index 2e27adc1860e7fc0cb70490f2b2d94a83034ba93..1deb8deb0daf6203581b50bc43fecc422d658764 100644
+--- a/src/pipeline/pass_calls.c
++++ b/src/pipeline/pass_calls.c
+@@ -418,16 +418,17 @@ static const cbm_gbuf_node_t *calls_find_source(cbm_pipeline_ctx_t *ctx, const c
+ 
+ /* Resolve one call and emit the appropriate edge. Returns 1 if resolved, 0 if not. */
+ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
+-                               const CBMResolvedCallArray *lsp_calls, const char *rel,
+-                               const char *module_qn, const char **imp_keys, const char **imp_vals,
+-                               int imp_count, CBMLanguage lang) {
++                               const CBMResolvedCallArray *lsp_calls, const CBMHashTable *lsp_index,
++                               const char *rel, const char *module_qn, const char **imp_keys,
++                               const char **imp_vals, int imp_count, CBMLanguage lang) {
+     const cbm_gbuf_node_t *source_node = calls_find_source(ctx, rel, call->enclosing_func_qn);
+     if (!source_node) {
+         return 0;
+     }
+ 
+     /* LSP-resolved calls take precedence over registry-textual matching. */
+-    const CBMResolvedCall *lsp = cbm_pipeline_find_lsp_resolution(lsp_calls, call);
++    const CBMResolvedCall *lsp =
++        cbm_pipeline_find_lsp_resolution_indexed(lsp_calls, lsp_index, call);
+     if (lsp) {
+         const cbm_gbuf_node_t *target_node =
+             cbm_pipeline_lsp_target_node(ctx->gbuf, ctx->project_name, lsp->callee_qn);
+@@ -600,6 +601,7 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
+         char *module_qn = cbm_pipeline_fqn_module_dir(ctx->project_name, rel,
+                                                       pc_module_is_dir(files[i].language));
+ 
++        CBMHashTable *lsp_index = cbm_pipeline_lsp_index_build(&result->resolved_calls);
+         /* Resolve each call */
+         for (int c = 0; c < result->calls.count; c++) {
+             CBMCall *call = &result->calls.items[c];
+@@ -607,14 +609,15 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
+                 continue;
+             }
+             total_calls++;
+-            if (resolve_single_call(ctx, call, &result->resolved_calls, rel, module_qn, imp_keys,
+-                                    imp_vals, imp_count, files[i].language)) {
++            if (resolve_single_call(ctx, call, &result->resolved_calls, lsp_index, rel, module_qn,
++                                    imp_keys, imp_vals, imp_count, files[i].language)) {
+                 resolved++;
+             } else {
+                 unresolved++;
+             }
+         }
+ 
++        cbm_pipeline_lsp_index_free(lsp_index);
+         free(module_qn);
+         free_import_map(imp_keys, imp_vals, imp_count);
+         if (result_owned) {
+diff --git a/src/pipeline/pass_parallel.c b/src/pipeline/pass_parallel.c
+index fefcf736a94157aecdda4f356cf1bdca4322b819..857645d42553aa66307e03988eeb677c1bc3cb53 100644
+--- a/src/pipeline/pass_parallel.c
++++ b/src/pipeline/pass_parallel.c
+@@ -1730,57 +1730,12 @@ static void try_field_type_hint(resolve_ctx_t *rc, cbm_resolution_t *res, const
+     }
+ }
+ 
+-/* Free a strdup'd key stored in the per-file lsp_idx hash table. */
+-static void lsp_idx_free_key(const char *key, void *value, void *ud) {
+-    (void)value;
+-    (void)ud;
+-    free((char *)key);
+-}
+-
+ /* Resolve calls for one file and emit CALLS/HTTP_CALLS/ASYNC_CALLS edges. */
+ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CBMFileResult *result,
+                                const char *rel, const char *module_qn, const char **imp_keys,
+                                const char **imp_vals, int imp_count, CBMLanguage lang) {
+-    /* Build a per-file hash index of resolved_calls keyed by
+-     * "caller_qn|callee_short" for O(1) lookup. cbm_pipeline_find_lsp_
+-     * resolution would otherwise do an O(N) linear scan over
+-     * resolved_calls for EACH of result->calls.count calls — the
+-     * dominant cost in parallel_resolve on kubernetes (~50s of pure
+-     * scanning). On insert, keep the highest-confidence entry per key
+-     * (matches the original "best" tie-break). Skip the build entirely
+-     * when there are no calls (nothing to look up) or no resolved
+-     * entries (lookups would all miss). */
+-    CBMHashTable *lsp_idx = NULL;
+-    if (result->calls.count > 0 && result->resolved_calls.count > 0) {
+-        lsp_idx = cbm_ht_create((uint32_t)result->resolved_calls.count * 2u + 16u);
+-        if (lsp_idx) {
+-            for (int i = 0; i < result->resolved_calls.count; i++) {
+-                CBMResolvedCall *rc_e = &result->resolved_calls.items[i];
+-                if (!rc_e->caller_qn || !rc_e->callee_qn ||
+-                    rc_e->confidence < CBM_LSP_CONFIDENCE_FLOOR) {
+-                    continue;
+-                }
+-                const char *short_name = strrchr(rc_e->callee_qn, '.');
+-                short_name = short_name ? short_name + 1 : rc_e->callee_qn;
+-                char key[1024];
+-                int kn = snprintf(key, sizeof(key), "%s|%s", rc_e->caller_qn, short_name);
+-                if (kn <= 0 || kn >= (int)sizeof(key))
+-                    continue;
+-                CBMResolvedCall *existing = (CBMResolvedCall *)cbm_ht_get(lsp_idx, key);
+-                if (!existing) {
+-                    /* New entry — strdup so the key outlives the loop body. */
+-                    char *kdup = strdup(key);
+-                    if (kdup)
+-                        cbm_ht_set(lsp_idx, kdup, rc_e);
+-                } else if (rc_e->confidence > existing->confidence) {
+-                    /* Update value; reuse stored key pointer to avoid leak. */
+-                    const char *skey = cbm_ht_get_key(lsp_idx, key);
+-                    if (skey)
+-                        cbm_ht_set(lsp_idx, skey, rc_e);
+-                }
+-            }
+-        }
+-    }
++    CBMHashTable *lsp_idx =
++        result->calls.count > 0 ? cbm_pipeline_lsp_index_build(&result->resolved_calls) : NULL;
+ 
+     for (int c = 0; c < result->calls.count; c++) {
+         CBMCall *call = &result->calls.items[c];
+@@ -1804,20 +1759,7 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
+         cbm_resolution_t res = {0};
+         const CBMResolvedCall *lsp = NULL;
+         _rc_t0 = extract_now_ns();
+-        if (lsp_idx && call->enclosing_func_qn) {
+-            char key[1024];
+-            int kn =
+-                snprintf(key, sizeof(key), "%s|%s", call->enclosing_func_qn, call->callee_name);
+-            if (kn > 0 && kn < (int)sizeof(key)) {
+-                lsp = (const CBMResolvedCall *)cbm_ht_get(lsp_idx, key);
+-            }
+-        }
+-        if (!lsp) {
+-            /* Fallback to the linear scan for edge cases the index may
+-             * miss (e.g. callee_name that wasn't the registered short
+-             * name). Keeps semantics identical. */
+-            lsp = cbm_pipeline_find_lsp_resolution(&result->resolved_calls, call);
+-        }
++        lsp = cbm_pipeline_find_lsp_resolution_indexed(&result->resolved_calls, lsp_idx, call);
+         atomic_fetch_add_explicit(&rc->time_ns_rc_lsp_lookup, extract_now_ns() - _rc_t0,
+                                   memory_order_relaxed);
+         _rc_t0 = extract_now_ns();
+@@ -1939,10 +1881,7 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
+                                   memory_order_relaxed);
+         ws->calls_resolved++;
+     }
+-    if (lsp_idx) {
+-        cbm_ht_foreach(lsp_idx, lsp_idx_free_key, NULL);
+-        cbm_ht_free(lsp_idx);
+-    }
++    cbm_pipeline_lsp_index_free(lsp_idx);
+ }
+ 
+ /* Resolve usages for one file. */
