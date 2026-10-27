@@ -113,6 +113,7 @@ func newSandboxWatcherHarness(t *testing.T, gate *embedGate) (*harness, string) 
 	if err != nil {
 		t.Skipf("BLOCKED: Milvus is unreachable at %s: %v", milvusAddress, err)
 	}
+	databaseName := acquireLiveDatabase(t, operatorContext, operatorMilvus).name
 	beforeDatabases, err := listMilvusDatabases(operatorMilvus)
 	if err != nil {
 		closeMilvusClient(operatorMilvus)
@@ -123,19 +124,6 @@ func newSandboxWatcherHarness(t *testing.T, gate *embedGate) (*harness, string) 
 		closeMilvusClient(operatorMilvus)
 		t.Fatalf("read operator Milvus inventory: %v", err)
 	}
-
-	databaseName := liveDatabasePrefix + randomID()
-	if slices.Contains(beforeDatabases, databaseName) {
-		closeMilvusClient(operatorMilvus)
-		t.Fatalf("temporary Milvus database %q already exists", databaseName)
-	}
-	createContext, cancelCreate := context.WithTimeout(operatorContext, 15*time.Second)
-	if err := operatorMilvus.CreateDatabase(createContext, milvusclient.NewCreateDatabaseOption(databaseName)); err != nil {
-		cancelCreate()
-		closeMilvusClient(operatorMilvus)
-		t.Fatalf("create temporary Milvus database %s: %v", databaseName, err)
-	}
-	cancelCreate()
 
 	sandboxContext := context.WithValue(context.Background(), milvusgrpc.CallObserverContextKey{}, milvusgrpc.CallObserver(callRecorder.observe))
 	dialContext, cancelDial = context.WithTimeout(sandboxContext, 5*time.Second)
@@ -148,14 +136,12 @@ func newSandboxWatcherHarness(t *testing.T, gate *embedGate) (*harness, string) 
 	})
 	cancelDial()
 	if err != nil {
-		dropOwnedDatabase(operatorMilvus, databaseName)
 		closeMilvusClient(operatorMilvus)
 		t.Fatalf("connect temporary Milvus database %s: %v", databaseName, err)
 	}
 	sandboxBefore, err := readMilvusInventory(sandboxMilvus)
 	if err != nil || len(sandboxBefore) != 0 {
 		closeMilvusClient(sandboxMilvus)
-		dropOwnedDatabase(operatorMilvus, databaseName)
 		closeMilvusClient(operatorMilvus)
 		if err != nil {
 			t.Fatalf("read temporary Milvus inventory: %v", err)
@@ -183,9 +169,6 @@ func newSandboxWatcherHarness(t *testing.T, gate *embedGate) (*harness, string) 
 	})
 	sandboxRoot, err := os.MkdirTemp("/tmp", "lms-watcher-sandbox-")
 	if err != nil {
-		closeMilvusClient(sandboxMilvus)
-		dropOwnedDatabase(operatorMilvus, databaseName)
-		closeMilvusClient(operatorMilvus)
 		t.Fatalf("create short sandbox root: %v", err)
 	}
 	t.Cleanup(func() {
@@ -211,12 +194,6 @@ func newSandboxWatcherHarness(t *testing.T, gate *embedGate) (*harness, string) 
 	harness.conn = connection
 	harness.client = client
 	return harness, socketPath
-}
-
-func dropOwnedDatabase(client *milvusclient.Client, databaseName string) {
-	cleanupContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	_ = client.DropDatabase(cleanupContext, milvusclient.NewDropDatabaseOption(databaseName))
 }
 
 func startSandboxDaemon(t *testing.T, sandboxRoot string, databaseName string, defaultConfig config.Config, embedderURL string) *exec.Cmd {
