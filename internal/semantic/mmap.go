@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/milvus-io/milvus/client/v3/entity"
@@ -15,9 +16,12 @@ import (
 )
 
 const (
-	mmapEnabledKey              = "mmap.enabled"
-	mmapEnabledValue            = "true"
-	mmapPolicyVersion           = 2
+	mmapEnabledKey   = "mmap.enabled"
+	mmapEnabledValue = "true"
+	// indexWarmupKey and indexWarmupDisabled set the Milvus index property warmup to disable.
+	indexWarmupKey              = "warmup"
+	indexWarmupDisabled         = "disable"
+	mmapPolicyVersion           = 3
 	mmapInvertedIndexType       = "INVERTED"
 	mmapSparseInvertedIndexType = "SPARSE_INVERTED_INDEX"
 	releasePollInterval         = 250 * time.Millisecond
@@ -52,6 +56,7 @@ type mmapTargetKind int
 const (
 	mmapFieldTarget mmapTargetKind = iota
 	mmapIndexTarget
+	indexWarmupTarget
 )
 
 type mmapTarget struct {
@@ -239,6 +244,12 @@ func (service *Service) inspectMmapPolicy(
 					name: indexName,
 				})
 			}
+			if catalogDenseIndexNeedsWarmupDisabled(collectionName, fieldName, params) {
+				inspection.missingTargets = append(inspection.missingTargets, mmapTarget{
+					kind: indexWarmupTarget,
+					name: indexName,
+				})
+			}
 		}
 	}
 
@@ -251,6 +262,26 @@ func (service *Service) inspectMmapPolicy(
 	}
 	inspection.loadState = loadState.State
 	return inspection, nil
+}
+
+// catalogDenseIndexNeedsWarmupDisabled returns true when collectionName starts
+// with content_vector_catalog_, fieldName is denseVectorFieldName, and params
+// does not set warmup to disable. It returns false otherwise.
+// Disabling warmup prevents Milvus from downloading index files into the query
+// node cache during loading because the daemon reads the catalog only with
+// Query and Get.
+func catalogDenseIndexNeedsWarmupDisabled(
+	collectionName string,
+	fieldName string,
+	params map[string]string,
+) bool {
+	if fieldName != denseVectorFieldName {
+		return false
+	}
+	if !strings.HasPrefix(collectionName, reuseCatalogCollectionPrefix) {
+		return false
+	}
+	return params[indexWarmupKey] != indexWarmupDisabled
 }
 
 func mmapFieldSupported(field *entity.Field) bool {
@@ -418,6 +449,16 @@ func (service *Service) alterMmapTargets(
 				).WithProperty(mmapEnabledKey, mmapEnabledValue),
 			); err != nil {
 				return wrapStoreError(ctx, err, "enable mmap on index "+target.name+" of "+collectionName)
+			}
+		case indexWarmupTarget:
+			if err := service.milvus.AlterIndexProperties(
+				ctx,
+				milvusclient.NewAlterIndexPropertiesOption(
+					collectionName,
+					target.name,
+				).WithProperty(indexWarmupKey, indexWarmupDisabled),
+			); err != nil {
+				return wrapStoreError(ctx, err, "disable warmup on index "+target.name+" of "+collectionName)
 			}
 		}
 	}
@@ -607,7 +648,7 @@ func (service *Service) ensureMmapEnabledOnce(
 	return outcome, nil
 }
 
-// EnsureMmapEnabledAllCollections applies mmap policy version 2 to durable
+// EnsureMmapEnabledAllCollections applies mmap policy version 3 to durable
 // collections and leaves staging collections to create-time migration.
 func (service *Service) EnsureMmapEnabledAllCollections(ctx context.Context) {
 	if !service.Available() {
