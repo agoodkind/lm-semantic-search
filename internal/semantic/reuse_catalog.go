@@ -285,7 +285,10 @@ func (service *Service) getReuseCatalogModelKeys(
 			"peer", peerInfo.String(),
 			"err", err,
 		)
-		return nil, service.reuseCatalogReadError(collectionName, err, "get content vector reuse catalog")
+		if classified := service.reuseCatalogReadError(collectionName, err); classified != nil {
+			return nil, fmt.Errorf("get content vector reuse catalog %s: %w", collectionName, classified)
+		}
+		return nil, fmt.Errorf("get content vector reuse catalog %s: %w", collectionName, err)
 	}
 	rowKeyColumn := resultSet.GetColumn(reuseCatalogRowKeyFieldName)
 	vectorColumn := resultSet.GetColumn(denseVectorFieldName)
@@ -340,7 +343,10 @@ func (service *Service) queryReuseCatalogKeys(
 			"peer", peerInfo.String(),
 			"err", err,
 		)
-		return nil, service.reuseCatalogReadError(collectionName, err, "query content vector reuse catalog")
+		if classified := service.reuseCatalogReadError(collectionName, err); classified != nil {
+			return nil, fmt.Errorf("query content vector reuse catalog %s: %w", collectionName, classified)
+		}
+		return nil, fmt.Errorf("query content vector reuse catalog %s: %w", collectionName, err)
 	}
 	return readReuseCatalogEntries(ctx, resultSet, entries)
 }
@@ -407,11 +413,10 @@ func (service *Service) loadReuseCatalogRowKeys(
 	if err != nil {
 		wrappedErr := fmt.Errorf("query content vector catalog row keys: %w", err)
 		slog.ErrorContext(ctx, "query content vector catalog row keys failed", "peer", peerInfo.String(), "err", wrappedErr)
-		return nil, service.reuseCatalogReadError(
-			reuseCatalogCollectionName(service.cfg, dimension),
-			err,
-			"query content vector catalog row keys",
-		)
+		if classified := service.reuseCatalogReadError(reuseCatalogCollectionName(service.cfg, dimension), err); classified != nil {
+			return nil, fmt.Errorf("query content vector catalog row keys: %w", classified)
+		}
+		return nil, wrappedErr
 	}
 	rowKeyColumn := resultSet.GetColumn(reuseCatalogRowKeyFieldName)
 	if resultSet.ResultCount > 0 && rowKeyColumn == nil {
@@ -429,21 +434,20 @@ func (service *Service) loadReuseCatalogRowKeys(
 
 // reuseCatalogReadError keeps shared catalog outages resumable. A readiness
 // failure invalidates the catalog's cached residency before the next attempt.
+// A nil result leaves an unrelated failure with the calling read operation.
 func (service *Service) reuseCatalogReadError(
 	collectionName string,
 	err error,
-	operation string,
-) error {
-	wrappedErr := fmt.Errorf("%s: %w", operation, err)
+) *adapterr.AdapterError {
 	errorCode := milvusclient.ErrorCode(err)
 	if errorCode == merr.Code(merr.ErrCollectionNotLoaded) || errorCode == merr.Code(merr.ErrCollectionOnRecovering) {
 		service.residency.Forget(collectionName)
-		return adapterr.NewMilvusUnavailable(wrappedErr)
+		return adapterr.NewMilvusUnavailable(err)
 	}
 	if storeUnavailable(err) {
-		return adapterr.NewMilvusUnavailable(wrappedErr)
+		return adapterr.NewMilvusUnavailable(err)
 	}
-	return wrappedErr
+	return nil
 }
 
 func (service *Service) appendReuseCatalog(

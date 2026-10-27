@@ -240,14 +240,14 @@ func (provider *openAICompatibleProvider) Embed(ctx context.Context, text string
 		"reported_tokens", skipped.ReportedTokens,
 		"model_max_tokens", skipped.MaxTokens,
 	)
-	return nil, adapterr.NewEmbedInputRejected(
+	return nil, fmt.Errorf("embed %s input: %w", provider.name, adapterr.NewEmbedInputRejected(
 		hostedInputRejection(skipped.Reason, skipped.ReportedTokens, skipped.MaxTokens),
 		fmt.Errorf(
 			"%s embedding endpoint refused the input as %s",
 			provider.name,
 			string(skipped.Reason),
 		),
-	)
+	))
 }
 
 // hostedInputRejection renders one endpoint refusal for the client-visible
@@ -362,14 +362,14 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 			// dropped. The fault is still the request's and not the endpoint's, so it
 			// must not read as a rejecting embedder and must not degrade its health.
 			slog.WarnContext(ctx, "embedding endpoint refused a batch without naming the input", "provider", provider.name, "model", provider.model, "inputs", len(surviving), "err", embedErr)
-			return BatchResult{}, adapterr.NewEmbedInputRejected(
+			return BatchResult{}, fmt.Errorf("embed %s batch: %w", provider.name, adapterr.NewEmbedInputRejected(
 				hostedInputRejection(
 					adapterr.EmbedRejectionContextLengthExceeded,
 					rejection.reportedTokens,
 					rejection.maxTokens,
 				),
 				embedErr,
-			)
+			))
 		}
 
 		originalIndex := surviving[position]
@@ -449,16 +449,15 @@ func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, pa
 				"message", paused.message,
 			)
 			cause := fmt.Errorf(
-				"generate %s embeddings: %w: %w",
-				provider.name,
+				"%w: %w",
 				ErrEmbedderPaused,
 				err,
 			)
-			return nil, adapterr.NewEmbedderPaused(
+			return nil, fmt.Errorf("generate %s embeddings: %w", provider.name, adapterr.NewEmbedderPaused(
 				"embedding endpoint reported: "+paused.message,
 				embeddingEndpointServicePausedHint,
 				cause,
-			)
+			))
 		}
 
 		statusCode, transient := transientEmbedStatus(err)
@@ -469,21 +468,21 @@ func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, pa
 			case ctx.Err() != nil:
 				// The caller's context ended (a job cancel or daemon shutdown), so
 				// report a cancellation, never a down endpoint.
-				return nil, adapterr.NewEmbedCancelled(fmt.Errorf("generate %s embeddings: %w", provider.name, ctx.Err()))
+				return nil, fmt.Errorf("generate %s embeddings: %w", provider.name, adapterr.NewEmbedCancelled(ctx.Err()))
 			case errors.Is(err, context.DeadlineExceeded):
 				// The per-request bound fired while the caller's context is still
 				// live: the endpoint accepted the request but did not answer within
 				// requestTimeout. Fail as unreachable so the job fails and retries
 				// later instead of the goroutine hanging forever on a wedged endpoint.
-				return nil, adapterr.NewEmbedderUnreachable(fmt.Errorf("generate %s embeddings: endpoint did not respond within %s: %w", provider.name, provider.requestTimeout, err))
+				return nil, fmt.Errorf("generate %s embeddings: endpoint did not respond within %s: %w", provider.name, provider.requestTimeout, adapterr.NewEmbedderUnreachable(err))
 			case errors.Is(err, context.Canceled):
-				return nil, adapterr.NewEmbedCancelled(fmt.Errorf("generate %s embeddings: %w", provider.name, err))
+				return nil, fmt.Errorf("generate %s embeddings: %w", provider.name, adapterr.NewEmbedCancelled(err))
 			case errors.As(err, &apiErr):
 				// Reachable endpoint that answered with a non-429 HTTP error.
-				return nil, adapterr.NewEmbedderRejected(fmt.Errorf("generate %s embeddings: %w: %w", provider.name, ErrEmbedderRejected, err))
+				return nil, fmt.Errorf("generate %s embeddings: %w", provider.name, adapterr.NewEmbedderRejected(fmt.Errorf("%w: %w", ErrEmbedderRejected, err)))
 			default:
 				// Network failure: the endpoint is unreachable.
-				return nil, adapterr.NewEmbedderUnreachable(fmt.Errorf("generate %s embeddings: %w", provider.name, err))
+				return nil, fmt.Errorf("generate %s embeddings: %w", provider.name, adapterr.NewEmbedderUnreachable(err))
 			}
 		}
 		if attempt == embedMaxAttempts {
@@ -496,14 +495,14 @@ func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, pa
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, adapterr.NewEmbedCancelled(fmt.Errorf("generate %s embeddings: %w", provider.name, ctx.Err()))
+			return nil, fmt.Errorf("wait to retry %s embeddings: %w", provider.name, adapterr.NewEmbedCancelled(ctx.Err()))
 		case <-timer.C:
 		}
 	}
 
 	statusCode, _ := transientEmbedStatus(lastErr)
 	slog.ErrorContext(ctx, "embedding endpoint still busy after retries", "provider", provider.name, "model", provider.model, "status", statusCode, "attempts", embedMaxAttempts, "err", lastErr)
-	return nil, adapterr.NewEmbedderBusy(fmt.Errorf("generate %s embeddings: %w: %w", provider.name, ErrEmbedderBusy, lastErr))
+	return nil, fmt.Errorf("generate %s embeddings after %d attempts: %w", provider.name, embedMaxAttempts, adapterr.NewEmbedderBusy(fmt.Errorf("%w: %w", ErrEmbedderBusy, lastErr)))
 }
 
 // servicePausedReport carries what the endpoint actually said when it reported

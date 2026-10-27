@@ -17,7 +17,7 @@ var ErrCollectionMissing error = &adapterr.AdapterError{
 }
 
 // ErrCollectionNotReady reports that the semantic collection exists but cannot be searched yet.
-var ErrCollectionNotReady error = &adapterr.AdapterError{
+var ErrCollectionNotReady = &adapterr.AdapterError{
 	Class:         adapterr.ClassCollectionNotReady,
 	Message:       "semantic collection is not ready",
 	Code:          "collection_not_ready",

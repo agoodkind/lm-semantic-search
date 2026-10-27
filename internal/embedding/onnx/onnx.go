@@ -209,14 +209,10 @@ func (provider *onnxProvider) Embed(
 			"model_max_tokens", preset.MaximumTokens,
 			"err", rejectionErr,
 		)
-		return nil, adapterr.NewEmbedInputRejected(
+		return nil, fmt.Errorf("generate ONNX embedding for %q: %w", preset.Name, adapterr.NewEmbedInputRejected(
 			provider.clientRejection(outcome, len(text)),
-			fmt.Errorf(
-				"generate ONNX embedding for %q: %w",
-				preset.Name,
-				rejectionErr,
-			),
-		)
+			rejectionErr,
+		))
 	}
 	return outcome.vector, nil
 }

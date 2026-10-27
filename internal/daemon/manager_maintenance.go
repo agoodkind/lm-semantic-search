@@ -24,7 +24,7 @@ func (manager *Manager) Maintenance() model.MaintenanceState {
 // not serve during maintenance, or nil while the mode is off. A search checks
 // it before the path is even resolved, so no store call and no collection
 // load happens on the caller's behalf while the mode is on.
-func (manager *Manager) maintenanceRefusal() error {
+func (manager *Manager) maintenanceRefusal() *adapterr.AdapterError {
 	state := manager.Maintenance()
 	if !state.Enabled {
 		return nil

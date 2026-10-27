@@ -38,7 +38,7 @@ func Unavailable(err error) bool {
 // health record and fails search gating open. The classified error wraps the
 // raw cause without another layer. The call site owns logging and generic
 // wrapping.
-func SearchSentinel(err error) error {
+func SearchSentinel(err error) *adapterr.AdapterError {
 	if err == nil {
 		return nil
 	}
@@ -66,7 +66,7 @@ func WrapError(ctx context.Context, err error, operation string) error {
 	}
 	slog.ErrorContext(ctx, "milvus operation failed", "operation", operation, "err", err)
 	if Unavailable(err) {
-		return adapterr.NewMilvusUnavailable(fmt.Errorf("%s: %w", operation, err))
+		return fmt.Errorf("%s: %w", operation, adapterr.NewMilvusUnavailable(err))
 	}
 	return fmt.Errorf("%s: %w", operation, err)
 }

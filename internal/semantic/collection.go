@@ -401,22 +401,26 @@ func (service *Service) PrepareCollection(
 		return nil
 	}
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
-		return classifyPrepareCollectionError(collectionName, err)
+		if classified := classifyPrepareCollectionError(collectionName, err); classified != nil {
+			return classified
+		}
+		return err
 	}
-	return classifyPrepareCollectionError(
-		collectionName,
-		service.ensureReuseIdentityColumnsOnce(ctx, collectionName),
-	)
+	err := service.ensureReuseIdentityColumnsOnce(ctx, collectionName)
+	if classified := classifyPrepareCollectionError(collectionName, err); classified != nil {
+		return classified
+	}
+	return err
 }
 
-func classifyPrepareCollectionError(collectionName string, err error) error {
+func classifyPrepareCollectionError(collectionName string, err error) *adapterr.AdapterError {
 	if err == nil {
 		return nil
 	}
 	if storeUnavailable(err) {
 		return adapterr.NewMilvusUnavailable(fmt.Errorf("prepare Milvus collection %s: %w", collectionName, err))
 	}
-	return err
+	return nil
 }
 
 // loadCollection loads collectionName into memory and waits for the load to

@@ -125,9 +125,6 @@ func (manager *Manager) resolveCanonicalPath(requestedPath string) (string, erro
 	if found {
 		return codebase.CanonicalPath, nil
 	}
-	if looksLikeCodebaseID(trimmed) {
-		return "", adapterr.NewUnknownCodebaseID(trimmed)
-	}
 	return canonicalizePath(requestedPath)
 }
 
@@ -158,16 +155,19 @@ func canonicalizePath(requestedPath string) (string, error) {
 	if strings.TrimSpace(requestedPath) == "" {
 		return "", errors.New("codebase path is required")
 	}
+	if trimmed := strings.TrimSpace(requestedPath); looksLikeCodebaseID(trimmed) {
+		return "", fmt.Errorf("resolve codebase path: %w", adapterr.NewUnknownCodebaseID(trimmed))
+	}
 	if strings.Contains(requestedPath, "://") {
 		// A typed invalid-path error keeps the rejection client-safe; a plain
 		// error would sanitize to "internal error" at the boundary.
-		return "", adapterr.NewInvalidPath(fmt.Sprintf("path %q looks like a URI; pass a filesystem directory instead", requestedPath), nil)
+		return "", fmt.Errorf("canonicalize codebase path: %w", adapterr.NewInvalidPath(fmt.Sprintf("path %q looks like a URI; pass a filesystem directory instead", requestedPath), nil))
 	}
 	// A relative path reaching the daemon is unresolvable here: the daemon's
 	// working directory is never the caller's. resolveRequestPath at the gRPC
 	// boundary joins relative paths against the caller's cwd before this point.
 	if !filepath.IsAbs(requestedPath) {
-		return "", adapterr.NewInvalidPath(fmt.Sprintf("path %q is relative; pass an absolute path or send caller_cwd", requestedPath), nil)
+		return "", fmt.Errorf("canonicalize codebase path: %w", adapterr.NewInvalidPath(fmt.Sprintf("path %q is relative; pass an absolute path or send caller_cwd", requestedPath), nil))
 	}
 	absolutePath := filepath.Clean(requestedPath)
 	canonicalPath, err := filepath.EvalSymlinks(absolutePath)

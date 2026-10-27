@@ -39,7 +39,7 @@ const collectionNotLoadedMessage = "collection not loaded"
 // degrades and search gating fails open. The classified error carries the raw
 // cause without re-wrapping, so the call site keeps ownership of logging and
 // generic wrapping.
-func storeSearchSentinel(err error) error {
+func storeSearchSentinel(err error) *adapterr.AdapterError {
 	if err == nil {
 		return nil
 	}
@@ -92,7 +92,7 @@ func wrapStoreError(ctx context.Context, err error, operation string) error {
 	}
 	slog.ErrorContext(ctx, "milvus operation failed", "operation", operation, "err", err)
 	if storeUnavailable(err) {
-		return adapterr.NewMilvusUnavailable(fmt.Errorf("%s: %w", operation, err))
+		return fmt.Errorf("%s: %w", operation, adapterr.NewMilvusUnavailable(err))
 	}
 	return fmt.Errorf("%s: %w", operation, err)
 }
