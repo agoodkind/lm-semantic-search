@@ -148,7 +148,7 @@ func (server *harnessCleanupServer) DescribeIndex(
 	return &milvuspb.DescribeIndexResponse{Status: harnessCleanupSuccess()}, nil
 }
 
-func TestCleanupMilvusDropsDatabaseAfterTransientInventoryFailure(t *testing.T) {
+func TestCleanupMilvusKeepsPooledDatabaseAfterTransientInventoryFailure(t *testing.T) {
 	server := &harnessCleanupServer{
 		databaseExists:                    true,
 		transientSandboxInventoryFailures: 1,
@@ -164,7 +164,7 @@ func TestCleanupMilvusDropsDatabaseAfterTransientInventoryFailure(t *testing.T) 
 		operatorMilvus:  newHarnessCleanupClient(t, address, ""),
 		milvus:          newHarnessCleanupClient(t, address, cleanupTestDatabase),
 		databaseName:    cleanupTestDatabase,
-		beforeDatabases: []string{defaultMilvusDatabase},
+		beforeDatabases: []string{defaultMilvusDatabase, cleanupTestDatabase},
 		operatorBefore:  milvusInventory{},
 		sandboxBefore:   milvusInventory{},
 		temporaryNames:  map[string]struct{}{},
@@ -179,8 +179,8 @@ func TestCleanupMilvusDropsDatabaseAfterTransientInventoryFailure(t *testing.T) 
 	databaseExists := server.databaseExists
 	remainingCollections := slices.Clone(server.collections[cleanupTestDatabase])
 	server.mutex.Unlock()
-	if databaseExists {
-		t.Fatal("temporary database still exists after transient inventory failure")
+	if !databaseExists {
+		t.Fatal("cleanup dropped the pooled database")
 	}
 	if len(remainingCollections) != 0 {
 		t.Fatalf("temporary collections remain after inventory failure: %v", remainingCollections)

@@ -3,9 +3,10 @@
 // Package live holds the build-tagged, end-to-end validation of the merged
 // conversation-marker feature against a real Milvus.
 //
-// Every run boots the daemon gRPC server in-process on a throwaway unix socket,
-// points embedding at a local fake, and connects every Milvus client to a unique
-// per-test database. Teardown drops every tracked collection and that database.
+// Every run boots the daemon gRPC server in process on a throwaway Unix socket
+// and points embedding at a local fake. Each test connects its Milvus clients
+// to a leased pool database. Teardown drops every tracked collection and keeps
+// the database for reuse.
 //
 // Paths come from internal/sandbox, the same isolation the sandbox command
 // gives a daemon run by hand. The store and the embedder are named here instead,
@@ -369,7 +370,6 @@ func newHarnessWithDaemonOptions(
 	}
 
 	harnessID := randomID()
-	databaseName := liveDatabasePrefix + harnessID
 	callRecorder := &milvusCallRecorder{}
 	operatorContext := context.WithValue(
 		context.Background(),
@@ -394,13 +394,14 @@ func newHarnessWithDaemonOptions(
 	}
 
 	var (
-		databaseCreated bool
-		manager         *daemon.Manager
-		conn            *grpc.ClientConn
-		sandboxMilvus   *milvusclient.Client
-		setupComplete   bool
-		stopServer      func()
+		manager       *daemon.Manager
+		conn          *grpc.ClientConn
+		sandboxMilvus *milvusclient.Client
+		setupComplete bool
+		stopServer    func()
 	)
+	lease := acquireLiveDatabase(t, operatorContext, operatorMilvus)
+	databaseName := lease.name
 	t.Cleanup(func() {
 		if setupComplete {
 			return
@@ -412,8 +413,6 @@ func newHarnessWithDaemonOptions(
 			manager,
 			sandboxMilvus,
 			operatorMilvus,
-			databaseName,
-			databaseCreated,
 		)
 	})
 
@@ -427,19 +426,6 @@ func newHarnessWithDaemonOptions(
 	}
 	t.Logf("Milvus operator inventory before: %v", operatorBefore)
 	t.Logf("Milvus databases before: %v", beforeDatabases)
-	if slices.Contains(beforeDatabases, databaseName) {
-		t.Fatalf("temporary Milvus database %q already exists; refusing collision", databaseName)
-	}
-	createCtx, createCancel := context.WithTimeout(operatorContext, 15*time.Second)
-	if err := operatorMilvus.CreateDatabase(
-		createCtx,
-		milvusclient.NewCreateDatabaseOption(databaseName),
-	); err != nil {
-		createCancel()
-		t.Fatalf("CreateDatabase(%s) returned error: %v", databaseName, err)
-	}
-	createCancel()
-	databaseCreated = true
 
 	sandboxContext := context.WithValue(
 		context.Background(),
@@ -622,8 +608,6 @@ func cleanupPartialHarness(
 	manager *daemon.Manager,
 	sandboxMilvus *milvusclient.Client,
 	operatorMilvus *milvusclient.Client,
-	databaseName string,
-	databaseCreated bool,
 ) {
 	t.Helper()
 	if conn != nil {
@@ -645,20 +629,10 @@ func cleanupPartialHarness(
 		}
 		closeMilvusClient(sandboxMilvus)
 	}
-	if databaseCreated && operatorMilvus != nil {
-		dropCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		if err := operatorMilvus.DropDatabase(
-			dropCtx,
-			milvusclient.NewDropDatabaseOption(databaseName),
-		); err != nil {
-			t.Errorf("DropDatabase(%s) after partial setup returned error: %v", databaseName, err)
-		}
-		cancel()
-	}
 	closeMilvusClient(operatorMilvus)
 }
 
-// teardown drops every tracked collection and the unique temporary database.
+// teardown drops every tracked collection and keeps the leased pool database.
 // It then verifies the operator database and database list are unchanged.
 func (h *harness) teardown(stopServer func()) {
 	if err := h.conn.Close(); err != nil {
@@ -707,18 +681,6 @@ func (h *harness) cleanupMilvus() []error {
 	}
 	closeMilvusClient(h.milvus)
 
-	dropDatabaseCtx, cancelDropDatabase := context.WithTimeout(context.Background(), 15*time.Second)
-	if err := h.operatorMilvus.DropDatabase(
-		dropDatabaseCtx,
-		milvusclient.NewDropDatabaseOption(h.databaseName),
-	); err != nil {
-		cleanupErrors = append(cleanupErrors, fmt.Errorf(
-			"DropDatabase(%s) returned error: %w",
-			h.databaseName,
-			err,
-		))
-	}
-	cancelDropDatabase()
 	afterDatabases := h.beforeDatabases
 	listedDatabases, databaseErr := listMilvusDatabases(h.operatorMilvus)
 	if databaseErr != nil {
