@@ -8,8 +8,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // statusValueGap and statusUnitGap separate the four columns. They are constants
@@ -86,7 +86,7 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = typed.Width
 		m.height = typed.Height
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(typed)
 	case statusRefreshedMsg:
 		return m.applyRefresh(typed), nil
@@ -101,7 +101,7 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m statusModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m statusModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case keyMatches(msg, "ctrl+c", "q", "esc"):
 		m.quitting = true
@@ -176,7 +176,13 @@ func sameRun(previous Snapshot, current Snapshot) bool {
 // than a standard terminal and bubbletea keeps only the last height lines of a
 // frame. Pinning the counters instead would push the header and the first
 // groups off the top with no key that could bring them back.
-func (m statusModel) View() string {
+func (m statusModel) View() tea.View {
+	view := tea.NewView(m.renderContent())
+	view.AltScreen = true
+	return view
+}
+
+func (m statusModel) renderContent() string {
 	if m.quitting {
 		return ""
 	}
@@ -483,7 +489,7 @@ func statusRefreshCmd(source Source) tea.Cmd {
 }
 
 // keyMatches reports whether the pressed key equals any of the given names.
-func keyMatches(msg tea.KeyMsg, keys ...string) bool {
+func keyMatches(msg tea.KeyPressMsg, keys ...string) bool {
 	return slices.Contains(keys, msg.String())
 }
 

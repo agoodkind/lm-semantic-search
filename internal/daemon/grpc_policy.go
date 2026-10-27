@@ -42,8 +42,11 @@ func (server *GRPCServer) UpdateCodebasePolicy(
 		patch,
 	)
 	if callErr != nil {
+		if classified := classifyManagerError(requestedPath, callErr); classified != nil {
+			callErr = classified
+		}
 		return nil, status.Error(
-			adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)),
+			adapterr.Respond(ctx, callErr),
 		)
 	}
 	server.manager.refreshDependencyHealth(ctx)

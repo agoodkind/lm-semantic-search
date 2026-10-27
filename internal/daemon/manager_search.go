@@ -15,9 +15,9 @@ import (
 
 // SearchCode performs a semantic search over indexed chunk content.
 func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, query string, limit int32, extensionFilter []string) (SearchOutcome, error) {
-	normalizedExtensions, err := manager.searchPreconditions(extensionFilter)
-	if err != nil {
-		return SearchOutcome{}, err
+	normalizedExtensions, preconditionErr := manager.searchPreconditions(extensionFilter)
+	if preconditionErr != nil {
+		return SearchOutcome{}, preconditionErr
 	}
 
 	codebase, activeJob, found, _, err := manager.GetIndex(ctx, requestedPath)
@@ -25,7 +25,7 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 		return SearchOutcome{}, err
 	}
 	if !found {
-		return SearchOutcome{}, adapterr.NewNotIndexed(requestedPath, nil)
+		return SearchOutcome{}, fmt.Errorf("search codebase %s: %w", requestedPath, adapterr.NewNotIndexed(requestedPath, nil))
 	}
 
 	// A worktree the daemon just discovered on this read has no collection yet,
@@ -58,7 +58,7 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 		storeErr := adapterr.NewMilvusUnavailable(semantic.ErrUnavailable)
 		manager.noteDependencyFailure(storeErr)
 		slog.ErrorContext(ctx, "semantic search unavailable", "codebase_path", codebase.CanonicalPath, "err", storeErr)
-		return SearchOutcome{}, storeErr
+		return SearchOutcome{}, fmt.Errorf("search codebase %s: %w", codebase.CanonicalPath, storeErr)
 	}
 	collectionName := manager.semantic.CollectionName(codebase.CanonicalPath)
 	if prepareErr := manager.semantic.PrepareCollection(ctx, collectionName); prepareErr != nil {
@@ -113,17 +113,17 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 				StateNote: status.StateNoteFor(status.SearchRepairing),
 			}, nil
 		case searchCollectionModeMissing:
-			return SearchOutcome{}, adapterr.NewIndexDataLost(codebase.CanonicalPath, nil)
+			return SearchOutcome{}, fmt.Errorf("search missing collection for %s: %w", codebase.CanonicalPath, adapterr.NewIndexDataLost(codebase.CanonicalPath, semanticErr))
 		case searchCollectionModeProceed:
-			return SearchOutcome{}, adapterr.NewIndexDataLost(codebase.CanonicalPath, nil)
+			return SearchOutcome{}, fmt.Errorf("search unavailable collection for %s: %w", codebase.CanonicalPath, adapterr.NewIndexDataLost(codebase.CanonicalPath, semanticErr))
 		default:
-			return SearchOutcome{}, adapterr.NewIndexDataLost(codebase.CanonicalPath, nil)
+			return SearchOutcome{}, fmt.Errorf("select search collection for %s: %w", codebase.CanonicalPath, adapterr.NewIndexDataLost(codebase.CanonicalPath, semanticErr))
 		}
 	case errors.Is(semanticErr, semantic.ErrUnavailable):
 		storeErr := adapterr.NewMilvusUnavailable(semanticErr)
 		manager.noteDependencyFailure(storeErr)
 		slog.ErrorContext(ctx, "semantic search unavailable", "codebase_path", codebase.CanonicalPath, "err", storeErr)
-		return SearchOutcome{}, storeErr
+		return SearchOutcome{}, fmt.Errorf("query search collection %s: %w", collectionName, storeErr)
 	default:
 		// Record a shared-infrastructure outage from the search path too, not
 		// only from index jobs, so a failed search trips the same banner. The
@@ -138,7 +138,7 @@ func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, qu
 // a usable extension filter, and a daemon that is not in maintenance mode. The
 // maintenance refusal comes before any store call, so a search during a store
 // restore neither probes nor loads a collection.
-func (manager *Manager) searchPreconditions(extensionFilter []string) ([]string, error) {
+func (manager *Manager) searchPreconditions(extensionFilter []string) ([]string, *adapterr.AdapterError) {
 	normalizedExtensions, err := semantic.ValidateExtensionFilter(extensionFilter)
 	if err != nil {
 		return nil, adapterr.NewInvalidPath(err.Error(), err)

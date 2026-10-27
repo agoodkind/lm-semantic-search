@@ -36,7 +36,7 @@ func (manager *Manager) resolveWorktreeSourceIntent(
 		target, _ := manager.findCodebaseByExactRoot(canonicalPath)
 		manager.mu.Unlock()
 		if target.WorktreeSourcePath == "" {
-			return emptyIntent, adapterr.NewInvalidPath(fmt.Sprintf("target %q has no supplied or recorded source path for the requested starting commit", canonicalPath), nil)
+			return emptyIntent, fmt.Errorf("resolve worktree source commit: %w", adapterr.NewInvalidPath(fmt.Sprintf("target %q has no supplied or recorded source path for the requested starting commit", canonicalPath), nil))
 		}
 		return intent, nil
 	}
@@ -46,26 +46,26 @@ func (manager *Manager) resolveWorktreeSourceIntent(
 		return emptyIntent, fmt.Errorf("failed to canonicalize worktree source path %s: %w", requestedSource, err)
 	}
 	if sourcePath == canonicalPath {
-		return emptyIntent, adapterr.NewInvalidPath(fmt.Sprintf("worktree source path %q equals the target path", sourcePath), nil)
+		return emptyIntent, fmt.Errorf("resolve worktree source directory: %w", adapterr.NewInvalidPath(fmt.Sprintf("worktree source path %q equals the target path", sourcePath), nil))
 	}
 	sourceInfo, statErr := os.Stat(sourcePath)
 	if statErr != nil || !sourceInfo.IsDir() {
-		return emptyIntent, adapterr.NewInvalidPath(fmt.Sprintf("worktree source path %q does not exist or is not a directory", sourcePath), statErr)
+		return emptyIntent, fmt.Errorf("inspect worktree source directory: %w", adapterr.NewInvalidPath(fmt.Sprintf("worktree source path %q does not exist or is not a directory", sourcePath), statErr))
 	}
 	targetWorktree, targetInRepository := gitworktree.Resolve(canonicalPath)
 	sourceWorktree, sourceInRepository := gitworktree.Resolve(sourcePath)
 	if !targetInRepository || !sourceInRepository || targetWorktree.CommonDir != sourceWorktree.CommonDir {
-		return emptyIntent, adapterr.NewInvalidPath(fmt.Sprintf("worktree source path %q and target path %q are not in the same Git repository", sourcePath, canonicalPath), nil)
+		return emptyIntent, fmt.Errorf("resolve worktree source repository: %w", adapterr.NewInvalidPath(fmt.Sprintf("worktree source path %q and target path %q are not in the same Git repository", sourcePath, canonicalPath), nil))
 	}
 	manager.mu.Lock()
 	_, sourceRegistered := manager.findCodebaseByExactRoot(sourcePath)
 	cyclic := manager.worktreeSourceCycleLocked(canonicalPath, sourcePath)
 	manager.mu.Unlock()
 	if sourceWorktree.WorktreeRoot != sourcePath && !sourceRegistered {
-		return emptyIntent, adapterr.NewInvalidPath(fmt.Sprintf("source path %q is neither a worktree root of the repository nor a registered codebase root", sourcePath), nil)
+		return emptyIntent, fmt.Errorf("resolve worktree source root: %w", adapterr.NewInvalidPath(fmt.Sprintf("source path %q is neither a worktree root of the repository nor a registered codebase root", sourcePath), nil))
 	}
 	if cyclic {
-		return emptyIntent, adapterr.NewInvalidPath(fmt.Sprintf("recording worktree source path %q would create a source cycle that includes target path %q", sourcePath, canonicalPath), nil)
+		return emptyIntent, fmt.Errorf("validate worktree source ancestry: %w", adapterr.NewInvalidPath(fmt.Sprintf("recording worktree source path %q would create a source cycle that includes target path %q", sourcePath, canonicalPath), nil))
 	}
 	intent.sourcePath = sourcePath
 	return intent, nil
@@ -97,7 +97,7 @@ func (manager *Manager) applyWorktreeSourceLocked(
 	ctx context.Context,
 	codebase model.Codebase,
 	intent worktreeSourceIntent,
-) (model.Codebase, error) {
+) (model.Codebase, *adapterr.AdapterError) {
 	var emptyCodebase model.Codebase
 	if intent.sourcePath == "" && intent.startingCommit != "" && codebase.WorktreeSourcePath == "" {
 		return emptyCodebase, adapterr.NewInvalidPath(fmt.Sprintf("target %q has no supplied or recorded source path for the requested starting commit", codebase.CanonicalPath), nil)

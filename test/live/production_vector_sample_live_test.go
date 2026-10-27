@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/milvus-io/milvus/client/v3/entity"
+	"github.com/milvus-io/milvus/client/v3/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
 )
@@ -40,10 +40,11 @@ func TestProductionVectorSamples(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{
-		Address:     cfg.MilvusAddress,
-		APIKey:      cfg.MilvusToken,
-		DBName:      productionDatabaseName,
-		DialOptions: milvusgrpc.DialOptions(ctx, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
+		TelemetryConfig: &milvusclient.TelemetryConfig{Enabled: false},
+		Address:         cfg.MilvusAddress,
+		APIKey:          cfg.MilvusToken,
+		DBName:          productionDatabaseName,
+		DialOptions:     milvusgrpc.DialOptions(ctx, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
 	})
 	if err != nil {
 		t.Fatalf("connect production Milvus for vector sampling: %v", err)

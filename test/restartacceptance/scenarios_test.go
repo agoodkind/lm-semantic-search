@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"golang.org/x/sys/unix"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"google.golang.org/grpc"

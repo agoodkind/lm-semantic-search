@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
-	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/client/v3/entity"
+	"github.com/milvus-io/milvus/client/v3/milvusclient"
 	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -71,10 +71,11 @@ func readCloneMilvusCensus(ctx context.Context, settings cloneMilvusSettings) (c
 		return cloneMilvusCensus{}, err
 	}
 	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{
-		Address:     settings.Address,
-		APIKey:      settings.Token,
-		DBName:      settings.Database,
-		DialOptions: milvusgrpc.DialOptions(ctx, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
+		TelemetryConfig: &milvusclient.TelemetryConfig{Enabled: false},
+		Address:         settings.Address,
+		APIKey:          settings.Token,
+		DBName:          settings.Database,
+		DialOptions:     milvusgrpc.DialOptions(ctx, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
 	})
 	if err != nil {
 		return cloneMilvusCensus{}, fmt.Errorf("connect clone Milvus for read-only census: %w", err)

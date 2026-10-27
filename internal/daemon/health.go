@@ -292,14 +292,11 @@ func (manager *Manager) recordStoreReachableLocked(observation healthObservation
 	}
 }
 
-// storeProbeFailure classifies a probe error as a store outage. The probe asks
-// exactly one question, whether the store answers, so any error it returns is a
-// store that did not. An error already carrying an outage class keeps it, and
-// anything else becomes a store outage rather than being dropped by the class
-// switch, which would leave a failed probe recorded as nothing at all.
-func storeProbeFailure(err error) error {
+// storeProbeFailure classifies a probe error without an existing outage class.
+// A nil result leaves the caller's original outage error unchanged.
+func storeProbeFailure(err error) *adapterr.AdapterError {
 	if degradeModeFor(err) != dependencyHealthy {
-		return err
+		return nil
 	}
 	return adapterr.NewMilvusUnavailable(err)
 }
@@ -388,7 +385,10 @@ func (manager *Manager) refreshDependencyHealth(ctx context.Context) {
 			slog.DebugContext(ctx, "dependency.health.probe_abandoned", "component", "daemon", "subcomponent", "health", "observation", uint64(observation), "err", probeErr)
 			return
 		}
-		manager.recordDependencyFailureLocked(storeProbeFailure(probeErr), observation)
+		if classified := storeProbeFailure(probeErr); classified != nil {
+			probeErr = classified
+		}
+		manager.recordDependencyFailureLocked(probeErr, observation)
 		return
 	}
 	// ProbeHealth checks store reachability only, so a clean probe is evidence

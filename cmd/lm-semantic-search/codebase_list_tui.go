@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image/color"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,8 +14,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/pbconv"
@@ -55,7 +56,7 @@ func runCodebaseListTUI(options cliOptions) error {
 		return nil
 	}
 
-	program := tea.NewProgram(newListModel(options, codebases, listResponse.GetDependencyHealth()), tea.WithAltScreen())
+	program := tea.NewProgram(newListModel(options, codebases, listResponse.GetDependencyHealth()))
 	if _, runErr := program.Run(); runErr != nil {
 		slog.Error("run codebase list TUI failed", "err", runErr)
 		return fmt.Errorf("run codebase list: %w", runErr)
@@ -125,7 +126,7 @@ func (m listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = typed.Height
 		m = m.clampOffset()
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(typed)
 	case detailLoadedMsg:
 		m.loading = false
@@ -181,7 +182,7 @@ func (m listModel) applyRefresh(msg refreshedMsg) listModel {
 	return m.clampOffset()
 }
 
-func (m listModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m listModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if keyMatches(msg, "ctrl+c", "q") {
 		m.quitting = true
 		return m, tea.Quit
@@ -192,7 +193,7 @@ func (m listModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.handleListKey(msg)
 }
 
-func (m listModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m listModel) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if keyMatches(msg, "esc", "backspace", "left", "h") {
 		m.showingDetail = false
 		m.detail = ""
@@ -201,7 +202,7 @@ func (m listModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m listModel) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m listModel) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case keyMatches(msg, "esc"):
 		m.quitting = true
@@ -271,11 +272,17 @@ func (m listModel) visibleRows() int {
 // keyMatches reports whether the pressed key equals any of the given names,
 // keeping key handling as plain comparisons rather than a switch on a bare
 // string.
-func keyMatches(msg tea.KeyMsg, keys ...string) bool {
+func keyMatches(msg tea.KeyPressMsg, keys ...string) bool {
 	return slices.Contains(keys, msg.String())
 }
 
-func (m listModel) View() string {
+func (m listModel) View() tea.View {
+	view := tea.NewView(m.renderContent())
+	view.AltScreen = true
+	return view
+}
+
+func (m listModel) renderContent() string {
 	if m.quitting {
 		return ""
 	}
@@ -496,7 +503,7 @@ var (
 
 // statusColors maps each resolved display status to a distinct foreground
 // color. An unknown status falls back to grayStatus.
-var statusColors = map[string]lipgloss.Color{
+var statusColors = map[string]color.Color{
 	"preparing":  lipgloss.Color("12"),
 	"indexed":    lipgloss.Color("10"),
 	"indexing":   lipgloss.Color("11"),
@@ -507,9 +514,9 @@ var statusColors = map[string]lipgloss.Color{
 	"discovered": lipgloss.Color("44"),
 }
 
-const grayStatus = lipgloss.Color("245")
+var grayStatus = lipgloss.Color("245")
 
-func statusColor(status string) lipgloss.Color {
+func statusColor(status string) color.Color {
 	if color, ok := statusColors[status]; ok {
 		return color
 	}

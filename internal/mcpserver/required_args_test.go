@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/v2/mcp"
 )
 
 // callRequest builds a tool-call request whose arguments are the supplied map,

@@ -45,7 +45,7 @@ func newAdmissionState(cfg config.Config, budget model.AdmissionBudget, expected
 	return state
 }
 
-func (state *admissionState) Admit(chunks []model.StoredChunk) error {
+func (state *admissionState) Admit(chunks []model.StoredChunk) *adapterr.AdapterError {
 	if state == nil || len(chunks) == 0 {
 		return nil
 	}

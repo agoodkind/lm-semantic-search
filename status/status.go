@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"golang.org/x/term"
 )
 
@@ -147,7 +147,7 @@ func runScreen(source Source, interval time.Duration, now func() time.Time) erro
 	if err != nil {
 		return err
 	}
-	program := tea.NewProgram(newStatusModel(source, interval, now, first), tea.WithAltScreen())
+	program := tea.NewProgram(newStatusModel(source, interval, now, first))
 	if _, runErr := program.Run(); runErr != nil {
 		slog.Error("run status TUI failed", "err", runErr)
 		return fmt.Errorf("run status screen: %w", runErr)

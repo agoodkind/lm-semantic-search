@@ -1,7 +1,7 @@
 name: cbm submodule auto-bump
 
-# Bumps the third_party/cbm pin to the newest upstream commit that still builds
-# and passes the cbm engine round-trip, then opens an auto-merge PR. The build
+# Bumps the third_party/cbm pin to the newest upstream commit that accepts the
+# local patch, builds, and passes the cbm engine round-trip. The build
 # gate runs in-workflow because a PR opened with the default GITHUB_TOKEN does
 # not trigger the repo's CI; validating here keeps the bump honest regardless of
 # the token. Provide a CBM_AUTOBUMP_TOKEN PAT secret to also let the repo's CI
@@ -15,8 +15,7 @@ name: cbm submodule auto-bump
 
 on:
   schedule:
-    # Weekly, Monday 06:00 UTC. The cbm fork's own daily upstream sync keeps the
-    # remote current between runs.
+    # Weekly, Monday 06:00 UTC.
     - cron: '0 6 * * 1'
   workflow_dispatch:
     inputs:

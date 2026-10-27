@@ -225,9 +225,9 @@ func TestClearGraphCacheRejectsNewOpenAndWaitsForActiveOperation(t *testing.T) {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
-	release, err := manager.beginGraphOperation(codebaseID)
-	if err != nil {
-		t.Fatalf("beginGraphOperation returned error: %v", err)
+	release, operationErr := manager.beginGraphOperation(codebaseID)
+	if operationErr != nil {
+		t.Fatalf("beginGraphOperation returned error: %v", operationErr)
 	}
 
 	clearDone := make(chan error, 1)
@@ -236,7 +236,7 @@ func TestClearGraphCacheRejectsNewOpenAndWaitsForActiveOperation(t *testing.T) {
 	}()
 	waitForGraphClearing(t, manager, codebaseID)
 
-	if _, _, err = manager.graphEngine(context.Background(), codebaseID); err == nil {
+	if _, _, err := manager.graphEngine(context.Background(), codebaseID); err == nil {
 		t.Fatal("graphEngine returned nil error while graph cache was clearing")
 	} else if !strings.Contains(err.Error(), "being cleared") {
 		t.Fatalf("graphEngine error = %v, want clear-in-progress error", err)
@@ -246,14 +246,14 @@ func TestClearGraphCacheRejectsNewOpenAndWaitsForActiveOperation(t *testing.T) {
 	}
 
 	select {
-	case err = <-clearDone:
+	case err := <-clearDone:
 		t.Fatalf("clearGraphCache completed before active operation released: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
 
 	release()
 	select {
-	case err = <-clearDone:
+	case err := <-clearDone:
 		if err != nil {
 			t.Fatalf("clearGraphCache returned error: %v", err)
 		}

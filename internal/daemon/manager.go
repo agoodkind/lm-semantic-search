@@ -558,9 +558,9 @@ func (manager *Manager) commitStartIndexLocked(ctx context.Context, canonicalPat
 	if err != nil {
 		return emptyJob, emptyCodebase, false, "", err
 	}
-	resolvedCodebase, err = manager.applyWorktreeSourceLocked(ctx, resolvedCodebase, sourceIntent)
-	if err != nil {
-		return emptyJob, emptyCodebase, false, "", err
+	resolvedCodebase, sourceErr := manager.applyWorktreeSourceLocked(ctx, resolvedCodebase, sourceIntent)
+	if sourceErr != nil {
+		return emptyJob, emptyCodebase, false, "", sourceErr
 	}
 	originalCodebase := decision.codebase
 	decision.codebase = resolvedCodebase

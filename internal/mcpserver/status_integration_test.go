@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	mcpclient "github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/mcp"
+	mcpclient "github.com/mark3labs/mcp-go/v2/client"
+	"github.com/mark3labs/mcp-go/v2/mcp"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/daemon"

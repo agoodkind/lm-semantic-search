@@ -8,8 +8,8 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/milvus-io/milvus/client/v3/entity"
+	"github.com/milvus-io/milvus/client/v3/milvusclient"
 	"goodkind.io/lm-semantic-search/collection"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/semantic/milvusgrpc"
@@ -62,11 +62,14 @@ func (service *Service) dialMilvus(ctx context.Context) (*milvusclient.Client, e
 	dialContext, cancel := context.WithTimeout(ctx, bootDialTimeout)
 	defer cancel()
 
+	telemetryConfig := milvusclient.DefaultTelemetryConfig()
+	telemetryConfig.Enabled = false
 	clientConfig := &milvusclient.ClientConfig{
-		Address:     service.cfg.MilvusAddress,
-		APIKey:      service.cfg.MilvusToken,
-		DBName:      service.cfg.MilvusDatabase,
-		DialOptions: milvusgrpc.DialOptions(ctx, slog.Default(), service.callTimeouts()),
+		Address:         service.cfg.MilvusAddress,
+		APIKey:          service.cfg.MilvusToken,
+		DBName:          service.cfg.MilvusDatabase,
+		DialOptions:     milvusgrpc.DialOptions(ctx, slog.Default(), service.callTimeouts()),
+		TelemetryConfig: telemetryConfig,
 	}
 	client, err := milvusclient.New(dialContext, clientConfig)
 	if err != nil {

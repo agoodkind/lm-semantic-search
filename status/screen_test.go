@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // unusedSource stands in where a test never refreshes the screen.
@@ -204,12 +204,12 @@ func TestApplyRefreshDropsTheBaselineAfterAResumedPause(t *testing.T) {
 	t.Parallel()
 
 	model := newStatusModel(unusedSource, time.Second, time.Now, vectorSnapshot("7342@1", 3946))
-	paused, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	paused, _ := model.handleKey(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	pausedModel, ok := paused.(statusModel)
 	if !ok || !pausedModel.paused {
 		t.Fatal("p did not pause the screen")
 	}
-	resumed, _ := pausedModel.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	resumed, _ := pausedModel.handleKey(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	resumedModel, ok := resumed.(statusModel)
 	if !ok || resumedModel.paused {
 		t.Fatal("p did not resume the screen")
@@ -250,7 +250,7 @@ func TestViewFitsTheTerminalHeight(t *testing.T) {
 		model := newStatusModel(unusedSource, time.Second, time.Now, snapshot)
 		model.width = 100
 		model.height = height
-		lines := strings.Split(strings.TrimRight(model.View(), "\n"), "\n")
+		lines := strings.Split(strings.TrimRight(model.View().Content, "\n"), "\n")
 		if len(lines) > height {
 			t.Fatalf("frame is %d lines on a %d-row terminal and the header is clipped",
 				len(lines), height)
@@ -299,7 +299,7 @@ func TestViewSurvivesAnEmptyReply(t *testing.T) {
 	model.width = 100
 	model.height = 24
 
-	frame := model.View()
+	frame := model.View().Content
 	if !strings.Contains(frame, "lm-semantic-search") {
 		t.Fatalf("frame lost its header on an empty snapshot:\n%s", frame)
 	}
@@ -329,7 +329,7 @@ func TestScrollDownStopsAtTheLastLine(t *testing.T) {
 	ceiling := model.maxOffset()
 	current := tea.Model(model)
 	for range 500 {
-		next, _ := current.(statusModel).handleKey(tea.KeyMsg{Type: tea.KeyDown})
+		next, _ := current.(statusModel).handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 		current = next
 	}
 	if got := current.(statusModel).offset; got != ceiling {
@@ -337,7 +337,7 @@ func TestScrollDownStopsAtTheLastLine(t *testing.T) {
 	}
 
 	// One Up press must move the view immediately, not burn against a backlog.
-	after, _ := current.(statusModel).handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	after, _ := current.(statusModel).handleKey(tea.KeyPressMsg{Code: tea.KeyUp})
 	if got := after.(statusModel).offset; got != max(ceiling-1, 0) {
 		t.Fatalf("offset after one Up = %d, want %d", got, max(ceiling-1, 0))
 	}

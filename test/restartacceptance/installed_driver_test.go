@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"google.golang.org/grpc"

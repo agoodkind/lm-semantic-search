@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/milvus-io/milvus/client/v3/milvusclient"
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/config"
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
@@ -104,9 +104,10 @@ func newSandboxWatcherHarness(t *testing.T, gate *embedGate) (*harness, string) 
 	operatorContext := context.WithValue(context.Background(), milvusgrpc.CallObserverContextKey{}, milvusgrpc.CallObserver(callRecorder.observe))
 	dialContext, cancelDial := context.WithTimeout(operatorContext, 5*time.Second)
 	operatorMilvus, err := milvusclient.New(dialContext, &milvusclient.ClientConfig{
-		Address:     milvusAddress,
-		APIKey:      defaultConfig.MilvusToken,
-		DialOptions: milvusgrpc.DialOptions(operatorContext, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
+		TelemetryConfig: &milvusclient.TelemetryConfig{Enabled: false},
+		Address:         milvusAddress,
+		APIKey:          defaultConfig.MilvusToken,
+		DialOptions:     milvusgrpc.DialOptions(operatorContext, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
 	})
 	cancelDial()
 	if err != nil {
@@ -139,10 +140,11 @@ func newSandboxWatcherHarness(t *testing.T, gate *embedGate) (*harness, string) 
 	sandboxContext := context.WithValue(context.Background(), milvusgrpc.CallObserverContextKey{}, milvusgrpc.CallObserver(callRecorder.observe))
 	dialContext, cancelDial = context.WithTimeout(sandboxContext, 5*time.Second)
 	sandboxMilvus, err := milvusclient.New(dialContext, &milvusclient.ClientConfig{
-		Address:     milvusAddress,
-		APIKey:      defaultConfig.MilvusToken,
-		DBName:      databaseName,
-		DialOptions: milvusgrpc.DialOptions(sandboxContext, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
+		TelemetryConfig: &milvusclient.TelemetryConfig{Enabled: false},
+		Address:         milvusAddress,
+		APIKey:          defaultConfig.MilvusToken,
+		DBName:          databaseName,
+		DialOptions:     milvusgrpc.DialOptions(sandboxContext, slog.Default(), milvusgrpc.DefaultCallTimeouts()),
 	})
 	cancelDial()
 	if err != nil {

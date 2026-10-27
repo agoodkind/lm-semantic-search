@@ -84,15 +84,15 @@ func logRPCDone(ctx context.Context, method string, started time.Time, err error
 
 // classifyManagerError promotes a raw manager error into a typed
 // [adapterr.AdapterError] based on the message substrings the
-// manager layer uses today. Unrecognized errors pass through; the
-// boundary wraps them as [adapterr.ClassInternal].
-func classifyManagerError(path string, err error) error {
+// manager layer uses today. A nil result leaves an existing typed error or an
+// unrecognized error with its caller. The boundary classifies unknown errors.
+func classifyManagerError(path string, err error) *adapterr.AdapterError {
 	if err == nil {
 		return nil
 	}
 	var adapterErr *adapterr.AdapterError
 	if errors.As(err, &adapterErr) {
-		return err
+		return nil
 	}
 	text := err.Error()
 	switch {
@@ -117,7 +117,7 @@ func classifyManagerError(path string, err error) error {
 	case strings.Contains(text, "covers daemon state root"):
 		return adapterr.NewInvalidPath(text, err)
 	}
-	return err
+	return nil
 }
 
 // requireNonEmpty reports an InvalidArgument error when a required request
@@ -190,7 +190,10 @@ func (server *GRPCServer) StartIndex(ctx context.Context, request *pb.StartIndex
 	}
 	job, codebase, deduplicated, overlapsCodebaseID, callErr := server.manager.StartIndexWithSource(ctx, requestedPath, pbClient(request.GetClient()), pbconv.FromStartIndexConfig(request), request.GetForce(), pbconv.FromStartIndexBudget(request), policyPatch, source)
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
+		if classified := classifyManagerError(requestedPath, callErr); classified != nil {
+			callErr = classified
+		}
+		return nil, status.Error(adapterr.Respond(ctx, callErr))
 	}
 	startIndexView := server.resolveStartIndexView(requestedPath, codebase, job, deduplicated, overlapsCodebaseID)
 	health := server.manager.DependencyHealth()
@@ -244,7 +247,10 @@ func (server *GRPCServer) ClearIndex(ctx context.Context, request *pb.ClearIndex
 	}
 	codebase, callErr := server.manager.ClearIndex(ctx, requestedPath, pbClient(request.GetClient()))
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
+		if classified := classifyManagerError(requestedPath, callErr); classified != nil {
+			callErr = classified
+		}
+		return nil, status.Error(adapterr.Respond(ctx, callErr))
 	}
 	ack := view.MutationAckView{
 		Kind:            view.AckClear,
@@ -309,7 +315,10 @@ func (server *GRPCServer) SyncIndex(ctx context.Context, request *pb.SyncIndexRe
 	}
 	job, codebase, deduplicated, callErr := server.manager.SyncIndexWithPolicy(ctx, requestedPath, pbClient(request.GetClient()), policyPatch)
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
+		if classified := classifyManagerError(requestedPath, callErr); classified != nil {
+			callErr = classified
+		}
+		return nil, status.Error(adapterr.Respond(ctx, callErr))
 	}
 	operation := "sync"
 	if deduplicated {
@@ -404,7 +413,10 @@ func (server *GRPCServer) GetIndex(ctx context.Context, request *pb.GetIndexRequ
 	}
 	codebase, activeJob, found, classification, callErr := server.manager.GetIndex(ctx, requestedPath)
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
+		if classified := classifyManagerError(requestedPath, callErr); classified != nil {
+			callErr = classified
+		}
+		return nil, status.Error(adapterr.Respond(ctx, callErr))
 	}
 	var indexedDescendants []model.Codebase
 	if !found {
@@ -519,8 +531,30 @@ func (server *GRPCServer) WatchJobs(request *pb.WatchJobsRequest, stream pb.Sema
 
 // SearchCode is the future search RPC surface for semantic lookups.
 func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCodeRequest) (resp *pb.SearchCodeResponse, err error) {
-	ctx, done := beginRPC(ctx, "SearchCode")
-	defer done(&err)
+	ctx = correlation.WithContext(ctx, correlation.FromIncomingMetadata(ctx).Child())
+	started := clock.Now()
+	peerInfo, _ := peer.FromContext(ctx)
+	slog.InfoContext(ctx, "daemon.rpc.started", "method", "SearchCode", "peer", peerInfo.String())
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = status.Error(adapterr.Respond(ctx, adapterr.NewInternal("daemon panic", fmt.Errorf("panic: %v", recovered))))
+		}
+		if err != nil {
+			slog.WarnContext(ctx, "daemon.rpc.completed",
+				"method", "SearchCode",
+				"status", status.Code(err).String(),
+				"peer", peerInfo.String(),
+				"duration_ms", clock.Now().Sub(started).Milliseconds(),
+			)
+			return
+		}
+		slog.InfoContext(ctx, "daemon.rpc.completed",
+			"method", "SearchCode",
+			"status", "OK",
+			"peer", peerInfo.String(),
+			"duration_ms", clock.Now().Sub(started).Milliseconds(),
+		)
+	}()
 	if argErr := requireNonEmpty(ctx, request.GetPath(), "absolutePath", true); argErr != nil {
 		return nil, argErr
 	}
@@ -529,11 +563,14 @@ func (server *GRPCServer) SearchCode(ctx context.Context, request *pb.SearchCode
 	}
 	requestedPath, pathErr := resolveRequestPath(request.GetPath(), request.GetClient().GetCallerCwd())
 	if pathErr != nil {
-		return nil, adapterr.RespondGRPC(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr))
+		return nil, fmt.Errorf("resolve search request path: %w", adapterr.RespondGRPC(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)))
 	}
 	outcome, callErr := server.manager.SearchCode(ctx, requestedPath, request.GetQuery(), request.GetLimit(), request.GetExtensionFilter())
 	if callErr != nil {
-		return nil, adapterr.RespondGRPC(ctx, classifyManagerError(requestedPath, callErr))
+		if classified := classifyManagerError(requestedPath, callErr); classified != nil {
+			callErr = classified
+		}
+		return nil, fmt.Errorf("search codebase: %w", adapterr.RespondGRPC(ctx, callErr))
 	}
 	server.manager.fillLiveChunkTotal(ctx, outcome.Codebase, outcome.ActiveJob)
 	health := server.manager.DependencyHealth()

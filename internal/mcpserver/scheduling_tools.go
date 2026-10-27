@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"math"
 
-	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/v2/mcp"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"goodkind.io/lm-semantic-search/internal/pbconv"

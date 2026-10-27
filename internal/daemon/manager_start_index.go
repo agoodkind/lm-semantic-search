@@ -167,7 +167,9 @@ func (manager *Manager) redirectStartIndex(
 		return emptyJob, emptyCodebase, false, nil
 	}
 	if sourceIntent.sourcePath != "" || sourceIntent.startingCommit != "" {
-		return emptyJob, emptyCodebase, true, adapterr.NewInvalidPath(fmt.Sprintf("worktree source fields for %q are invalid inside indexed codebase %q because the daemon syncs the covering codebase without recording a source for the requested path", canonicalPath, ancestor.CanonicalPath), nil)
+		refusal := adapterr.NewInvalidPath(fmt.Sprintf("worktree source fields for %q are invalid inside indexed codebase %q because the daemon syncs the covering codebase without recording a source for the requested path", canonicalPath, ancestor.CanonicalPath), nil)
+		slog.WarnContext(ctx, "index redirect refused worktree source fields", "path", canonicalPath, "covering_path", ancestor.CanonicalPath, "err", refusal)
+		return emptyJob, emptyCodebase, true, fmt.Errorf("redirect index to covering codebase: %w", refusal)
 	}
 	job, codebase, err := manager.redirectIndexToAncestor(
 		ctx,

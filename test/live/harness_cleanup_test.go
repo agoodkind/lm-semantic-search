@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
-	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
-	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/client/v2/milvusclient"
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus/client/v3/entity"
+	"github.com/milvus-io/milvus/client/v3/milvusclient"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -240,8 +240,9 @@ func newHarnessCleanupClient(
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	client, err := milvusclient.New(ctx, &milvusclient.ClientConfig{
-		Address: address,
-		DBName:  databaseName,
+		TelemetryConfig: &milvusclient.TelemetryConfig{Enabled: false},
+		Address:         address,
+		DBName:          databaseName,
 	})
 	if err != nil {
 		t.Fatalf("connect cleanup fake Milvus: %v", err)

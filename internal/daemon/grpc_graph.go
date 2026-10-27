@@ -31,7 +31,10 @@ func (server *GRPCServer) GraphTool(ctx context.Context, request *pb.GraphToolRe
 
 	codebase, _, found, _, callErr := server.manager.GetIndex(ctx, requestedPath)
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
+		if classified := classifyManagerError(requestedPath, callErr); classified != nil {
+			callErr = classified
+		}
+		return nil, status.Error(adapterr.Respond(ctx, callErr))
 	}
 	if !found {
 		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewNotIndexed(requestedPath, nil)))
@@ -39,7 +42,10 @@ func (server *GRPCServer) GraphTool(ctx context.Context, request *pb.GraphToolRe
 
 	resultJSON, callErr := server.manager.GraphTool(ctx, codebase.ID, request.GetToolName(), request.GetArgsJson())
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, classifyManagerError(requestedPath, callErr)))
+		if classified := classifyManagerError(requestedPath, callErr); classified != nil {
+			callErr = classified
+		}
+		return nil, status.Error(adapterr.Respond(ctx, callErr))
 	}
 
 	return &pb.GraphToolResponse{

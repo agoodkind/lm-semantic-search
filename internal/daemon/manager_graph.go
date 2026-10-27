@@ -72,7 +72,7 @@ func (manager *Manager) GraphTool(ctx context.Context, codebaseID string, toolNa
 	return resultJSON, nil
 }
 
-func validateGraphToolName(toolName string) error {
+func validateGraphToolName(toolName string) *adapterr.AdapterError {
 	if _, found := allowedGraphTools[toolName]; found {
 		return nil
 	}
@@ -148,7 +148,7 @@ func (manager *Manager) beginGraphIndex(codebaseID string) (func(), bool) {
 	}, true
 }
 
-func (manager *Manager) beginGraphOperation(codebaseID string) (func(), error) {
+func (manager *Manager) beginGraphOperation(codebaseID string) (func(), *adapterr.AdapterError) {
 	manager.graphMutex.Lock()
 	defer manager.graphMutex.Unlock()
 
@@ -170,9 +170,9 @@ func (manager *Manager) beginGraphOperation(codebaseID string) (func(), error) {
 }
 
 func (manager *Manager) graphEngine(ctx context.Context, codebaseID string) (*cbm.Engine, func(), error) {
-	release, err := manager.beginGraphOperation(codebaseID)
-	if err != nil {
-		return nil, nil, err
+	release, operationErr := manager.beginGraphOperation(codebaseID)
+	if operationErr != nil {
+		return nil, nil, operationErr
 	}
 
 	manager.graphMutex.Lock()
@@ -424,7 +424,7 @@ func MarshalGraphToolArguments(argsJSON string, codebaseID string) (string, erro
 	var args graphToolArguments
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		slog.Warn("unmarshal graph tool arguments failed", "codebase_id", codebaseID, "err", err)
-		return "", adapterr.NewInvalidArgument("args_json must be a JSON object or null")
+		return "", fmt.Errorf("decode graph tool arguments: %w", adapterr.NewInvalidArgument("args_json must be a JSON object or null"))
 	}
 	if args == nil {
 		args = graphToolArguments{}

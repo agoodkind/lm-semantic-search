@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/milvus-io/milvus/client/v2/entity"
+	"github.com/milvus-io/milvus/client/v3/entity"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 )
