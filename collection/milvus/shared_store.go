@@ -147,11 +147,15 @@ func (store *SharedStore) writeRows(ctx context.Context, occurrences string, dec
 	if err != nil {
 		return err
 	}
-	if err := store.mergeStoredSupersets(ctx, vectors, declaration.Scalars, records); err != nil {
+	unchanged, err := store.mergeStoredSupersets(ctx, vectors, declaration.Scalars, records)
+	if err != nil {
 		return err
 	}
 	ordered := make([]*vectorRecord, 0, len(records))
 	for _, key := range sortedRecordKeys(records) {
+		if _, skip := unchanged[key]; skip {
+			continue
+		}
 		ordered = append(ordered, records[key])
 	}
 	for start := 0; start < len(ordered); start += sharedWriteBatchSize {
@@ -486,10 +490,10 @@ func (store *SharedStore) occurrenceKeyMap(ctx context.Context, occurrences stri
 	return keyByID, nil
 }
 
-// mergeStoredSupersets adds the stored supersets of existing vector rows into
-// records.
-func (store *SharedStore) mergeStoredSupersets(ctx context.Context, vectors string, scalars []collection.ScalarColumn, records map[string]*vectorRecord) error {
-	keys := sortedRecordKeys(records)
+// storedSupersets reads the supersets of the stored vector rows among keys.
+// The result omits a key without a stored row.
+func (store *SharedStore) storedSupersets(ctx context.Context, vectors string, scalars []collection.ScalarColumn, keys []string) (map[string]*vectorRecord, error) {
+	stored := make(map[string]*vectorRecord, len(keys))
 	outputFields := append([]string{VectorKeyField}, supersetOutputFields(scalars)...)
 	for start := 0; start < len(keys); start += vectorKeyBatchSize {
 		batch := keys[start:min(start+vectorKeyBatchSize, len(keys))]
@@ -498,30 +502,49 @@ func (store *SharedStore) mergeStoredSupersets(ctx context.Context, vectors stri
 			WithOutputFields(outputFields...).
 			WithConsistencyLevel(entity.ClStrong))
 		if err != nil {
-			return WrapError(ctx, err, "read vector supersets of "+vectors)
+			return nil, WrapError(ctx, err, "read vector supersets of "+vectors)
 		}
 		if resultSet.ResultCount == 0 {
 			continue
 		}
 		keyColumn := resultSet.GetColumn(VectorKeyField)
 		if keyColumn == nil {
-			return collection.ErrSearchResultIncomplete
+			return nil, collection.ErrSearchResultIncomplete
 		}
 		for rowIndex := range resultSet.ResultCount {
 			key, err := keyColumn.GetAsString(rowIndex)
 			if err != nil {
-				return rowReadError(VectorKeyField, rowIndex, err)
+				return nil, rowReadError(VectorKeyField, rowIndex, err)
 			}
-			stored := newVectorRecord(key, nil, scalars)
-			if err := supersetsFromResult(resultSet, rowIndex, scalars, stored); err != nil {
-				return err
+			record := newVectorRecord(key, nil, scalars)
+			if err := supersetsFromResult(resultSet, rowIndex, scalars, record); err != nil {
+				return nil, err
 			}
-			for name, superset := range stored.supersets {
-				records[key].supersets[name].merge(superset)
-			}
+			stored[key] = record
 		}
 	}
-	return nil
+	return stored, nil
+}
+
+// mergeStoredSupersets adds the stored supersets of existing vector rows into
+// records. It returns each key with a stored superset that already contained
+// the record superset. Those vector rows do not need a write.
+func (store *SharedStore) mergeStoredSupersets(ctx context.Context, vectors string, scalars []collection.ScalarColumn, records map[string]*vectorRecord) (map[string]struct{}, error) {
+	stored, err := store.storedSupersets(ctx, vectors, scalars, sortedRecordKeys(records))
+	if err != nil {
+		return nil, err
+	}
+	unchanged := make(map[string]struct{}, len(stored))
+	for key, storedRecord := range stored {
+		record := records[key]
+		if storedRecord.containsRecord(record) {
+			unchanged[key] = struct{}{}
+		}
+		for name, superset := range storedRecord.supersets {
+			record.supersets[name].merge(superset)
+		}
+	}
+	return unchanged, nil
 }
 
 func (store *SharedStore) vectorsByKey(ctx context.Context, vectors string, keys []string) (map[string][]float32, error) {

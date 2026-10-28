@@ -205,6 +205,46 @@ func (superset *columnSuperset) merge(other *columnSuperset) {
 	}
 }
 
+// contains reports whether every value other admits, superset admits too.
+func (superset *columnSuperset) contains(other *columnSuperset) bool {
+	if !superset.overflow {
+		if other.overflow {
+			return false
+		}
+		for value := range other.strings {
+			if _, found := superset.strings[value]; !found {
+				return false
+			}
+		}
+	}
+	for value := range other.bools {
+		if _, found := superset.bools[value]; !found {
+			return false
+		}
+	}
+	if !other.hasRange {
+		return true
+	}
+	return superset.hasRange && superset.minimum <= other.minimum && superset.maximum >= other.maximum
+}
+
+// containsRecord reports whether each column superset of record contains the
+// superset of other for the same column.
+func (record *vectorRecord) containsRecord(other *vectorRecord) bool {
+	for name, superset := range other.supersets {
+		stored, found := record.supersets[name]
+		if !found || !stored.contains(superset) {
+			return false
+		}
+	}
+	return true
+}
+
+// equalRecord reports whether record and other store equal supersets.
+func (record *vectorRecord) equalRecord(other *vectorRecord) bool {
+	return record.containsRecord(other) && other.containsRecord(record)
+}
+
 func (superset *columnSuperset) sortedStrings() []string {
 	values := make([]string, 0, len(superset.strings))
 	for value := range superset.strings {

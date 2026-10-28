@@ -287,8 +287,8 @@ func TestSharedStoreRecoversPartialStateAndKeepsModelNullState(t *testing.T) {
 			wantResumed++
 		}
 	}
-	if resumed != wantResumed {
-		t.Fatalf("copy after %s wrote %d rows, want %d", resumeAfter, resumed, wantResumed)
+	if resumed.Occurrences != wantResumed {
+		t.Fatalf("copy after %s wrote %d rows, want %d", resumeAfter, resumed.Occurrences, wantResumed)
 	}
 	time.Sleep(sharedVisibilityWait)
 	maxID, err := shared.MaxOccurrenceID(ctx, recoveryCopyTarget)
