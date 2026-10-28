@@ -173,11 +173,11 @@ type rankedLegRow struct {
 // baselineLeg runs one ranking leg on the baseline collection over every row
 // the filter matches, orders rows with equal scores by vector key (dense only)
 // and then primary key, and cuts the leg at depth.
-func baselineLeg(t *testing.T, client *milvusclient.Client, label string, field string, query entity.Vector, expression string, vectorKeyByID map[string]string, dense bool, depth int) []rankedLegRow {
+func baselineLeg(t *testing.T, client *milvusclient.Client, label string, baselineName string, field string, query entity.Vector, expression string, vectorKeyByID map[string]string, dense bool, depth int) []rankedLegRow {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), milvusCallTimeout)
 	defer cancel()
-	option := milvusclient.NewSearchOption(sharedBaselineCollection, collection.RankingDepth, []entity.Vector{query}).
+	option := milvusclient.NewSearchOption(baselineName, collection.RankingDepth, []entity.Vector{query}).
 		WithANNSField(field).
 		WithOutputFields(milvusstore.RelativePathField).
 		WithConsistencyLevel(entity.ClStrong)
@@ -221,15 +221,15 @@ func baselineLeg(t *testing.T, client *milvusclient.Client, label string, field 
 // expectedHits fuses the cut baseline legs with RRF, 1 / (60 + rank) summed
 // over legs and rounded to float32, and orders the fused rows by score,
 // relativePath, and primary key, the order [milvusstore.SelectCandidates] uses.
-func expectedHits(t *testing.T, client *milvusclient.Client, label string, request collection.SearchRequest, vectorKeyByID map[string]string) []rankedLegRow {
+func expectedHits(t *testing.T, client *milvusclient.Client, label string, baselineName string, request collection.SearchRequest, vectorKeyByID map[string]string) []rankedLegRow {
 	t.Helper()
 	expression, err := collection.CompileInline(request.Filter)
 	if err != nil {
 		t.Fatalf("%s: compile filter: %v", label, err)
 	}
 	depth := min(max(int(request.Limit)*4, 64), collection.RankingDepth)
-	dense := baselineLeg(t, client, label, milvusstore.DenseVectorField, entity.FloatVector(request.Vector), expression, vectorKeyByID, true, depth)
-	sparse := baselineLeg(t, client, label, milvusstore.SparseVectorField, entity.Text(request.Query), expression, vectorKeyByID, false, depth)
+	dense := baselineLeg(t, client, label, baselineName, milvusstore.DenseVectorField, entity.FloatVector(request.Vector), expression, vectorKeyByID, true, depth)
+	sparse := baselineLeg(t, client, label, baselineName, milvusstore.SparseVectorField, entity.Text(request.Query), expression, vectorKeyByID, false, depth)
 	scores := map[string]float64{}
 	rows := map[string]rankedLegRow{}
 	for _, leg := range [][]rankedLegRow{dense, sparse} {
@@ -262,9 +262,9 @@ func expectedHits(t *testing.T, client *milvusclient.Client, label string, reque
 // requireExpectedHits checks that the shared hits equal the expected hits row
 // for row and score for score. It returns the number of positions where the
 // baseline store returned another row than the expected one.
-func requireExpectedHits(t *testing.T, client *milvusclient.Client, label string, request collection.SearchRequest, vectorKeyByID map[string]string, baseline []collection.Hit, shared []collection.Hit) int {
+func requireExpectedHits(t *testing.T, client *milvusclient.Client, label string, baselineName string, request collection.SearchRequest, vectorKeyByID map[string]string, baseline []collection.Hit, shared []collection.Hit) int {
 	t.Helper()
-	expected := expectedHits(t, client, label, request, vectorKeyByID)
+	expected := expectedHits(t, client, label, baselineName, request, vectorKeyByID)
 	if len(shared) != len(expected) {
 		t.Fatalf("%s: shared returned %d hits, expected %d", label, len(shared), len(expected))
 	}
@@ -285,12 +285,12 @@ func requireExpectedHits(t *testing.T, client *milvusclient.Client, label string
 // requireVectorReferencesConsistent checks that every vector key an occurrence
 // row stores exists in the vector collection and that every vector row has at
 // least one occurrence.
-func requireVectorReferencesConsistent(t *testing.T, client *milvusclient.Client, stage string) {
+func requireVectorReferencesConsistent(t *testing.T, client *milvusclient.Client, stage string, sharedName string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), milvusCallTimeout)
 	defer cancel()
 	referenced := map[string][]string{}
-	occurrences, err := client.Query(ctx, milvusclient.NewQueryOption(sharedLayoutCollection).
+	occurrences, err := client.Query(ctx, milvusclient.NewQueryOption(sharedName).
 		WithFilter(milvusstore.IDField+` != ""`).
 		WithOutputFields(milvusstore.IDField, milvusstore.VectorKeyField).
 		WithLimit(16384).
@@ -303,7 +303,7 @@ func requireVectorReferencesConsistent(t *testing.T, client *milvusclient.Client
 		key, _ := occurrences.GetColumn(milvusstore.VectorKeyField).GetAsString(index)
 		referenced[key] = append(referenced[key], id)
 	}
-	vectors, err := client.Query(ctx, milvusclient.NewQueryOption(milvusstore.VectorCollectionName(sharedLayoutCollection)).
+	vectors, err := client.Query(ctx, milvusclient.NewQueryOption(milvusstore.VectorCollectionName(sharedName)).
 		WithFilter(milvusstore.VectorKeyField+` != ""`).
 		WithOutputFields(milvusstore.VectorKeyField).
 		WithLimit(16384).
@@ -369,7 +369,16 @@ func loadSharedCollections(t *testing.T, client *milvusclient.Client, names ...s
 	}
 }
 
-func compareSearches(t *testing.T, client *milvusclient.Client, stage string, baseline *milvusstore.Store, shared *milvusstore.SharedStore, corpus sharedCorpus, vectorKeyByID map[string]string) {
+// searchTargets is the single-collection baseline and the shared occurrence
+// collection one search comparison reads.
+type searchTargets struct {
+	baseline string
+	shared   string
+}
+
+var defaultTargets = searchTargets{baseline: sharedBaselineCollection, shared: sharedLayoutCollection}
+
+func compareSearches(t *testing.T, client *milvusclient.Client, stage string, targets searchTargets, baseline *milvusstore.Store, shared *milvusstore.SharedStore, corpus sharedCorpus, vectorKeyByID map[string]string) {
 	t.Helper()
 	ctx := context.Background()
 	generator := rand.New(rand.NewPCG(sharedSeed+1, sharedSeed+1))
@@ -384,7 +393,7 @@ func compareSearches(t *testing.T, client *milvusclient.Client, stage string, ba
 				vector[position] += float32(generator.NormFloat64() * 0.05)
 			}
 			request := collection.SearchRequest{
-				Collection:  sharedBaselineCollection,
+				Collection:  targets.baseline,
 				Query:       query,
 				Vector:      vector,
 				Limit:       sharedSearchLimit,
@@ -395,13 +404,13 @@ func compareSearches(t *testing.T, client *milvusclient.Client, stage string, ba
 			if err != nil {
 				t.Fatalf("%s %s query %d: baseline search: %v", stage, filterCase.name, queryIndex, err)
 			}
-			request.Collection = sharedLayoutCollection
+			request.Collection = targets.shared
 			sharedHits, err := shared.Search(ctx, request)
 			if err != nil {
 				t.Fatalf("%s %s query %d: shared search: %v", stage, filterCase.name, queryIndex, err)
 			}
 			label := fmt.Sprintf("%s %s query %d", stage, filterCase.name, queryIndex)
-			baselineDifferences += requireExpectedHits(t, client, label, request, vectorKeyByID, baselineHits, sharedHits)
+			baselineDifferences += requireExpectedHits(t, client, label, targets.baseline, request, vectorKeyByID, baselineHits, sharedHits)
 			checkedPositions += len(sharedHits)
 		}
 	}
@@ -477,8 +486,8 @@ func TestSharedStoreMatchesSingleCollectionStore(t *testing.T) {
 		}
 	}
 
-	requireVectorReferencesConsistent(t, client, "initial")
-	compareSearches(t, client, "initial", baseline, shared, corpus, wantVectorByID)
+	requireVectorReferencesConsistent(t, client, "initial", sharedLayoutCollection)
+	compareSearches(t, client, "initial", defaultTargets, baseline, shared, corpus, wantVectorByID)
 
 	deleteRequest := collection.DeleteItemsRequest{Declaration: sharedDeclaration, ItemIDs: []string{"conv-001", "conv-002", "conv-003"}}
 	deleteRequest.Collection = sharedBaselineCollection
@@ -500,7 +509,7 @@ func TestSharedStoreMatchesSingleCollectionStore(t *testing.T) {
 			remaining = append(remaining, row)
 		}
 	}
-	requireVectorReferencesConsistent(t, client, "after delete")
+	requireVectorReferencesConsistent(t, client, "after delete", sharedLayoutCollection)
 
 	replacements := make([]collection.Row, 0, 20)
 	generator := rand.New(rand.NewPCG(sharedSeed+2, sharedSeed+2))
@@ -524,7 +533,7 @@ func TestSharedStoreMatchesSingleCollectionStore(t *testing.T) {
 	if got, want := countRows(t, client, vectorCollection), int64(len(distinctVectorKeys(remaining))); got != want {
 		t.Fatalf("after delete and replacement the vector collection has %d rows, want %d", got, want)
 	}
-	requireVectorReferencesConsistent(t, client, "after replacement")
+	requireVectorReferencesConsistent(t, client, "after replacement", sharedLayoutCollection)
 
 	remainingVectorByID := vectorKeysByID(remaining)
 	backfill := collection.ScalarBackfill{
@@ -541,7 +550,7 @@ func TestSharedStoreMatchesSingleCollectionStore(t *testing.T) {
 	if _, _, err := shared.BackfillScalars(ctx, sharedLayoutCollection, backfill); err != nil {
 		t.Fatalf("backfill %s: %v", sharedLayoutCollection, err)
 	}
-	requireVectorReferencesConsistent(t, client, "after backfill")
+	requireVectorReferencesConsistent(t, client, "after backfill", sharedLayoutCollection)
 	time.Sleep(sharedVisibilityWait)
 	labelFilter := collection.ColumnEquals("label", collection.StringScalar("reviewed"))
 	for queryIndex := range sharedQueries {
@@ -556,7 +565,7 @@ func TestSharedStoreMatchesSingleCollectionStore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("shared label search: %v", err)
 		}
-		requireExpectedHits(t, client, fmt.Sprintf("backfill label query %d", queryIndex), request, remainingVectorByID, baselineHits, sharedHits)
+		requireExpectedHits(t, client, fmt.Sprintf("backfill label query %d", queryIndex), sharedBaselineCollection, request, remainingVectorByID, baselineHits, sharedHits)
 	}
-	compareSearches(t, client, "after delete, replacement, and backfill", baseline, shared, corpus, remainingVectorByID)
+	compareSearches(t, client, "after delete, replacement, and backfill", defaultTargets, baseline, shared, corpus, remainingVectorByID)
 }

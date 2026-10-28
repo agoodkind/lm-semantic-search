@@ -113,7 +113,12 @@ func (store *SharedStore) Upsert(ctx context.Context, collectionName string, dec
 	}
 	store.write.Lock()
 	defer store.write.Unlock()
-	occurrences := strings.TrimSpace(collectionName)
+	return store.writeRows(ctx, strings.TrimSpace(collectionName), declaration, rows, computedIdentity(rows, store.inner.options.EmbeddingModel))
+}
+
+// writeRows writes rows with the given reuse identities. The caller must lock
+// store.write first.
+func (store *SharedStore) writeRows(ctx context.Context, occurrences string, declaration collection.Declaration, rows []collection.Row, identity rowIdentity) error {
 	vectors := VectorCollectionName(occurrences)
 	dimension := len(rows[0].Vector)
 	if dimension == 0 {
@@ -159,7 +164,7 @@ func (store *SharedStore) Upsert(ctx context.Context, collectionName string, dec
 	}
 	for start := 0; start < len(rows); start += sharedWriteBatchSize {
 		end := min(start+sharedWriteBatchSize, len(rows))
-		option, err := buildOccurrenceWriteOption(ctx, occurrences, rows[start:end], keys[start:end], declaration.Scalars, store.inner.options.EmbeddingModel)
+		option, err := buildOccurrenceWriteOption(ctx, occurrences, rows[start:end], keys[start:end], declaration.Scalars, identity.slice(start, end))
 		if err != nil {
 			return err
 		}
@@ -607,8 +612,12 @@ func (store *SharedStore) iterateVectorKeys(ctx context.Context, occurrences str
 // iterate pages through every row an expression matches with strong
 // consistency.
 func (store *SharedStore) iterate(ctx context.Context, collectionName string, expression string, outputFields []string, page func(milvusclient.ResultSet) error) error {
+	return store.iterateWithBatch(ctx, collectionName, expression, outputFields, sharedIteratorBatch, page)
+}
+
+func (store *SharedStore) iterateWithBatch(ctx context.Context, collectionName string, expression string, outputFields []string, batchSize int, page func(milvusclient.ResultSet) error) error {
 	iterator, err := store.inner.client.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
-		WithBatchSize(sharedIteratorBatch).
+		WithBatchSize(batchSize).
 		WithFilter(expression).
 		WithOutputFields(outputFields...).
 		WithConsistencyLevel(entity.ClStrong))
@@ -694,17 +703,55 @@ func sortedRecordKeys(records map[string]*vectorRecord) []string {
 	return keys
 }
 
+// rowIdentity is the reuse identity an occurrence write stores for each row:
+// the content hash with its null state and the embedding model. An empty model
+// writes null.
+type rowIdentity struct {
+	contentHashes   []string
+	contentHashSet  []bool
+	embeddingModels []string
+}
+
+// computedIdentity is the identity [SharedStore.Upsert] writes: the hash of each
+// row's content and one embedding model for every row.
+func computedIdentity(rows []collection.Row, embeddingModel string) rowIdentity {
+	identity := rowIdentity{
+		contentHashes:   make([]string, 0, len(rows)),
+		contentHashSet:  make([]bool, 0, len(rows)),
+		embeddingModels: make([]string, 0, len(rows)),
+	}
+	for _, row := range rows {
+		identity.contentHashes = append(identity.contentHashes, ContentHash(row.Content))
+		identity.contentHashSet = append(identity.contentHashSet, true)
+		identity.embeddingModels = append(identity.embeddingModels, embeddingModel)
+	}
+	return identity
+}
+
+func (identity rowIdentity) slice(start int, end int) rowIdentity {
+	return rowIdentity{
+		contentHashes:   identity.contentHashes[start:end],
+		contentHashSet:  identity.contentHashSet[start:end],
+		embeddingModels: identity.embeddingModels[start:end],
+	}
+}
+
 // buildOccurrenceWriteOption builds the column-based upsert of occurrence rows:
 // every built-in column except the dense vector, plus each row's vector key.
-func buildOccurrenceWriteOption(ctx context.Context, collectionName string, rows []collection.Row, keys []string, scalars []collection.ScalarColumn, embeddingModel string) (WriteOption, error) {
+func buildOccurrenceWriteOption(ctx context.Context, collectionName string, rows []collection.Row, keys []string, scalars []collection.ScalarColumn, identity rowIdentity) (WriteOption, error) {
 	columns := buildInsertColumns(ctx, rows)
 	splitPartColumn, err := NewSplitPartColumn(collectionName, columns.splitParts, columns.splitRecorded)
 	if err != nil {
 		return nil, err
 	}
-	embeddingModelColumn, err := NewEmbeddingModelColumn(collectionName, embeddingModel, len(rows))
+	embeddingModelColumn, err := NewRowEmbeddingModelColumn(collectionName, identity.embeddingModels)
 	if err != nil {
 		return nil, err
+	}
+	contentHashColumn, err := column.NewNullableColumnVarChar(ContentHashField, identity.contentHashes, identity.contentHashSet, column.WithSparseNullableMode[string](true))
+	if err != nil {
+		slog.ErrorContext(ctx, "build content hash column failed", "collection", collectionName, "err", err)
+		return nil, fmt.Errorf("build content hash column for %s: %w", collectionName, err)
 	}
 	declaredColumns, err := DeclaredScalarInsertColumns(collectionName, scalars, rows)
 	if err != nil {
@@ -713,7 +760,7 @@ func buildOccurrenceWriteOption(ctx context.Context, collectionName string, rows
 	option := milvusclient.NewColumnBasedInsertOption(collectionName).
 		WithVarcharColumn(IDField, columns.ids).
 		WithVarcharColumn(ContentField, columns.contents).
-		WithVarcharColumn(ContentHashField, columns.contentHashes).
+		WithColumns(contentHashColumn).
 		WithVarcharColumn(RelativePathField, columns.relativePaths).
 		WithInt64Column(StartLineField, columns.startLines).
 		WithInt64Column(EndLineField, columns.endLines).
