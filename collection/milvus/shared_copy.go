@@ -427,9 +427,10 @@ func (store *SharedStore) writeExactVectors(ctx context.Context, occurrences str
 	return int64(len(ordered)), nil
 }
 
-// MaxOccurrenceID returns the largest primary key of the shared occurrence
-// collection in string order, the order [SharedStore.CopyFromAfter] uses, or
-// an empty string for an empty collection.
+// MaxOccurrenceID scans every primary key of the shared occurrence collection
+// and returns the largest one in string order, the order
+// [SharedStore.CopyFromAfter] uses. It returns an empty string for an empty
+// collection, and CopyFromAfter copies every row after an empty string.
 func (store *SharedStore) MaxOccurrenceID(ctx context.Context, target string) (string, error) {
 	largest := ""
 	err := store.iterateBatch(ctx, strings.TrimSpace(target), IDField+` != ""`, []string{IDField}, copyMaxIDBatchSize, func(resultSet milvusclient.ResultSet) error {

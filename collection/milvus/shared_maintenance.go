@@ -86,8 +86,8 @@ func (store *SharedStore) enableMmap(ctx context.Context, collectionName string)
 	return nil
 }
 
-// EnsureMmap enables mmap on every field and index of the occurrence and vector
-// collections that lacks it. A loaded collection that needs a change is
+// EnsureMmap enables mmap on each field and index of the occurrence and vector
+// collections that does not have it. A loaded collection that needs a change is
 // released, changed, and loaded again; searches of that collection fail until
 // the load completes. It returns the names of the changed collections.
 func (store *SharedStore) EnsureMmap(ctx context.Context, collectionName string) ([]string, error) {
@@ -170,7 +170,8 @@ func (store *SharedStore) denseIndexDefinition(ctx context.Context, collectionNa
 	return denseIndexDefinition{indexType: values["index_type"], metricType: values["metric_type"], params: string(encoded)}, nil
 }
 
-// milvusErrorCode is the exported method of the Milvus client RPC error.
+// milvusErrorCode reads the error code of a Milvus client RPC error through
+// its exported Code method.
 type milvusErrorCode interface {
 	Code() int32
 }
