@@ -205,7 +205,7 @@ func (superset *columnSuperset) merge(other *columnSuperset) {
 	}
 }
 
-// contains reports whether every value other admits, superset admits too.
+// contains reports whether superset admits every value that other admits.
 func (superset *columnSuperset) contains(other *columnSuperset) bool {
 	if !superset.overflow {
 		if other.overflow {

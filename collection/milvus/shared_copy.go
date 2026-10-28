@@ -252,8 +252,10 @@ type CopyResult struct {
 	VectorsWritten int64
 }
 
-// CopyFromAfter copies the source rows with a primary key greater than afterID
-// the same way [SharedStore.CopyFrom] copies every row. An empty afterID copies
+// CopyFromAfter copies the source rows with a primary key that sorts after
+// afterID as a string, the order Milvus applies to VarChar primary keys and
+// the query iterator uses. It copies them the same way [SharedStore.CopyFrom]
+// copies every row. An empty afterID copies
 // every row. The first pass writes every occurrence row after afterID. The
 // second pass reads the vector of every source row, including rows at or below
 // afterID that an earlier stopped copy wrote without their vectors, and writes
@@ -427,7 +429,8 @@ func (store *SharedStore) writeExactVectors(ctx context.Context, occurrences str
 }
 
 // MaxOccurrenceID returns the largest primary key of the shared occurrence
-// collection, or an empty string for an empty collection.
+// collection in string order, the order [SharedStore.CopyFromAfter] uses, or
+// an empty string for an empty collection.
 func (store *SharedStore) MaxOccurrenceID(ctx context.Context, target string) (string, error) {
 	largest := ""
 	err := store.iterateBatch(ctx, strings.TrimSpace(target), IDField+` != ""`, []string{IDField}, copyMaxIDBatchSize, func(resultSet milvusclient.ResultSet) error {

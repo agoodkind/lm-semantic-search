@@ -226,29 +226,42 @@ func (store *SharedStore) MatchDenseIndex(ctx context.Context, source string, ta
 			return false, WrapError(ctx, err, "release Milvus collection "+vectors)
 		}
 	}
+	rebuildErr := store.rebuildDenseIndex(ctx, vectors, present, want)
+	if loaded {
+		// The collection loads again even after a failed rebuild. A load
+		// without a dense index fails, and the returned error then reports
+		// both failures.
+		if loadErr := store.loadAndWait(ctx, vectors); loadErr != nil {
+			joined := errors.Join(rebuildErr, loadErr)
+			slog.ErrorContext(ctx, "collection.shared_dense_index_reload_failed", "collection", vectors, "err", joined)
+			return false, joined
+		}
+	}
+	if rebuildErr != nil {
+		return false, rebuildErr
+	}
+	slog.InfoContext(ctx, "collection.shared_dense_index_replaced", "collection", vectors, "from", have.indexType, "to", want.indexType, "params", want.params)
+	return true, nil
+}
+
+// rebuildDenseIndex drops the dense index of a released vector collection when
+// present, builds it with the given definition, and enables mmap on it.
+func (store *SharedStore) rebuildDenseIndex(ctx context.Context, vectors string, present bool, want denseIndexDefinition) error {
+	client := store.inner.client
 	if present {
 		if err := client.DropIndex(ctx, milvusclient.NewDropIndexOption(vectors, DenseVectorField)); err != nil {
-			return false, WrapError(ctx, err, "drop dense index of "+vectors)
+			return WrapError(ctx, err, "drop dense index of "+vectors)
 		}
 	}
 	definition := index.NewGenericIndex(DenseVectorField, map[string]string{"index_type": want.indexType, "metric_type": want.metricType, "params": want.params})
 	task, err := client.CreateIndex(ctx, milvusclient.NewCreateIndexOption(vectors, DenseVectorField, definition).WithIndexName(DenseVectorField))
 	if err != nil {
-		return false, WrapError(ctx, err, "create dense index of "+vectors)
+		return WrapError(ctx, err, "create dense index of "+vectors)
 	}
 	if err := task.Await(ctx); err != nil {
-		return false, WrapError(ctx, err, "await dense index of "+vectors)
+		return WrapError(ctx, err, "await dense index of "+vectors)
 	}
-	if err := store.enableMmap(ctx, vectors); err != nil {
-		return false, err
-	}
-	if loaded {
-		if err := store.loadAndWait(ctx, vectors); err != nil {
-			return false, err
-		}
-	}
-	slog.InfoContext(ctx, "collection.shared_dense_index_replaced", "collection", vectors, "from", have.indexType, "to", want.indexType, "params", want.params)
-	return true, nil
+	return store.enableMmap(ctx, vectors)
 }
 
 // RemoveUnreferencedVectors deletes every vector row that no occurrence row
