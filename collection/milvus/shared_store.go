@@ -536,7 +536,10 @@ func (store *SharedStore) mergeStoredSupersets(ctx context.Context, vectors stri
 	}
 	unchanged := make(map[string]struct{}, len(stored))
 	for key, storedRecord := range stored {
-		record := records[key]
+		record, requested := records[key]
+		if !requested {
+			return nil, fmt.Errorf("read vector supersets of %s: unrequested vector key %q", vectors, key)
+		}
 		if storedRecord.containsRecord(record) {
 			unchanged[key] = struct{}{}
 		}

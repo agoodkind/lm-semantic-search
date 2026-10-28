@@ -45,9 +45,9 @@ func (store *SharedStore) mmapTargets(ctx context.Context, collectionName string
 			fields = append(fields, field.Name)
 		}
 	}
-	indexNames, err := client.ListIndexes(ctx, milvusclient.NewListIndexOption(collectionName))
+	indexNames, err := store.listIndexes(ctx, milvusclient.NewListIndexOption(collectionName), collectionName)
 	if err != nil {
-		return nil, nil, WrapError(ctx, err, "list Milvus indexes of "+collectionName)
+		return nil, nil, err
 	}
 	slices.Sort(indexNames)
 	indexes := make([]string, 0, len(indexNames))
@@ -175,17 +175,27 @@ type milvusErrorCode interface {
 	Code() int32
 }
 
-// hasDenseIndex reports whether a collection has an index on the dense vector
-// field. Milvus answers ListIndexes on a collection without indexes with the
-// index-not-found error code.
-func (store *SharedStore) hasDenseIndex(ctx context.Context, collectionName string) (bool, error) {
-	indexNames, err := store.inner.client.ListIndexes(ctx, milvusclient.NewListIndexOption(collectionName).WithFieldName(DenseVectorField))
+// listIndexes runs ListIndexes with option. Milvus answers ListIndexes on a
+// collection without a matching index with the index-not-found error code, and
+// listIndexes returns an empty list for that code.
+func (store *SharedStore) listIndexes(ctx context.Context, option milvusclient.ListIndexOption, collectionName string) ([]string, error) {
+	indexNames, err := store.inner.client.ListIndexes(ctx, option)
 	var coded milvusErrorCode
 	if errors.As(err, &coded) && coded.Code() == milvusIndexNotFoundCode {
-		return false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return false, WrapError(ctx, err, "list dense indexes of "+collectionName)
+		return nil, WrapError(ctx, err, "list Milvus indexes of "+collectionName)
+	}
+	return indexNames, nil
+}
+
+// hasDenseIndex reports whether a collection has an index on the dense vector
+// field.
+func (store *SharedStore) hasDenseIndex(ctx context.Context, collectionName string) (bool, error) {
+	indexNames, err := store.listIndexes(ctx, milvusclient.NewListIndexOption(collectionName).WithFieldName(DenseVectorField), collectionName)
+	if err != nil {
+		return false, err
 	}
 	return len(indexNames) > 0, nil
 }

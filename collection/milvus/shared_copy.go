@@ -252,10 +252,9 @@ type CopyResult struct {
 	VectorsWritten int64
 }
 
-// CopyFromAfter copies the source rows with a primary key that sorts after
-// afterID as a string, the order Milvus applies to VarChar primary keys and
-// the query iterator uses. It copies them the same way [SharedStore.CopyFrom]
-// copies every row. An empty afterID copies
+// CopyFromAfter copies the source rows with primary keys that sort after
+// afterID as strings, which is the Milvus VarChar primary key order, the same
+// way [SharedStore.CopyFrom] copies every row. An empty afterID copies
 // every row. The first pass writes every occurrence row after afterID. The
 // second pass reads the vector of every source row, including rows at or below
 // afterID that an earlier stopped copy wrote without their vectors, and writes
