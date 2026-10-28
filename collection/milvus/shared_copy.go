@@ -2,6 +2,8 @@ package milvus
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -252,10 +254,12 @@ type CopyResult struct {
 
 // CopyFromAfter copies the source rows with a primary key greater than afterID
 // the same way [SharedStore.CopyFrom] copies every row. An empty afterID copies
-// every row. The first pass writes every occurrence row. The second pass reads
-// the source vectors again and writes each distinct vector once, with the
-// superset of every occurrence that references it. A vector row that already
-// stores that superset is not written again.
+// every row. The first pass writes every occurrence row after afterID. The
+// second pass reads the vector of every source row, including rows at or below
+// afterID that an earlier stopped copy wrote without their vectors, and writes
+// each distinct vector once, with the superset of every occurrence that
+// references it. A vector row that already stores that superset is not written
+// again.
 func (store *SharedStore) CopyFromAfter(ctx context.Context, source string, target string, declaration collection.Declaration, afterID string, progress func(int64)) (CopyResult, error) {
 	result := CopyResult{Occurrences: 0, VectorsWritten: 0}
 	if err := store.requireDeclarationCovers(ctx, source, declaration); err != nil {
@@ -283,7 +287,7 @@ func (store *SharedStore) CopyFromAfter(ctx context.Context, source string, targ
 	if err != nil {
 		return result, err
 	}
-	result.VectorsWritten, err = store.writeCopiedVectors(ctx, source, occurrences, declaration.Scalars, expression)
+	result.VectorsWritten, err = store.writeCopiedVectors(ctx, source, occurrences, declaration.Scalars, IDField+` != ""`)
 	slog.InfoContext(ctx, "collection.shared_copy_vectors_written", "target", occurrences, "occurrences", result.Occurrences, "vectors_written", result.VectorsWritten)
 	return result, err
 }
@@ -332,7 +336,9 @@ func (store *SharedStore) writeStoredOccurrences(ctx context.Context, occurrence
 // number of written vector rows.
 func (store *SharedStore) writeCopiedVectors(ctx context.Context, source string, occurrences string, scalars []collection.ScalarColumn, expression string) (int64, error) {
 	vectors := VectorCollectionName(occurrences)
-	done := map[string]struct{}{}
+	// done stores the SHA-256 digest of each finished vector key instead of
+	// its 64-character hex string.
+	done := map[[sha256.Size]byte]struct{}{}
 	var written int64
 	err := store.iterateBatch(ctx, source, expression, []string{IDField, DenseVectorField}, copyBatchSize, func(resultSet milvusclient.ResultSet) error {
 		vectorColumn := resultSet.GetColumn(DenseVectorField)
@@ -347,10 +353,14 @@ func (store *SharedStore) writeCopiedVectors(ctx context.Context, source string,
 				return err
 			}
 			key := VectorKey(vector)
-			if _, finished := done[key]; finished {
+			digest, err := vectorKeyDigest(key)
+			if err != nil {
+				return err
+			}
+			if _, finished := done[digest]; finished {
 				continue
 			}
-			done[key] = struct{}{}
+			done[digest] = struct{}{}
 			dimension = len(vector)
 			records[key] = newVectorRecord(key, vector, scalars)
 		}
@@ -362,6 +372,17 @@ func (store *SharedStore) writeCopiedVectors(ctx context.Context, source string,
 		return err
 	})
 	return written, err
+}
+
+// vectorKeyDigest decodes a hex vector key into its SHA-256 digest bytes.
+func vectorKeyDigest(key string) ([sha256.Size]byte, error) {
+	var digest [sha256.Size]byte
+	decoded, err := hex.DecodeString(key)
+	if err != nil || len(decoded) != sha256.Size {
+		return digest, fmt.Errorf("vector key %q is not a hex SHA-256 digest", key)
+	}
+	copy(digest[:], decoded)
+	return digest, nil
 }
 
 // writeExactVectors fills records with the superset of every stored occurrence

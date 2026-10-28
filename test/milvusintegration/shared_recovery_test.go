@@ -302,6 +302,34 @@ func TestSharedStoreRecoversPartialStateAndKeepsModelNullState(t *testing.T) {
 		t.Fatalf("copy: %v", err)
 	}
 	time.Sleep(sharedVisibilityWait)
+
+	// A copy that stopped during its first pass leaves occurrence rows at or
+	// below the resume point without their vector rows. The test deletes those
+	// vector rows, and the resumed copy must write them back.
+	laterKeys := distinctVectorKeys(rows[recoveryRows/2+1:])
+	missingKeys := make([]string, 0)
+	for key := range distinctVectorKeys(rows[:recoveryRows/2+1]) {
+		if _, later := laterKeys[key]; !later {
+			missingKeys = append(missingKeys, key)
+		}
+	}
+	if len(missingKeys) == 0 {
+		t.Fatal("rows at or below the resume point reference no vector of their own")
+	}
+	vectorDeleteCtx, cancelVectorDelete := context.WithTimeout(ctx, milvusCallTimeout)
+	if _, err := client.Delete(vectorDeleteCtx, milvusclient.NewDeleteOption(copyVectors).WithStringIDs(milvusstore.VectorKeyField, slices.Clone(missingKeys))); err != nil {
+		t.Fatalf("delete vectors of rows at or below %s: %v", resumeAfter, err)
+	}
+	cancelVectorDelete()
+	time.Sleep(sharedVisibilityWait)
+	restored, err := shared.CopyFromAfter(ctx, recoverySourceCopy, recoveryCopyTarget, sharedDeclaration, resumeAfter, nil)
+	if err != nil {
+		t.Fatalf("resume copy after %s: %v", resumeAfter, err)
+	}
+	if restored.VectorsWritten != int64(len(missingKeys)) {
+		t.Fatalf("resumed copy wrote %d vectors, want the %d missing vectors", restored.VectorsWritten, len(missingKeys))
+	}
+	time.Sleep(sharedVisibilityWait)
 	if got := countMatching(t, client, recoveryCopyTarget, milvusstore.EmbeddingModelField+` == ""`); got != recoveryEmptyModels {
 		t.Fatalf("copy stores %d non-null empty models, want %d", got, recoveryEmptyModels)
 	}
