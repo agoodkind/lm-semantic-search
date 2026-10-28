@@ -261,6 +261,20 @@ func TestSharedStoreRecoversPartialStateAndKeepsModelNullState(t *testing.T) {
 	if err != nil || replaced {
 		t.Fatalf("second match dense index returned %t, %v, want no replacement", replaced, err)
 	}
+	dropCtx, cancelDrop := context.WithTimeout(ctx, milvusCallTimeout)
+	if err := client.ReleaseCollection(dropCtx, milvusclient.NewReleaseCollectionOption(copyVectors)); err != nil {
+		t.Fatalf("release %s: %v", copyVectors, err)
+	}
+	if err := client.DropIndex(dropCtx, milvusclient.NewDropIndexOption(copyVectors, milvusstore.DenseVectorField)); err != nil {
+		t.Fatalf("drop dense index of %s: %v", copyVectors, err)
+	}
+	cancelDrop()
+	replaced, err = shared.MatchDenseIndex(ctx, recoverySourceCopy, recoveryCopyTarget)
+	if err != nil || !replaced {
+		t.Fatalf("match dense index without a target index returned %t, %v, want a new index", replaced, err)
+	}
+	requireMmapEverywhere(t, client, copyVectors)
+	loadSharedCollections(t, client, copyVectors)
 
 	resumeAfter := rows[recoveryRows/2].ID
 	resumed, err := shared.CopyFromAfter(ctx, recoverySourceCopy, recoveryCopyTarget, sharedDeclaration, resumeAfter, nil)
