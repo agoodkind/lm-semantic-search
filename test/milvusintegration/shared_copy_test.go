@@ -100,20 +100,29 @@ func TestSharedStoreCopiesSingleCollectionExactly(t *testing.T) {
 	partialUpdateRows(t, client, sharedBaselineCollection, otherModelIDs, modelColumn)
 	time.Sleep(sharedVisibilityWait)
 
+	distinctVectors := int64(len(distinctVectorKeys(corpus.rows)))
 	copied, err := shared.CopyFrom(ctx, sharedBaselineCollection, sharedLayoutCollection, sharedDeclaration, nil)
 	if err != nil {
 		t.Fatalf("copy: %v", err)
 	}
-	if copied != int64(len(corpus.rows)) {
-		t.Fatalf("copy wrote %d rows, want %d", copied, len(corpus.rows))
+	if copied.Occurrences != int64(len(corpus.rows)) || copied.VectorsWritten != distinctVectors {
+		t.Fatalf("copy wrote %d occurrences and %d vectors, want %d and %d", copied.Occurrences, copied.VectorsWritten, len(corpus.rows), distinctVectors)
 	}
 	time.Sleep(sharedVisibilityWait)
 	report, err := shared.VerifyCopy(ctx, sharedBaselineCollection, sharedLayoutCollection, sharedDeclaration)
 	if err != nil {
 		t.Fatalf("verify copy: %v", err)
 	}
-	requireCopyReport(t, "initial copy", report, int64(len(corpus.rows)), int64(len(distinctVectorKeys(corpus.rows))))
+	requireCopyReport(t, "initial copy", report, int64(len(corpus.rows)), distinctVectors)
 	requireVectorReferencesConsistent(t, client, "initial copy", sharedLayoutCollection)
+	repeated, err := shared.CopyFrom(ctx, sharedBaselineCollection, sharedLayoutCollection, sharedDeclaration, nil)
+	if err != nil {
+		t.Fatalf("repeated copy: %v", err)
+	}
+	if repeated.VectorsWritten != 0 {
+		t.Fatalf("repeated copy wrote %d vectors, want 0", repeated.VectorsWritten)
+	}
+	t.Logf("copy wrote %d occurrences and %d vectors once; a repeated copy wrote 0 vectors", copied.Occurrences, copied.VectorsWritten)
 
 	deletedIDs := []string{corpus.rows[400].ID, corpus.rows[401].ID, corpus.rows[402].ID, corpus.rows[403].ID, corpus.rows[404].ID}
 	quoted := ""

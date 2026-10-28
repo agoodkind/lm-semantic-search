@@ -2,6 +2,8 @@ package milvus
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -18,6 +20,8 @@ const (
 	copyBatchSize = 256
 	// copyReportSampleLimit bounds the row IDs a copy report lists per class.
 	copyReportSampleLimit = 100
+	// copyMaxIDBatchSize bounds the IDs one page of MaxOccurrenceID reads.
+	copyMaxIDBatchSize = 16_384
 )
 
 // CopyReport is the result of [SharedStore.VerifyCopy]. Each count covers every
@@ -52,14 +56,15 @@ func appendSample(sample []string, id string) []string {
 }
 
 // storedRow is one stored row with every column a copy preserves: the row
-// columns, the content hash with its null state, the embedding model, and the
-// vector key of a shared occurrence row.
+// columns, the content hash and the embedding model with their null states,
+// and the vector key of a shared occurrence row.
 type storedRow struct {
-	row            collection.Row
-	contentHash    string
-	contentHashSet bool
-	embeddingModel string
-	vectorKey      string
+	row               collection.Row
+	contentHash       string
+	contentHashSet    bool
+	embeddingModel    string
+	embeddingModelSet bool
+	vectorKey         string
 }
 
 func copyOutputFields(declaration collection.Declaration, withVector bool, withKey bool) []string {
@@ -157,7 +162,7 @@ func readStoredRow(resultSet milvusclient.ResultSet, declaration collection.Decl
 	if stored.contentHash, stored.contentHashSet, err = nullableStringAt(resultSet.GetColumn(ContentHashField), rowIndex); err != nil {
 		return stored, err
 	}
-	if stored.embeddingModel, _, err = nullableStringAt(resultSet.GetColumn(EmbeddingModelField), rowIndex); err != nil {
+	if stored.embeddingModel, stored.embeddingModelSet, err = nullableStringAt(resultSet.GetColumn(EmbeddingModelField), rowIndex); err != nil {
 		return stored, err
 	}
 	if withVector {
@@ -191,19 +196,43 @@ func (store *SharedStore) writeStoredRows(ctx context.Context, target string, de
 	}
 	plain := make([]collection.Row, 0, len(rows))
 	identity := rowIdentity{
-		contentHashes:   make([]string, 0, len(rows)),
-		contentHashSet:  make([]bool, 0, len(rows)),
-		embeddingModels: make([]string, 0, len(rows)),
+		contentHashes:     make([]string, 0, len(rows)),
+		contentHashSet:    make([]bool, 0, len(rows)),
+		embeddingModels:   make([]string, 0, len(rows)),
+		embeddingModelSet: make([]bool, 0, len(rows)),
 	}
 	for _, row := range rows {
 		plain = append(plain, row.row)
 		identity.contentHashes = append(identity.contentHashes, row.contentHash)
 		identity.contentHashSet = append(identity.contentHashSet, row.contentHashSet)
 		identity.embeddingModels = append(identity.embeddingModels, row.embeddingModel)
+		identity.embeddingModelSet = append(identity.embeddingModelSet, row.embeddingModelSet)
 	}
 	store.write.Lock()
 	defer store.write.Unlock()
 	return store.writeRows(ctx, target, declaration, plain, identity)
+}
+
+// requireDeclarationCovers fails when the source stores a scalar column that
+// the declaration does not list. A copy reads and compares only declared
+// columns.
+func (store *SharedStore) requireDeclarationCovers(ctx context.Context, source string, declaration collection.Declaration) error {
+	stored, err := store.storedDeclaration(ctx, source, declaration.ItemIDColumn)
+	if err != nil {
+		return err
+	}
+	declared := make(map[string]struct{}, len(declaration.Scalars))
+	for _, scalar := range declaration.Scalars {
+		declared[scalar.Name] = struct{}{}
+	}
+	for _, scalar := range stored.Scalars {
+		if _, found := declared[scalar.Name]; !found {
+			err := fmt.Errorf("copy from %s: the declaration does not declare source column %s", source, scalar.Name)
+			slog.ErrorContext(ctx, "collection.shared_copy_declaration_incomplete", "source", source, "err", err)
+			return err
+		}
+	}
+	return nil
 }
 
 // CopyFrom copies every row of the single-collection source into the shared
@@ -211,23 +240,212 @@ func (store *SharedStore) writeStoredRows(ctx context.Context, target string, de
 // state, the embedding model, and the exact vector bytes. It never embeds. A
 // repeated copy rewrites the same rows. progress receives the copied row count
 // after each page.
-func (store *SharedStore) CopyFrom(ctx context.Context, source string, target string, declaration collection.Declaration, progress func(int64)) (int64, error) {
-	var copied int64
-	err := store.iterateBatch(ctx, source, IDField+` != ""`, copyOutputFields(declaration, true, false), copyBatchSize, func(resultSet milvusclient.ResultSet) error {
+func (store *SharedStore) CopyFrom(ctx context.Context, source string, target string, declaration collection.Declaration, progress func(int64)) (CopyResult, error) {
+	return store.CopyFromAfter(ctx, source, target, declaration, "", progress)
+}
+
+// CopyResult counts the rows one copy wrote: every copied occurrence row, and
+// the vector rows the copy wrote because the target did not store them with
+// their exact superset.
+type CopyResult struct {
+	Occurrences    int64
+	VectorsWritten int64
+}
+
+// CopyFromAfter copies the source rows with primary keys that sort after
+// afterID as strings, which is the Milvus VarChar primary key order, the same
+// way [SharedStore.CopyFrom] copies every row. An empty afterID copies
+// every row. The first pass writes every occurrence row after afterID. The
+// second pass reads the vector of every source row, including rows at or below
+// afterID that an earlier stopped copy wrote without their vectors, and writes
+// each distinct vector once, with the superset of every occurrence that
+// references it. A vector row that already stores that superset is not written
+// again.
+func (store *SharedStore) CopyFromAfter(ctx context.Context, source string, target string, declaration collection.Declaration, afterID string, progress func(int64)) (CopyResult, error) {
+	result := CopyResult{Occurrences: 0, VectorsWritten: 0}
+	if err := store.requireDeclarationCovers(ctx, source, declaration); err != nil {
+		return result, err
+	}
+	expression := IDField + ` != ""`
+	if afterID != "" {
+		expression = IDField + ` > "` + collection.EscapeString(afterID) + `"`
+	}
+	occurrences := strings.TrimSpace(target)
+	err := store.iterateBatch(ctx, source, expression, copyOutputFields(declaration, true, false), copyBatchSize, func(resultSet milvusclient.ResultSet) error {
 		rows, err := readStoredRows(resultSet, declaration, true, false)
 		if err != nil {
 			return err
 		}
-		if err := store.writeStoredRows(ctx, target, declaration, rows); err != nil {
+		if err := store.writeStoredOccurrences(ctx, occurrences, declaration, rows); err != nil {
 			return err
 		}
-		copied += int64(len(rows))
+		result.Occurrences += int64(len(rows))
 		if progress != nil {
-			progress(copied)
+			progress(result.Occurrences)
 		}
 		return nil
 	})
-	return copied, err
+	if err != nil {
+		return result, err
+	}
+	result.VectorsWritten, err = store.writeCopiedVectors(ctx, source, occurrences, declaration.Scalars, IDField+` != ""`)
+	slog.InfoContext(ctx, "collection.shared_copy_vectors_written", "target", occurrences, "occurrences", result.Occurrences, "vectors_written", result.VectorsWritten)
+	return result, err
+}
+
+// writeStoredOccurrences writes the occurrence rows of copied rows with the
+// identity each source row stores. It does not write vector rows.
+func (store *SharedStore) writeStoredOccurrences(ctx context.Context, occurrences string, declaration collection.Declaration, rows []storedRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	plain := make([]collection.Row, 0, len(rows))
+	keys := make([]string, 0, len(rows))
+	identity := rowIdentity{
+		contentHashes:     make([]string, 0, len(rows)),
+		contentHashSet:    make([]bool, 0, len(rows)),
+		embeddingModels:   make([]string, 0, len(rows)),
+		embeddingModelSet: make([]bool, 0, len(rows)),
+	}
+	for _, row := range rows {
+		plain = append(plain, row.row)
+		keys = append(keys, VectorKey(row.row.Vector))
+		identity.contentHashes = append(identity.contentHashes, row.contentHash)
+		identity.contentHashSet = append(identity.contentHashSet, row.contentHashSet)
+		identity.embeddingModels = append(identity.embeddingModels, row.embeddingModel)
+		identity.embeddingModelSet = append(identity.embeddingModelSet, row.embeddingModelSet)
+	}
+	store.write.Lock()
+	defer store.write.Unlock()
+	for start := 0; start < len(plain); start += sharedWriteBatchSize {
+		end := min(start+sharedWriteBatchSize, len(plain))
+		option, err := buildOccurrenceWriteOption(ctx, occurrences, plain[start:end], keys[start:end], declaration.Scalars, identity.slice(start, end))
+		if err != nil {
+			return err
+		}
+		if _, err := store.inner.client.Upsert(ctx, option); err != nil {
+			return WrapError(ctx, err, "upsert Milvus occurrences into "+occurrences)
+		}
+	}
+	return nil
+}
+
+// writeCopiedVectors reads the vectors of the source rows an expression
+// matches and writes each distinct vector once into the vector collection of
+// occurrences, with the superset of every stored occurrence that references
+// it. It skips a vector row that already stores that superset and returns the
+// number of written vector rows.
+func (store *SharedStore) writeCopiedVectors(ctx context.Context, source string, occurrences string, scalars []collection.ScalarColumn, expression string) (int64, error) {
+	vectors := VectorCollectionName(occurrences)
+	// done stores the SHA-256 digest of each finished vector key instead of
+	// its 64-character hex string.
+	done := map[[sha256.Size]byte]struct{}{}
+	var written int64
+	err := store.iterateBatch(ctx, source, expression, []string{IDField, DenseVectorField}, copyBatchSize, func(resultSet milvusclient.ResultSet) error {
+		vectorColumn := resultSet.GetColumn(DenseVectorField)
+		if vectorColumn == nil {
+			return collection.ErrSearchResultIncomplete
+		}
+		records := map[string]*vectorRecord{}
+		dimension := 0
+		for rowIndex := range resultSet.ResultCount {
+			vector, err := VectorAt(vectorColumn, rowIndex)
+			if err != nil {
+				return err
+			}
+			key := VectorKey(vector)
+			digest, err := vectorKeyDigest(key)
+			if err != nil {
+				return err
+			}
+			if _, finished := done[digest]; finished {
+				continue
+			}
+			done[digest] = struct{}{}
+			dimension = len(vector)
+			records[key] = newVectorRecord(key, vector, scalars)
+		}
+		if len(records) == 0 {
+			return nil
+		}
+		pageWritten, err := store.writeExactVectors(ctx, occurrences, vectors, dimension, scalars, records)
+		written += pageWritten
+		return err
+	})
+	return written, err
+}
+
+// vectorKeyDigest decodes a hex vector key into its SHA-256 digest bytes.
+func vectorKeyDigest(key string) ([sha256.Size]byte, error) {
+	var digest [sha256.Size]byte
+	decoded, err := hex.DecodeString(key)
+	if err != nil || len(decoded) != sha256.Size {
+		return digest, fmt.Errorf("vector key %q is not a hex SHA-256 digest", key)
+	}
+	copy(digest[:], decoded)
+	return digest, nil
+}
+
+// writeExactVectors fills records with the superset of every stored occurrence
+// that references each record and writes the records that the vector
+// collection does not already store with that superset.
+func (store *SharedStore) writeExactVectors(ctx context.Context, occurrences string, vectors string, dimension int, scalars []collection.ScalarColumn, records map[string]*vectorRecord) (int64, error) {
+	store.write.Lock()
+	defer store.write.Unlock()
+	keys := sortedRecordKeys(records)
+	outputFields := []string{VectorKeyField}
+	for _, declared := range scalars {
+		outputFields = append(outputFields, declared.Name)
+	}
+	err := store.iterate(ctx, occurrences, vectorKeysExpression(keys), outputFields, func(resultSet milvusclient.ResultSet) error {
+		return addOccurrenceCells(resultSet, scalars, records)
+	})
+	if err != nil {
+		return 0, err
+	}
+	stored, err := store.storedSupersets(ctx, vectors, scalars, keys)
+	if err != nil {
+		return 0, err
+	}
+	ordered := make([]*vectorRecord, 0, len(records))
+	for _, key := range keys {
+		if storedRecord, found := stored[key]; found && storedRecord.equalRecord(records[key]) {
+			continue
+		}
+		ordered = append(ordered, records[key])
+	}
+	for start := 0; start < len(ordered); start += sharedWriteBatchSize {
+		batch := ordered[start:min(start+sharedWriteBatchSize, len(ordered))]
+		option, err := vectorUpsertOption(vectors, dimension, scalars, batch)
+		if err != nil {
+			return 0, err
+		}
+		if _, err := store.inner.client.Upsert(ctx, option); err != nil {
+			return 0, WrapError(ctx, err, "upsert Milvus vectors into "+vectors)
+		}
+	}
+	return int64(len(ordered)), nil
+}
+
+// MaxOccurrenceID scans every primary key of the shared occurrence collection
+// and returns the largest one in string order, the order
+// [SharedStore.CopyFromAfter] uses. It returns an empty string for an empty
+// collection, and CopyFromAfter copies every row after an empty string.
+func (store *SharedStore) MaxOccurrenceID(ctx context.Context, target string) (string, error) {
+	largest := ""
+	err := store.iterateBatch(ctx, strings.TrimSpace(target), IDField+` != ""`, []string{IDField}, copyMaxIDBatchSize, func(resultSet milvusclient.ResultSet) error {
+		for rowIndex := range resultSet.ResultCount {
+			id, err := requiredString(resultSet, IDField, rowIndex)
+			if err != nil {
+				return err
+			}
+			if id > largest {
+				largest = id
+			}
+		}
+		return nil
+	})
+	return largest, err
 }
 
 // CopyIDs copies the source rows with the given IDs into the shared target, the
@@ -276,6 +494,9 @@ func (store *SharedStore) RemoveOccurrences(ctx context.Context, target string, 
 // source lacks and target vectors that no row references.
 func (store *SharedStore) VerifyCopy(ctx context.Context, source string, target string, declaration collection.Declaration) (CopyReport, error) {
 	report := CopyReport{Missing: nil, Mismatched: nil, Extra: nil}
+	if err := store.requireDeclarationCovers(ctx, source, declaration); err != nil {
+		return report, err
+	}
 	err := store.iterateBatch(ctx, source, IDField+` != ""`, copyOutputFields(declaration, true, false), copyBatchSize, func(resultSet milvusclient.ResultSet) error {
 		sourceRows, err := readStoredRows(resultSet, declaration, true, false)
 		if err != nil {
@@ -359,7 +580,8 @@ func sameStoredRow(source storedRow, target storedRow, targetVector []float32, d
 		left.SplitPart != right.SplitPart || left.SplitPartRecorded != right.SplitPartRecorded {
 		return false
 	}
-	if source.contentHash != target.contentHash || source.contentHashSet != target.contentHashSet || source.embeddingModel != target.embeddingModel {
+	if source.contentHash != target.contentHash || source.contentHashSet != target.contentHashSet ||
+		source.embeddingModel != target.embeddingModel || source.embeddingModelSet != target.embeddingModelSet {
 		return false
 	}
 	for _, declared := range declaration.Scalars {

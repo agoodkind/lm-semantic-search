@@ -53,9 +53,9 @@ func (store *SharedStore) Inner() *Store {
 	return store.inner
 }
 
-// EnsureCollection creates the occurrence and vector collections when both are
-// absent. It fails when only one exists, and when the declaration adds a
-// scalar column the stored occurrence collection lacks.
+// EnsureCollection creates each absent collection of the occurrence and vector
+// pair with mmap enabled on every field and index. It fails when the
+// declaration adds a scalar column the stored occurrence collection lacks.
 func (store *SharedStore) EnsureCollection(ctx context.Context, request collection.EnsureRequest) error {
 	occurrences := strings.TrimSpace(request.Collection)
 	if occurrences == "" {
@@ -71,20 +71,22 @@ func (store *SharedStore) EnsureCollection(ctx context.Context, request collecti
 	if err != nil {
 		return WrapError(ctx, err, "check Milvus collection "+vectors)
 	}
-	if occurrencesExist != vectorsExist {
-		return fmt.Errorf("shared collection %s is incomplete: occurrence collection present=%t, vector collection present=%t", occurrences, occurrencesExist, vectorsExist)
-	}
-	if !occurrencesExist {
+	if !vectorsExist {
 		if request.Dimension <= 0 {
 			return fmt.Errorf("create shared collection %s: dimension %d is not positive", occurrences, request.Dimension)
 		}
 		if err := client.CreateCollection(ctx, store.inner.vectorCollectionOption(vectors, request.Dimension, request.Declaration.Scalars)); err != nil {
 			return WrapError(ctx, err, "create Milvus collection "+vectors)
 		}
+		if err := store.enableMmap(ctx, vectors); err != nil {
+			return err
+		}
+	}
+	if !occurrencesExist {
 		if err := client.CreateCollection(ctx, store.inner.occurrenceCollectionOption(occurrences, request.Declaration.Scalars)); err != nil {
 			return WrapError(ctx, err, "create Milvus collection "+occurrences)
 		}
-		return nil
+		return store.enableMmap(ctx, occurrences)
 	}
 	described, err := client.DescribeCollection(ctx, milvusclient.NewDescribeCollectionOption(occurrences))
 	if err != nil {
@@ -145,11 +147,15 @@ func (store *SharedStore) writeRows(ctx context.Context, occurrences string, dec
 	if err != nil {
 		return err
 	}
-	if err := store.mergeStoredSupersets(ctx, vectors, declaration.Scalars, records); err != nil {
+	unchanged, err := store.mergeStoredSupersets(ctx, vectors, declaration.Scalars, records)
+	if err != nil {
 		return err
 	}
 	ordered := make([]*vectorRecord, 0, len(records))
 	for _, key := range sortedRecordKeys(records) {
+		if _, skip := unchanged[key]; skip {
+			continue
+		}
 		ordered = append(ordered, records[key])
 	}
 	for start := 0; start < len(ordered); start += sharedWriteBatchSize {
@@ -484,10 +490,10 @@ func (store *SharedStore) occurrenceKeyMap(ctx context.Context, occurrences stri
 	return keyByID, nil
 }
 
-// mergeStoredSupersets adds the stored supersets of existing vector rows into
-// records.
-func (store *SharedStore) mergeStoredSupersets(ctx context.Context, vectors string, scalars []collection.ScalarColumn, records map[string]*vectorRecord) error {
-	keys := sortedRecordKeys(records)
+// storedSupersets reads the supersets of the stored vector rows among keys.
+// The result omits a key without a stored row.
+func (store *SharedStore) storedSupersets(ctx context.Context, vectors string, scalars []collection.ScalarColumn, keys []string) (map[string]*vectorRecord, error) {
+	stored := make(map[string]*vectorRecord, len(keys))
 	outputFields := append([]string{VectorKeyField}, supersetOutputFields(scalars)...)
 	for start := 0; start < len(keys); start += vectorKeyBatchSize {
 		batch := keys[start:min(start+vectorKeyBatchSize, len(keys))]
@@ -496,30 +502,52 @@ func (store *SharedStore) mergeStoredSupersets(ctx context.Context, vectors stri
 			WithOutputFields(outputFields...).
 			WithConsistencyLevel(entity.ClStrong))
 		if err != nil {
-			return WrapError(ctx, err, "read vector supersets of "+vectors)
+			return nil, WrapError(ctx, err, "read vector supersets of "+vectors)
 		}
 		if resultSet.ResultCount == 0 {
 			continue
 		}
 		keyColumn := resultSet.GetColumn(VectorKeyField)
 		if keyColumn == nil {
-			return collection.ErrSearchResultIncomplete
+			return nil, collection.ErrSearchResultIncomplete
 		}
 		for rowIndex := range resultSet.ResultCount {
 			key, err := keyColumn.GetAsString(rowIndex)
 			if err != nil {
-				return rowReadError(VectorKeyField, rowIndex, err)
+				return nil, rowReadError(VectorKeyField, rowIndex, err)
 			}
-			stored := newVectorRecord(key, nil, scalars)
-			if err := supersetsFromResult(resultSet, rowIndex, scalars, stored); err != nil {
-				return err
+			record := newVectorRecord(key, nil, scalars)
+			if err := supersetsFromResult(resultSet, rowIndex, scalars, record); err != nil {
+				return nil, err
 			}
-			for name, superset := range stored.supersets {
-				records[key].supersets[name].merge(superset)
-			}
+			stored[key] = record
 		}
 	}
-	return nil
+	return stored, nil
+}
+
+// mergeStoredSupersets adds the stored supersets of existing vector rows into
+// records. It returns each key with a stored superset that already contained
+// the record superset. Those vector rows do not need a write.
+func (store *SharedStore) mergeStoredSupersets(ctx context.Context, vectors string, scalars []collection.ScalarColumn, records map[string]*vectorRecord) (map[string]struct{}, error) {
+	stored, err := store.storedSupersets(ctx, vectors, scalars, sortedRecordKeys(records))
+	if err != nil {
+		return nil, err
+	}
+	unchanged := make(map[string]struct{}, len(stored))
+	for key, storedRecord := range stored {
+		record, requested := records[key]
+		if !requested {
+			return nil, fmt.Errorf("read vector supersets of %s: unrequested vector key %q", vectors, key)
+		}
+		if storedRecord.containsRecord(record) {
+			unchanged[key] = struct{}{}
+		}
+		for name, superset := range storedRecord.supersets {
+			record.supersets[name].merge(superset)
+		}
+	}
+	return unchanged, nil
 }
 
 func (store *SharedStore) vectorsByKey(ctx context.Context, vectors string, keys []string) (map[string][]float32, error) {
@@ -559,11 +587,19 @@ func (store *SharedStore) vectorsByKey(ctx context.Context, vectors string, keys
 // deleteUnreferencedVectors deletes the vector rows among keys that no
 // occurrence references.
 func (store *SharedStore) deleteUnreferencedVectors(ctx context.Context, occurrences string, vectors string, keys []string) error {
+	_, err := store.removeUnreferencedKeys(ctx, occurrences, vectors, keys)
+	return err
+}
+
+// removeUnreferencedKeys deletes the vectors among keys that no occurrence
+// references and returns the number of deleted vector rows.
+func (store *SharedStore) removeUnreferencedKeys(ctx context.Context, occurrences string, vectors string, keys []string) (int64, error) {
+	var deleted int64
 	for start := 0; start < len(keys); start += vectorKeyBatchSize {
 		batch := keys[start:min(start+vectorKeyBatchSize, len(keys))]
 		referenced, err := store.iterateVectorKeys(ctx, occurrences, vectorKeysExpression(batch))
 		if err != nil {
-			return err
+			return deleted, err
 		}
 		live := map[string]struct{}{}
 		for _, key := range referenced {
@@ -578,11 +614,13 @@ func (store *SharedStore) deleteUnreferencedVectors(ctx context.Context, occurre
 		if len(unreferenced) == 0 {
 			continue
 		}
-		if _, err := store.inner.client.Delete(ctx, milvusclient.NewDeleteOption(vectors).WithStringIDs(VectorKeyField, unreferenced)); err != nil {
-			return WrapError(ctx, err, "delete unreferenced vectors from "+vectors)
+		result, err := store.inner.client.Delete(ctx, milvusclient.NewDeleteOption(vectors).WithStringIDs(VectorKeyField, slices.Clone(unreferenced)))
+		if err != nil {
+			return deleted, WrapError(ctx, err, "delete unreferenced vectors from "+vectors)
 		}
+		deleted += result.DeleteCount
 	}
-	return nil
+	return deleted, nil
 }
 
 // iterateVectorKeys returns the distinct vector keys of the occurrences an
@@ -704,35 +742,40 @@ func sortedRecordKeys(records map[string]*vectorRecord) []string {
 }
 
 // rowIdentity is the reuse identity an occurrence write stores for each row:
-// the content hash with its null state and the embedding model. An empty model
-// writes null.
+// the content hash and the embedding model, each with its null state.
 type rowIdentity struct {
-	contentHashes   []string
-	contentHashSet  []bool
-	embeddingModels []string
+	contentHashes     []string
+	contentHashSet    []bool
+	embeddingModels   []string
+	embeddingModelSet []bool
 }
 
 // computedIdentity is the identity [SharedStore.Upsert] writes: the hash of each
-// row's content and one embedding model for every row.
+// row's content and one embedding model for every row. An empty model writes
+// null.
 func computedIdentity(rows []collection.Row, embeddingModel string) rowIdentity {
+	normalizedModel, _ := SanitizeUTF8(embeddingModel)
 	identity := rowIdentity{
-		contentHashes:   make([]string, 0, len(rows)),
-		contentHashSet:  make([]bool, 0, len(rows)),
-		embeddingModels: make([]string, 0, len(rows)),
+		contentHashes:     make([]string, 0, len(rows)),
+		contentHashSet:    make([]bool, 0, len(rows)),
+		embeddingModels:   make([]string, 0, len(rows)),
+		embeddingModelSet: make([]bool, 0, len(rows)),
 	}
 	for _, row := range rows {
 		identity.contentHashes = append(identity.contentHashes, ContentHash(row.Content))
 		identity.contentHashSet = append(identity.contentHashSet, true)
-		identity.embeddingModels = append(identity.embeddingModels, embeddingModel)
+		identity.embeddingModels = append(identity.embeddingModels, normalizedModel)
+		identity.embeddingModelSet = append(identity.embeddingModelSet, normalizedModel != "")
 	}
 	return identity
 }
 
 func (identity rowIdentity) slice(start int, end int) rowIdentity {
 	return rowIdentity{
-		contentHashes:   identity.contentHashes[start:end],
-		contentHashSet:  identity.contentHashSet[start:end],
-		embeddingModels: identity.embeddingModels[start:end],
+		contentHashes:     identity.contentHashes[start:end],
+		contentHashSet:    identity.contentHashSet[start:end],
+		embeddingModels:   identity.embeddingModels[start:end],
+		embeddingModelSet: identity.embeddingModelSet[start:end],
 	}
 }
 
@@ -744,9 +787,10 @@ func buildOccurrenceWriteOption(ctx context.Context, collectionName string, rows
 	if err != nil {
 		return nil, err
 	}
-	embeddingModelColumn, err := NewRowEmbeddingModelColumn(collectionName, identity.embeddingModels)
+	embeddingModelColumn, err := column.NewNullableColumnVarChar(EmbeddingModelField, identity.embeddingModels, identity.embeddingModelSet, column.WithSparseNullableMode[string](true))
 	if err != nil {
-		return nil, err
+		slog.ErrorContext(ctx, "build embedding model column failed", "collection", collectionName, "err", err)
+		return nil, fmt.Errorf("build embedding model column for %s: %w", collectionName, err)
 	}
 	contentHashColumn, err := column.NewNullableColumnVarChar(ContentHashField, identity.contentHashes, identity.contentHashSet, column.WithSparseNullableMode[string](true))
 	if err != nil {
