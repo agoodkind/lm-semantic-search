@@ -237,9 +237,9 @@ func (store *SharedStore) requireDeclarationCovers(ctx context.Context, source s
 // CopyFrom copies every row of the single-collection source into the shared
 // target. It keeps each row's ID, every column, the content hash with its null
 // state, the embedding model, and the exact vector bytes. It never embeds. A
-// repeated copy rewrites the same rows. progress receives the copied row count
-// after each page.
-func (store *SharedStore) CopyFrom(ctx context.Context, source string, target string, declaration collection.Declaration, progress func(int64)) (CopyResult, error) {
+// repeated copy rewrites the same rows. progress receives the rows each phase
+// has processed after each page.
+func (store *SharedStore) CopyFrom(ctx context.Context, source string, target string, declaration collection.Declaration, progress ProgressFunc) (CopyResult, error) {
 	return store.CopyFromAfter(ctx, source, target, declaration, "", progress)
 }
 
@@ -260,7 +260,7 @@ type CopyResult struct {
 // each distinct vector once, with the superset of every occurrence that
 // references it. A vector row that already stores that superset is not written
 // again.
-func (store *SharedStore) CopyFromAfter(ctx context.Context, source string, target string, declaration collection.Declaration, afterID string, progress func(int64)) (CopyResult, error) {
+func (store *SharedStore) CopyFromAfter(ctx context.Context, source string, target string, declaration collection.Declaration, afterID string, progress ProgressFunc) (CopyResult, error) {
 	result := CopyResult{Occurrences: 0, VectorsWritten: 0}
 	if err := store.requireDeclarationCovers(ctx, source, declaration); err != nil {
 		return result, err
@@ -270,7 +270,12 @@ func (store *SharedStore) CopyFromAfter(ctx context.Context, source string, targ
 		expression = IDField + ` > "` + collection.EscapeString(afterID) + `"`
 	}
 	occurrences := strings.TrimSpace(target)
-	err := store.iterateBatch(ctx, source, expression, copyOutputFields(declaration, true, false), copyBatchSize, func(resultSet milvusclient.ResultSet) error {
+	copyTotal, err := store.countRows(ctx, source, expression)
+	if err != nil {
+		return result, err
+	}
+	progress.report(CopyPhaseOccurrences, 0, copyTotal)
+	err = store.iterateBatch(ctx, source, expression, copyOutputFields(declaration, true, false), copyBatchSize, func(resultSet milvusclient.ResultSet) error {
 		rows, err := readStoredRows(resultSet, declaration, true, false)
 		if err != nil {
 			return err
@@ -279,15 +284,13 @@ func (store *SharedStore) CopyFromAfter(ctx context.Context, source string, targ
 			return err
 		}
 		result.Occurrences += int64(len(rows))
-		if progress != nil {
-			progress(result.Occurrences)
-		}
+		progress.report(CopyPhaseOccurrences, result.Occurrences, copyTotal)
 		return nil
 	})
 	if err != nil {
 		return result, err
 	}
-	result.VectorsWritten, err = store.writeCopiedVectors(ctx, source, occurrences, declaration.Scalars, IDField+` != ""`)
+	result.VectorsWritten, err = store.writeCopiedVectors(ctx, source, occurrences, declaration.Scalars, IDField+` != ""`, progress)
 	slog.InfoContext(ctx, "collection.shared_copy_vectors_written", "target", occurrences, "occurrences", result.Occurrences, "vectors_written", result.VectorsWritten)
 	return result, err
 }
@@ -334,17 +337,25 @@ func (store *SharedStore) writeStoredOccurrences(ctx context.Context, occurrence
 // occurrences, with the superset of every stored occurrence that references
 // it. It skips a vector row that already stores that superset and returns the
 // number of written vector rows.
-func (store *SharedStore) writeCopiedVectors(ctx context.Context, source string, occurrences string, scalars []collection.ScalarColumn, expression string) (int64, error) {
+func (store *SharedStore) writeCopiedVectors(ctx context.Context, source string, occurrences string, scalars []collection.ScalarColumn, expression string, progress ProgressFunc) (int64, error) {
 	vectors := VectorCollectionName(occurrences)
+	total, err := store.countRows(ctx, source, expression)
+	if err != nil {
+		return 0, err
+	}
+	progress.report(CopyPhaseVectors, 0, total)
+	var scanned int64
 	// done stores the SHA-256 digest of each finished vector key instead of
 	// its 64-character hex string.
 	done := map[[sha256.Size]byte]struct{}{}
 	var written int64
-	err := store.iterateBatch(ctx, source, expression, []string{IDField, DenseVectorField}, copyBatchSize, func(resultSet milvusclient.ResultSet) error {
+	err = store.iterateBatch(ctx, source, expression, []string{IDField, DenseVectorField}, copyBatchSize, func(resultSet milvusclient.ResultSet) error {
 		vectorColumn := resultSet.GetColumn(DenseVectorField)
 		if vectorColumn == nil {
 			return collection.ErrSearchResultIncomplete
 		}
+		scanned += int64(resultSet.ResultCount)
+		defer progress.report(CopyPhaseVectors, scanned, total)
 		records := map[string]*vectorRecord{}
 		dimension := 0
 		for rowIndex := range resultSet.ResultCount {
@@ -491,26 +502,34 @@ func (store *SharedStore) RemoveOccurrences(ctx context.Context, target string, 
 // by row. It checks every column, the content hash null state, the embedding
 // model, the vector key, and the exact vector bytes, then lists target rows the
 // source lacks and target vectors that no row references.
-func (store *SharedStore) VerifyCopy(ctx context.Context, source string, target string, declaration collection.Declaration) (CopyReport, error) {
+// progress receives the rows each verification phase has processed after each
+// page.
+func (store *SharedStore) VerifyCopy(ctx context.Context, source string, target string, declaration collection.Declaration, progress ProgressFunc) (CopyReport, error) {
 	report := CopyReport{Missing: nil, Mismatched: nil, Extra: nil}
 	if err := store.requireDeclarationCovers(ctx, source, declaration); err != nil {
 		return report, err
 	}
-	err := store.iterateBatch(ctx, source, IDField+` != ""`, copyOutputFields(declaration, true, false), copyBatchSize, func(resultSet milvusclient.ResultSet) error {
+	sourceTotal, err := store.countRows(ctx, source, IDField+` != ""`)
+	if err != nil {
+		return report, err
+	}
+	progress.report(VerifyPhaseRows, 0, sourceTotal)
+	err = store.iterateBatch(ctx, source, IDField+` != ""`, copyOutputFields(declaration, true, false), copyBatchSize, func(resultSet milvusclient.ResultSet) error {
 		sourceRows, err := readStoredRows(resultSet, declaration, true, false)
 		if err != nil {
 			return err
 		}
 		report.SourceRows += int64(len(sourceRows))
+		defer progress.report(VerifyPhaseRows, report.SourceRows, sourceTotal)
 		return store.compareCopyPage(ctx, target, declaration, sourceRows, &report)
 	})
 	if err != nil {
 		return report, err
 	}
-	if err := store.countExtraRows(ctx, source, target, &report); err != nil {
+	if err := store.countExtraRows(ctx, source, target, &report, progress); err != nil {
 		return report, err
 	}
-	if err := store.countUnreferencedVectors(ctx, target, &report); err != nil {
+	if err := store.countUnreferencedVectors(ctx, target, &report, progress); err != nil {
 		return report, err
 	}
 	slog.InfoContext(ctx, "collection.shared_copy_verified", "source", source, "target", target,
@@ -593,7 +612,12 @@ func sameStoredRow(source storedRow, target storedRow, targetVector []float32, d
 
 // countExtraRows counts the target rows and the target row IDs the source
 // lacks.
-func (store *SharedStore) countExtraRows(ctx context.Context, source string, target string, report *CopyReport) error {
+func (store *SharedStore) countExtraRows(ctx context.Context, source string, target string, report *CopyReport, progress ProgressFunc) error {
+	total, err := store.countRows(ctx, target, IDField+` != ""`)
+	if err != nil {
+		return err
+	}
+	progress.report(VerifyPhaseExtraRows, 0, total)
 	return store.iterateBatch(ctx, target, IDField+` != ""`, []string{IDField}, copyBatchSize, func(resultSet milvusclient.ResultSet) error {
 		ids := make([]string, 0, resultSet.ResultCount)
 		for rowIndex := range resultSet.ResultCount {
@@ -604,6 +628,7 @@ func (store *SharedStore) countExtraRows(ctx context.Context, source string, tar
 			ids = append(ids, id)
 		}
 		report.TargetRows += int64(len(ids))
+		defer progress.report(VerifyPhaseExtraRows, report.TargetRows, total)
 		present, err := store.inner.client.Get(ctx, milvusclient.NewQueryOption(source).
 			WithIDs(primaryKeyColumn(IDField, ids)).
 			WithOutputFields(IDField).
@@ -633,9 +658,22 @@ func (store *SharedStore) countExtraRows(ctx context.Context, source string, tar
 // target row references. It reads the vector key of every occurrence row once
 // into a set of SHA-256 digests, then reads every vector key once and checks it
 // against that set.
-func (store *SharedStore) countUnreferencedVectors(ctx context.Context, target string, report *CopyReport) error {
+func (store *SharedStore) countUnreferencedVectors(ctx context.Context, target string, report *CopyReport, progress ProgressFunc) error {
+	vectors := VectorCollectionName(target)
+	referenceTotal, err := store.countRows(ctx, target, IDField+` != ""`)
+	if err != nil {
+		return err
+	}
+	vectorTotal, err := store.countRows(ctx, vectors, VectorKeyField+` != ""`)
+	if err != nil {
+		return err
+	}
 	referenced := map[[sha256.Size]byte]struct{}{}
-	err := store.iterateBatch(ctx, target, IDField+` != ""`, []string{VectorKeyField}, copyMaxIDBatchSize, func(resultSet milvusclient.ResultSet) error {
+	var referenceRows int64
+	progress.report(VerifyPhaseReferences, 0, referenceTotal)
+	err = store.iterateBatch(ctx, target, IDField+` != ""`, []string{VectorKeyField}, copyMaxIDBatchSize, func(resultSet milvusclient.ResultSet) error {
+		referenceRows += int64(resultSet.ResultCount)
+		defer progress.report(VerifyPhaseReferences, referenceRows, referenceTotal)
 		for rowIndex := range resultSet.ResultCount {
 			key, keyErr := requiredString(resultSet, VectorKeyField, rowIndex)
 			if keyErr != nil {
@@ -652,7 +690,9 @@ func (store *SharedStore) countUnreferencedVectors(ctx context.Context, target s
 	if err != nil {
 		return err
 	}
-	return store.iterateBatch(ctx, VectorCollectionName(target), VectorKeyField+` != ""`, []string{VectorKeyField}, copyMaxIDBatchSize, func(resultSet milvusclient.ResultSet) error {
+	progress.report(VerifyPhaseVectors, 0, vectorTotal)
+	return store.iterateBatch(ctx, vectors, VectorKeyField+` != ""`, []string{VectorKeyField}, copyMaxIDBatchSize, func(resultSet milvusclient.ResultSet) error {
+		defer func() { progress.report(VerifyPhaseVectors, report.TargetVectors, vectorTotal) }()
 		for rowIndex := range resultSet.ResultCount {
 			key, keyErr := requiredString(resultSet, VectorKeyField, rowIndex)
 			if keyErr != nil {
