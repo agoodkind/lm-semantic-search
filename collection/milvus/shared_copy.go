@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 
 	"github.com/milvus-io/milvus/client/v3/column"
@@ -631,25 +630,40 @@ func (store *SharedStore) countExtraRows(ctx context.Context, source string, tar
 }
 
 // countUnreferencedVectors counts the target vectors and the vectors that no
-// target row references.
+// target row references. It reads the vector key of every occurrence row once
+// into a set of SHA-256 digests, then reads every vector key once and checks it
+// against that set.
 func (store *SharedStore) countUnreferencedVectors(ctx context.Context, target string, report *CopyReport) error {
-	vectors := VectorCollectionName(target)
-	return store.iterateBatch(ctx, vectors, VectorKeyField+` != ""`, []string{VectorKeyField}, vectorKeyBatchSize, func(resultSet milvusclient.ResultSet) error {
-		keys := make([]string, 0, resultSet.ResultCount)
+	referenced := map[[sha256.Size]byte]struct{}{}
+	err := store.iterateBatch(ctx, target, IDField+` != ""`, []string{VectorKeyField}, copyMaxIDBatchSize, func(resultSet milvusclient.ResultSet) error {
 		for rowIndex := range resultSet.ResultCount {
-			key, err := requiredString(resultSet, VectorKeyField, rowIndex)
-			if err != nil {
-				return err
+			key, keyErr := requiredString(resultSet, VectorKeyField, rowIndex)
+			if keyErr != nil {
+				return keyErr
 			}
-			keys = append(keys, key)
+			digest, digestErr := vectorKeyDigest(key)
+			if digestErr != nil {
+				return digestErr
+			}
+			referenced[digest] = struct{}{}
 		}
-		report.TargetVectors += int64(len(keys))
-		referenced, err := store.iterateVectorKeys(ctx, target, vectorKeysExpression(keys))
-		if err != nil {
-			return err
-		}
-		for _, key := range keys {
-			if !slices.Contains(referenced, key) {
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return store.iterateBatch(ctx, VectorCollectionName(target), VectorKeyField+` != ""`, []string{VectorKeyField}, copyMaxIDBatchSize, func(resultSet milvusclient.ResultSet) error {
+		for rowIndex := range resultSet.ResultCount {
+			key, keyErr := requiredString(resultSet, VectorKeyField, rowIndex)
+			if keyErr != nil {
+				return keyErr
+			}
+			digest, digestErr := vectorKeyDigest(key)
+			if digestErr != nil {
+				return digestErr
+			}
+			report.TargetVectors++
+			if _, found := referenced[digest]; !found {
 				report.UnreferencedVectors++
 			}
 		}
