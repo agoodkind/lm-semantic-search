@@ -2,6 +2,7 @@ package milvus
 
 import (
 	"github.com/milvus-io/milvus/client/v3/entity"
+	"github.com/milvus-io/milvus/client/v3/index"
 	"github.com/milvus-io/milvus/client/v3/milvusclient"
 	"goodkind.io/lm-semantic-search/collection"
 )
@@ -17,6 +18,16 @@ type Options struct {
 	// DenseSearchParams sets index search parameters, such as nprobe, on every
 	// dense vector search. Milvus uses the index default for an omitted key.
 	DenseSearchParams map[string]string
+	// DenseIndex is the dense vector index a created collection uses. A nil
+	// value uses AUTOINDEX with the cosine metric.
+	DenseIndex index.Index
+}
+
+func (store *Store) denseIndex() index.Index {
+	if store.options.DenseIndex != nil {
+		return store.options.DenseIndex
+	}
+	return index.NewAutoIndex(entity.COSINE)
 }
 
 func (store *Store) denseAnnRequest(depth int, vector []float32) *milvusclient.AnnRequest {

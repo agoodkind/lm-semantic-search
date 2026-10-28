@@ -96,7 +96,7 @@ func (store *Store) CreateCollectionOption(collectionName string, dimension int,
 	}
 
 	indexOptions := []milvusclient.CreateIndexOption{
-		milvusclient.NewCreateIndexOption(collectionName, DenseVectorField, index.NewAutoIndex(entity.COSINE)),
+		milvusclient.NewCreateIndexOption(collectionName, DenseVectorField, store.denseIndex()),
 		milvusclient.NewCreateIndexOption(collectionName, ContentHashField, index.NewInvertedIndex()),
 	}
 
