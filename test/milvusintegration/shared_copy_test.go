@@ -4,6 +4,7 @@ package milvusintegration
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -36,6 +37,56 @@ func partialUpdateRows(t *testing.T, client *milvusclient.Client, collectionName
 		WithPartialUpdate(true)
 	if _, err := client.Upsert(ctx, option); err != nil {
 		t.Fatalf("partial update of %s: %v", collectionName, err)
+	}
+}
+
+// progressRecorder stores the last report of each phase and the first report
+// that breaks a rule within a phase: Done decreases, Total changes, or Done
+// exceeds Total.
+type progressRecorder struct {
+	last      map[milvusstore.CopyPhase]milvusstore.CopyProgress
+	violation string
+}
+
+func newProgressRecorder() *progressRecorder {
+	return &progressRecorder{last: map[milvusstore.CopyPhase]milvusstore.CopyProgress{}, violation: ""}
+}
+
+func (recorder *progressRecorder) record(progress milvusstore.CopyProgress) {
+	previous, seen := recorder.last[progress.Phase]
+	if recorder.violation == "" {
+		switch {
+		case progress.Done > progress.Total:
+			recorder.violation = fmt.Sprintf("%s reported Done %d exceeding Total %d", progress.Phase, progress.Done, progress.Total)
+		case seen && progress.Done < previous.Done:
+			recorder.violation = fmt.Sprintf("%s Done decreased from %d to %d", progress.Phase, previous.Done, progress.Done)
+		case seen && progress.Total != previous.Total:
+			recorder.violation = fmt.Sprintf("%s Total changed from %d to %d", progress.Phase, previous.Total, progress.Total)
+		}
+	}
+	recorder.last[progress.Phase] = progress
+}
+
+// requireProgress fails if a report breaks a rule above, the reported phases differ
+// from want, or a phase's last report has Done or Total unequal to its expected
+// total. A progress display computes its percentage from Total and the last Done.
+// The expected total comes from want.
+func requireProgress(t *testing.T, stage string, recorder *progressRecorder, want map[milvusstore.CopyPhase]int64) {
+	t.Helper()
+	if recorder.violation != "" {
+		t.Fatalf("%s: %s", stage, recorder.violation)
+	}
+	if len(recorder.last) != len(want) {
+		t.Fatalf("%s: %d phases reported progress, want %d", stage, len(recorder.last), len(want))
+	}
+	for phase, total := range want {
+		last, seen := recorder.last[phase]
+		if !seen {
+			t.Fatalf("%s: phase %s did not report progress", stage, phase)
+		}
+		if last.Total != total || last.Done != total {
+			t.Fatalf("%s: phase %s last reported Done %d and Total %d; expected Done %d and Total %d", stage, phase, last.Done, last.Total, total, total)
+		}
 	}
 }
 
@@ -101,7 +152,9 @@ func TestSharedStoreCopiesSingleCollectionExactly(t *testing.T) {
 	time.Sleep(sharedVisibilityWait)
 
 	distinctVectors := int64(len(distinctVectorKeys(corpus.rows)))
-	copied, err := shared.CopyFrom(ctx, sharedBaselineCollection, sharedLayoutCollection, sharedDeclaration, nil)
+	rowCount := int64(len(corpus.rows))
+	copyProgress := newProgressRecorder()
+	copied, err := shared.CopyFrom(ctx, sharedBaselineCollection, sharedLayoutCollection, sharedDeclaration, copyProgress.record)
 	if err != nil {
 		t.Fatalf("copy: %v", err)
 	}
@@ -109,11 +162,21 @@ func TestSharedStoreCopiesSingleCollectionExactly(t *testing.T) {
 		t.Fatalf("copy wrote %d occurrences and %d vectors, want %d and %d", copied.Occurrences, copied.VectorsWritten, len(corpus.rows), distinctVectors)
 	}
 	time.Sleep(sharedVisibilityWait)
-	report, err := shared.VerifyCopy(ctx, sharedBaselineCollection, sharedLayoutCollection, sharedDeclaration)
+	requireProgress(t, "initial copy", copyProgress,
+		map[milvusstore.CopyPhase]int64{milvusstore.CopyPhaseOccurrences: rowCount, milvusstore.CopyPhaseVectors: rowCount})
+	verifyProgress := newProgressRecorder()
+	report, err := shared.VerifyCopy(ctx, sharedBaselineCollection, sharedLayoutCollection, sharedDeclaration, verifyProgress.record)
 	if err != nil {
 		t.Fatalf("verify copy: %v", err)
 	}
-	requireCopyReport(t, "initial copy", report, int64(len(corpus.rows)), distinctVectors)
+	requireCopyReport(t, "initial copy", report, rowCount, distinctVectors)
+	requireProgress(t, "initial verify", verifyProgress,
+		map[milvusstore.CopyPhase]int64{
+			milvusstore.VerifyPhaseRows:       rowCount,
+			milvusstore.VerifyPhaseExtraRows:  rowCount,
+			milvusstore.VerifyPhaseReferences: rowCount,
+			milvusstore.VerifyPhaseVectors:    distinctVectors,
+		})
 	requireVectorReferencesConsistent(t, client, "initial copy", sharedLayoutCollection)
 	repeated, err := shared.CopyFrom(ctx, sharedBaselineCollection, sharedLayoutCollection, sharedDeclaration, nil)
 	if err != nil {
@@ -145,7 +208,7 @@ func TestSharedStoreCopiesSingleCollectionExactly(t *testing.T) {
 		t.Fatalf("rewrite source rows: %v", err)
 	}
 	time.Sleep(sharedVisibilityWait)
-	drift, err := shared.VerifyCopy(ctx, sharedBaselineCollection, sharedLayoutCollection, sharedDeclaration)
+	drift, err := shared.VerifyCopy(ctx, sharedBaselineCollection, sharedLayoutCollection, sharedDeclaration, nil)
 	if err != nil {
 		t.Fatalf("verify drift: %v", err)
 	}
@@ -173,7 +236,7 @@ func TestSharedStoreCopiesSingleCollectionExactly(t *testing.T) {
 			}
 		}
 	}
-	repaired, err := shared.VerifyCopy(ctx, sharedBaselineCollection, sharedLayoutCollection, sharedDeclaration)
+	repaired, err := shared.VerifyCopy(ctx, sharedBaselineCollection, sharedLayoutCollection, sharedDeclaration, nil)
 	if err != nil {
 		t.Fatalf("verify repair: %v", err)
 	}
@@ -201,7 +264,7 @@ func TestSharedStoreCopiesSingleCollectionExactly(t *testing.T) {
 		t.Fatalf("fresh copy: %v", err)
 	}
 	time.Sleep(sharedVisibilityWait)
-	freshReport, err := shared.VerifyCopy(ctx, sharedBaselineCollection, fresh.shared, sharedDeclaration)
+	freshReport, err := shared.VerifyCopy(ctx, sharedBaselineCollection, fresh.shared, sharedDeclaration, nil)
 	if err != nil {
 		t.Fatalf("verify fresh copy: %v", err)
 	}

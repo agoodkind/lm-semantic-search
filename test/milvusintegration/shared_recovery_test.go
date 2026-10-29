@@ -333,7 +333,7 @@ func TestSharedStoreRecoversPartialStateAndKeepsModelNullState(t *testing.T) {
 	if got := countMatching(t, client, recoveryCopyTarget, milvusstore.EmbeddingModelField+` == ""`); got != recoveryEmptyModels {
 		t.Fatalf("copy stores %d non-null empty models, want %d", got, recoveryEmptyModels)
 	}
-	report, err := shared.VerifyCopy(ctx, recoverySourceCopy, recoveryCopyTarget, sharedDeclaration)
+	report, err := shared.VerifyCopy(ctx, recoverySourceCopy, recoveryCopyTarget, sharedDeclaration, nil)
 	if err != nil {
 		t.Fatalf("verify copy: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestSharedStoreRecoversPartialStateAndKeepsModelNullState(t *testing.T) {
 	}
 	partialUpdateRows(t, client, recoveryCopyTarget, emptyModelIDs[:1], nullModel)
 	time.Sleep(sharedVisibilityWait)
-	drift, err := shared.VerifyCopy(ctx, recoverySourceCopy, recoveryCopyTarget, sharedDeclaration)
+	drift, err := shared.VerifyCopy(ctx, recoverySourceCopy, recoveryCopyTarget, sharedDeclaration, nil)
 	if err != nil {
 		t.Fatalf("verify drift: %v", err)
 	}
