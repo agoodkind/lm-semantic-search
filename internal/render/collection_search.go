@@ -10,7 +10,7 @@ import (
 // CollectionSearch formats typed collection search results.
 func CollectionSearch(searchView view.CollectionSearchView) string {
 	if len(searchView.Results) == 0 {
-		return fmt.Sprintf("🔍 No collection results found for query: %q in collection '%s'", searchView.Query, searchView.CollectionID)
+		return fmt.Sprintf("No collection results found for query: %q in collection '%s'", searchView.Query, searchView.CollectionID)
 	}
 
 	formatted := make([]string, 0, len(searchView.Results))
@@ -25,7 +25,7 @@ func CollectionSearch(searchView view.CollectionSearchView) string {
 		))
 	}
 
-	header := fmt.Sprintf("🔍 Found %d collection results for query: %q in collection '%s'", len(searchView.Results), searchView.Query, searchView.CollectionID)
+	header := fmt.Sprintf("Found %d collection results for query: %q in collection '%s'", len(searchView.Results), searchView.Query, searchView.CollectionID)
 	return header + "\n\n" + strings.Join(formatted, "\n\n")
 }
 
