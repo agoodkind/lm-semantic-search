@@ -22,6 +22,8 @@ const (
 	denseFetchGrowth = 4
 	// fallbackKeyBatch bounds the vector keys one exact dense search lists.
 	fallbackKeyBatch = 8192
+	// matchQueryLimit is the default maximum number of rows one Milvus query returns.
+	matchQueryLimit = 16_384
 )
 
 // legHit is one occurrence on a ranking leg.
@@ -261,7 +263,7 @@ func (store *SharedStore) expandKeys(ctx context.Context, occurrences string, ke
 			expression = "(" + expression + ") and (" + inline + ")"
 		}
 		byKey := map[string][]legHit{}
-		err := store.iterate(ctx, occurrences, expression, outputFields, func(resultSet milvusclient.ResultSet) error {
+		err := store.readMatches(ctx, occurrences, expression, outputFields, func(resultSet milvusclient.ResultSet) error {
 			return collectLegHits(ctx, occurrences, resultSet, groupColumn, grouped, byKey)
 		})
 		if err != nil {
@@ -272,6 +274,28 @@ func (store *SharedStore) expandKeys(ctx context.Context, occurrences string, ke
 		}
 	}
 	return hits, nil
+}
+
+// readMatches calls page with every row in collectionName that matches expression.
+// It first uses one Strong query, which costs less than a Strong query iterator.
+// If the query returns matchQueryLimit rows, the result may be incomplete.
+// readMatches discards that result and uses the Strong query iterator for all matches.
+func (store *SharedStore) readMatches(ctx context.Context, collectionName string, expression string, outputFields []string, page func(milvusclient.ResultSet) error) error {
+	resultSet, err := store.inner.client.Query(ctx, milvusclient.NewQueryOption(collectionName).
+		WithFilter(expression).
+		WithOutputFields(outputFields...).
+		WithLimit(matchQueryLimit).
+		WithConsistencyLevel(entity.ClStrong))
+	if err != nil {
+		return SearchError(ctx, "query", collectionName, err)
+	}
+	if resultSet.ResultCount >= matchQueryLimit {
+		return store.iterate(ctx, collectionName, expression, outputFields, page)
+	}
+	if resultSet.ResultCount == 0 {
+		return nil
+	}
+	return page(resultSet)
 }
 
 // collectLegHits adds the occurrence rows of one result page to byKey under
