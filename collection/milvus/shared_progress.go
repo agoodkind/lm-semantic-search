@@ -23,6 +23,15 @@ const (
 	VerifyPhaseReferences CopyPhase = "verify_vector_references"
 	// VerifyPhaseVectors checks every target vector key against those references.
 	VerifyPhaseVectors CopyPhase = "verify_vectors"
+	// ReconcilePhaseRows compares each source page with the target and writes
+	// each missing or different row with its exact vector bytes.
+	ReconcilePhaseRows CopyPhase = "reconcile_rows"
+	// ReconcilePhaseExtraRows checks every target row against the source and
+	// removes each row that the source does not store.
+	ReconcilePhaseExtraRows CopyPhase = "reconcile_extra_rows"
+	// ReconcilePhaseVectors checks every target vector and removes each vector
+	// that target rows do not reference.
+	ReconcilePhaseVectors CopyPhase = "reconcile_vectors"
 )
 
 // CopyProgress reports the rows one phase has processed.
