@@ -196,8 +196,8 @@ func (store *Store) rankCandidates(ctx context.Context, collectionName string, q
 		depth,
 		[]entity.Vector{entity.FloatVector(queryVector)},
 	).WithANNSField(DenseVectorField).WithOutputFields(outputFields...)
-	for key, value := range store.options.DenseSearchParams {
-		searchOption = searchOption.WithSearchParam(key, value)
+	if len(store.options.DenseSearchParams) > 0 {
+		searchOption = searchOption.WithAnnParam(denseAnnParam(store.options.DenseSearchParams))
 	}
 	if compiled.Expression != "" {
 		searchOption = searchOption.WithFilter(compiled.Expression)
@@ -383,8 +383,8 @@ func (store *Store) SearchExpression(ctx context.Context, search ExpressionSearc
 		searchLimit,
 		[]entity.Vector{entity.FloatVector(search.Vector)},
 	).WithANNSField(DenseVectorField).WithOutputFields(outputFields...)
-	for key, value := range store.options.DenseSearchParams {
-		searchOption = searchOption.WithSearchParam(key, value)
+	if len(store.options.DenseSearchParams) > 0 {
+		searchOption = searchOption.WithAnnParam(denseAnnParam(store.options.DenseSearchParams))
 	}
 	if search.Expression != "" {
 		searchOption = searchOption.WithFilter(search.Expression)
