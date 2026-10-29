@@ -1,6 +1,8 @@
 package milvus
 
 import (
+	"strconv"
+
 	"github.com/milvus-io/milvus/client/v3/entity"
 	"github.com/milvus-io/milvus/client/v3/index"
 	"github.com/milvus-io/milvus/client/v3/milvusclient"
@@ -32,10 +34,26 @@ func (store *Store) denseIndex() index.Index {
 
 func (store *Store) denseAnnRequest(depth int, vector []float32) *milvusclient.AnnRequest {
 	request := milvusclient.NewAnnRequest(DenseVectorField, depth, entity.FloatVector(vector))
-	for key, value := range store.options.DenseSearchParams {
-		request = request.WithSearchParam(key, value)
+	if len(store.options.DenseSearchParams) > 0 {
+		request = request.WithAnnParam(denseAnnParam(store.options.DenseSearchParams))
 	}
 	return request
+}
+
+// denseAnnParam returns the dense search parameters as one ANN parameter.
+// Milvus reads index search parameters such as nprobe only from the params
+// JSON of a search request, which the client fills from the ANN parameter. A
+// value that parses as an integer is sent as a JSON number.
+func denseAnnParam(params map[string]string) index.AnnParam {
+	annParam := index.NewCustomAnnParam()
+	for key, value := range params {
+		if number, err := strconv.Atoi(value); err == nil {
+			annParam.WithExtraParam(key, number)
+			continue
+		}
+		annParam.WithExtraParam(key, value)
+	}
+	return annParam
 }
 
 // Store implements [collection.Store] on a Milvus client. It owns no
