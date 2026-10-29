@@ -280,12 +280,34 @@ func (store *SharedStore) rebuildDenseIndex(ctx context.Context, vectors string,
 // stopped after its vector upsert and before its occurrence upsert leaves such
 // rows.
 func (store *SharedStore) RemoveUnreferencedVectors(ctx context.Context, collectionName string) (int64, error) {
+	return store.removeUnreferencedVectors(ctx, collectionName, nil)
+}
+
+// removeUnreferencedVectors performs [SharedStore.RemoveUnreferencedVectors].
+// It deletes every vector row that no occurrence row references and returns
+// the number of deleted vector rows.
+// It first counts the vector rows, then calls pageDone with 0 and that count
+// before the first page. After each page, it calls pageDone with the number of
+// vector rows checked so far and the count. If pageDone is nil, it does not
+// call it. The caller chooses the progress phase.
+func (store *SharedStore) removeUnreferencedVectors(ctx context.Context, collectionName string, pageDone func(done int64, total int64)) (int64, error) {
 	store.write.Lock()
 	defer store.write.Unlock()
 	occurrences := strings.TrimSpace(collectionName)
 	vectors := VectorCollectionName(occurrences)
+	total, err := store.countRows(ctx, vectors, VectorKeyField+` != ""`)
+	if err != nil {
+		return 0, err
+	}
+	report := func(done int64) {
+		if pageDone != nil {
+			pageDone(done, total)
+		}
+	}
+	report(0)
+	var checked int64
 	var removed int64
-	err := store.iterateBatch(ctx, vectors, VectorKeyField+` != ""`, []string{VectorKeyField}, vectorKeyBatchSize, func(resultSet milvusclient.ResultSet) error {
+	err = store.iterateBatch(ctx, vectors, VectorKeyField+` != ""`, []string{VectorKeyField}, vectorKeyBatchSize, func(resultSet milvusclient.ResultSet) error {
 		keys := make([]string, 0, resultSet.ResultCount)
 		for rowIndex := range resultSet.ResultCount {
 			key, keyErr := requiredString(resultSet, VectorKeyField, rowIndex)
@@ -296,7 +318,12 @@ func (store *SharedStore) RemoveUnreferencedVectors(ctx context.Context, collect
 		}
 		pageRemoved, removeErr := store.removeUnreferencedKeys(ctx, occurrences, vectors, keys)
 		removed += pageRemoved
-		return removeErr
+		if removeErr != nil {
+			return removeErr
+		}
+		checked += int64(len(keys))
+		report(min(checked, total))
+		return nil
 	})
 	return removed, err
 }

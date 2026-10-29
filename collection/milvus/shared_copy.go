@@ -23,8 +23,10 @@ const (
 	copyMaxIDBatchSize = 16_384
 )
 
-// CopyReport is the result of [SharedStore.VerifyCopy]. Each count covers every
-// row. Each ID list keeps at most copyReportSampleLimit IDs.
+// CopyReport contains the result of [SharedStore.VerifyCopy]. Each count covers
+// every row, and each ID list keeps at most copyReportSampleLimit IDs as a
+// diagnostic sample. [SharedStore.ReconcileCopy] repairs every difference
+// without using those lists.
 type CopyReport struct {
 	SourceRows          int64
 	TargetRows          int64
@@ -251,15 +253,18 @@ type CopyResult struct {
 	VectorsWritten int64
 }
 
-// CopyFromAfter copies the source rows with primary keys that sort after
-// afterID as strings, which is the Milvus VarChar primary key order, the same
-// way [SharedStore.CopyFrom] copies every row. An empty afterID copies
-// every row. The first pass writes every occurrence row after afterID. The
-// second pass reads the vector of every source row, including rows at or below
-// afterID that an earlier stopped copy wrote without their vectors, and writes
-// each distinct vector once, with the superset of every occurrence that
-// references it. A vector row that already stores that superset is not written
-// again.
+// CopyFromAfter copies source rows with primary keys after afterID in VarChar
+// string order. An empty afterID copies every row, like [SharedStore.CopyFrom].
+//
+// The first pass writes each occurrence row after afterID. The second pass
+// reads every source row's vector, including vectors that an earlier stopped
+// copy omitted for rows at or below afterID. It writes each distinct vector
+// once with every occurrence that references it, unless the vector row
+// already stores that complete set.
+//
+// A source row added after an earlier pass can have an ID at or below
+// afterID. CopyFromAfter does not copy that row. [SharedStore.ReconcileCopy]
+// copies it.
 func (store *SharedStore) CopyFromAfter(ctx context.Context, source string, target string, declaration collection.Declaration, afterID string, progress ProgressFunc) (CopyResult, error) {
 	result := CopyResult{Occurrences: 0, VectorsWritten: 0}
 	if err := store.requireDeclarationCovers(ctx, source, declaration); err != nil {
@@ -545,6 +550,35 @@ func (store *SharedStore) VerifyCopy(ctx context.Context, source string, target 
 }
 
 func (store *SharedStore) compareCopyPage(ctx context.Context, target string, declaration collection.Declaration, sourceRows []storedRow, report *CopyReport) error {
+	differences, err := store.copyPageDifferences(ctx, target, declaration, sourceRows)
+	if err != nil {
+		return err
+	}
+	for _, row := range differences.missing {
+		report.MissingCount++
+		report.Missing = appendSample(report.Missing, row.row.ID)
+	}
+	for _, row := range differences.mismatched {
+		report.MismatchedCount++
+		report.Mismatched = appendSample(report.Mismatched, row.row.ID)
+	}
+	report.DanglingCount += differences.dangling
+	return nil
+}
+
+// pageDifferences stores source rows from one page that the target lacks or
+// stores with a different value. It also counts target rows on that page that
+// reference a vector the vector collection lacks.
+type pageDifferences struct {
+	missing    []storedRow
+	mismatched []storedRow
+	dangling   int64
+}
+
+// copyPageDifferences reads the target rows with the source page's IDs and
+// their vectors, then compares them with the source rows.
+func (store *SharedStore) copyPageDifferences(ctx context.Context, target string, declaration collection.Declaration, sourceRows []storedRow) (pageDifferences, error) {
+	differences := pageDifferences{missing: nil, mismatched: nil, dangling: 0}
 	ids := make([]string, 0, len(sourceRows))
 	for _, row := range sourceRows {
 		ids = append(ids, row.row.ID)
@@ -554,11 +588,11 @@ func (store *SharedStore) compareCopyPage(ctx context.Context, target string, de
 		WithOutputFields(copyOutputFields(declaration, false, true)...).
 		WithConsistencyLevel(entity.ClStrong))
 	if err != nil {
-		return WrapError(ctx, err, "read copied rows of "+target)
+		return differences, WrapError(ctx, err, "read copied rows of "+target)
 	}
 	targetRows, err := readStoredRows(resultSet, declaration, false, true)
 	if err != nil {
-		return err
+		return differences, err
 	}
 	byID := make(map[string]storedRow, len(targetRows))
 	keySet := map[string]struct{}{}
@@ -568,25 +602,170 @@ func (store *SharedStore) compareCopyPage(ctx context.Context, target string, de
 	}
 	vectorByKey, err := store.vectorsByKey(ctx, VectorCollectionName(target), sortedKeys(keySet))
 	if err != nil {
-		return err
+		return differences, err
 	}
 	for _, sourceRow := range sourceRows {
 		targetRow, found := byID[sourceRow.row.ID]
 		if !found {
-			report.MissingCount++
-			report.Missing = appendSample(report.Missing, sourceRow.row.ID)
+			differences.missing = append(differences.missing, sourceRow)
 			continue
 		}
 		targetVector, found := vectorByKey[targetRow.vectorKey]
 		if !found {
-			report.DanglingCount++
+			differences.dangling++
 		}
 		if !found || !sameStoredRow(sourceRow, targetRow, targetVector, declaration) {
-			report.MismatchedCount++
-			report.Mismatched = appendSample(report.Mismatched, sourceRow.row.ID)
+			differences.mismatched = append(differences.mismatched, sourceRow)
 		}
 	}
-	return nil
+	return differences, nil
+}
+
+// ReconcileResult counts the rows one [SharedStore.ReconcileCopy] read and the
+// differences it repaired. The counts cover every row without a sample limit.
+type ReconcileResult struct {
+	SourceRows          int64
+	TargetRows          int64
+	Missing             int64
+	Mismatched          int64
+	Dangling            int64
+	Extra               int64
+	UnreferencedVectors int64
+}
+
+// Repaired returns the sum of Missing, Mismatched, Extra, and
+// UnreferencedVectors.
+func (result ReconcileResult) Repaired() int64 {
+	return result.Missing + result.Mismatched + result.Extra + result.UnreferencedVectors
+}
+
+// ReconcileCopy makes the shared target equal to the single-collection source
+// in three passes. The first pass compares every source page with the target
+// as [SharedStore.VerifyCopy] does, then writes each missing or different row
+// with its exact vector bytes. The second pass removes target rows that the
+// source lacks. The third pass removes vectors that target rows do not
+// reference. ReconcileCopy never changes the source. After each page, progress
+// receives the number of rows that the current pass has processed.
+// Run [SharedStore.VerifyCopy] afterwards to confirm equality.
+func (store *SharedStore) ReconcileCopy(ctx context.Context, source string, target string, declaration collection.Declaration, progress ProgressFunc) (ReconcileResult, error) {
+	result := ReconcileResult{}
+	if err := store.requireDeclarationCovers(ctx, source, declaration); err != nil {
+		return result, err
+	}
+	occurrences := strings.TrimSpace(target)
+	sourceTotal, err := store.countRows(ctx, source, IDField+` != ""`)
+	if err != nil {
+		return result, err
+	}
+	progress.report(ReconcilePhaseRows, 0, sourceTotal)
+	err = store.iterateBatch(ctx, source, IDField+` != ""`, copyOutputFields(declaration, true, false), copyBatchSize, func(resultSet milvusclient.ResultSet) error {
+		sourceRows, err := readStoredRows(resultSet, declaration, true, false)
+		if err != nil {
+			return err
+		}
+		differences, err := store.copyPageDifferences(ctx, occurrences, declaration, sourceRows)
+		if err != nil {
+			return err
+		}
+		rewrite := make([]storedRow, 0, len(differences.missing)+len(differences.mismatched))
+		rewrite = append(rewrite, differences.missing...)
+		rewrite = append(rewrite, differences.mismatched...)
+		if err := store.writeStoredRows(ctx, occurrences, declaration, rewrite); err != nil {
+			return err
+		}
+		result.SourceRows += int64(len(sourceRows))
+		result.Missing += int64(len(differences.missing))
+		result.Mismatched += int64(len(differences.mismatched))
+		result.Dangling += differences.dangling
+		progress.report(ReconcilePhaseRows, min(result.SourceRows, sourceTotal), sourceTotal)
+		return nil
+	})
+	if err != nil {
+		return result, err
+	}
+	if err := store.removeExtraRows(ctx, source, occurrences, &result, progress); err != nil {
+		return result, err
+	}
+	result.UnreferencedVectors, err = store.removeUnreferencedVectors(ctx, occurrences, func(done int64, total int64) {
+		progress.report(ReconcilePhaseVectors, done, total)
+	})
+	if err != nil {
+		return result, err
+	}
+	slog.InfoContext(ctx, "collection.shared_copy_reconciled", "source", source, "target", occurrences,
+		"source_rows", result.SourceRows, "target_rows", result.TargetRows,
+		"missing", result.Missing, "mismatched", result.Mismatched, "dangling", result.Dangling,
+		"extra", result.Extra, "unreferenced_vectors", result.UnreferencedVectors)
+	return result, nil
+}
+
+// removeExtraRows reads every target page and removes each row on that page
+// with an ID the source does not store.
+func (store *SharedStore) removeExtraRows(ctx context.Context, source string, target string, result *ReconcileResult, progress ProgressFunc) error {
+	total, err := store.countRows(ctx, target, IDField+` != ""`)
+	if err != nil {
+		return err
+	}
+	progress.report(ReconcilePhaseExtraRows, 0, total)
+	return store.iterateBatch(ctx, target, IDField+` != ""`, []string{IDField}, copyBatchSize, func(resultSet milvusclient.ResultSet) error {
+		ids, err := pageIDs(resultSet)
+		if err != nil {
+			return err
+		}
+		extra, err := store.idsAbsentFrom(ctx, source, ids)
+		if err != nil {
+			return err
+		}
+		if len(extra) > 0 {
+			if _, err := store.RemoveOccurrences(ctx, target, extra); err != nil {
+				return err
+			}
+		}
+		result.TargetRows += int64(len(ids))
+		result.Extra += int64(len(extra))
+		progress.report(ReconcilePhaseExtraRows, min(result.TargetRows, total), total)
+		return nil
+	})
+}
+
+// pageIDs reads the primary key of each row in one result page.
+func pageIDs(resultSet milvusclient.ResultSet) ([]string, error) {
+	ids := make([]string, 0, resultSet.ResultCount)
+	for rowIndex := range resultSet.ResultCount {
+		id, err := requiredString(resultSet, IDField, rowIndex)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// idsAbsentFrom returns the input IDs that the collection does not store, in
+// input order.
+func (store *SharedStore) idsAbsentFrom(ctx context.Context, collectionName string, ids []string) ([]string, error) {
+	present, err := store.inner.client.Get(ctx, milvusclient.NewQueryOption(collectionName).
+		WithIDs(primaryKeyColumn(IDField, ids)).
+		WithOutputFields(IDField).
+		WithConsistencyLevel(entity.ClStrong))
+	if err != nil {
+		return nil, WrapError(ctx, err, "read source IDs of "+collectionName)
+	}
+	found := make(map[string]struct{}, present.ResultCount)
+	for rowIndex := range present.ResultCount {
+		id, idErr := requiredString(present, IDField, rowIndex)
+		if idErr != nil {
+			return nil, idErr
+		}
+		found[id] = struct{}{}
+	}
+	absent := make([]string, 0)
+	for _, id := range ids {
+		if _, exists := found[id]; !exists {
+			absent = append(absent, id)
+		}
+	}
+	return absent, nil
 }
 
 // sameStoredRow reports whether a copied occurrence row and its vector store
