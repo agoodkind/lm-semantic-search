@@ -37,8 +37,8 @@ func extraPagesDeleted() []int {
 		picked[boundary-1] = struct{}{}
 		picked[boundary] = struct{}{}
 	}
-	for index := extraPagesStride; index < extraPagesRows; index += extraPagesStride {
-		picked[index] = struct{}{}
+	for rowIndex := extraPagesStride; rowIndex < extraPagesRows; rowIndex += extraPagesStride {
+		picked[rowIndex] = struct{}{}
 	}
 	indexes := slices.Collect(maps.Keys(picked))
 	slices.Sort(indexes)
@@ -111,11 +111,11 @@ func TestSharedStoreExtraRowPassesSpanIDPages(t *testing.T) {
 
 	corpus := buildSharedCorpus()
 	rows := make([]collection.Row, 0, extraPagesRows)
-	for index := range extraPagesRows {
-		base := corpus.rows[index%len(corpus.rows)]
+	for rowIndex := range extraPagesRows {
+		base := corpus.rows[rowIndex%len(corpus.rows)]
 		row := base
-		row.ID = fmt.Sprintf("page-%05d", index)
-		row.RelativePath = fmt.Sprintf("pages/%05d", index)
+		row.ID = fmt.Sprintf("page-%05d", rowIndex)
+		row.RelativePath = fmt.Sprintf("pages/%05d", rowIndex)
 		row.Vector = slices.Clone(base.Vector)
 		row.Scalars = maps.Clone(base.Scalars)
 		rows = append(rows, row)
@@ -133,9 +133,9 @@ func TestSharedStoreExtraRowPassesSpanIDPages(t *testing.T) {
 	deletedIndexes := extraPagesDeleted()
 	deleted := make([]collection.Row, 0, len(deletedIndexes))
 	deletedIDs := map[string]struct{}{}
-	for _, index := range deletedIndexes {
-		deleted = append(deleted, rows[index])
-		deletedIDs[rows[index].ID] = struct{}{}
+	for _, rowIndex := range deletedIndexes {
+		deleted = append(deleted, rows[rowIndex])
+		deletedIDs[rows[rowIndex].ID] = struct{}{}
 	}
 	if _, err := client.Delete(ctx, milvusclient.NewDeleteOption(extraPagesSource).WithExpr(quotedIDs(deleted))); err != nil {
 		t.Fatalf("delete source rows: %v", err)
