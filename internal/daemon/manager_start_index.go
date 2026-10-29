@@ -140,6 +140,9 @@ func (manager *Manager) startIndexCanonicalPath(
 		slog.ErrorContext(ctx, "canonicalize path failed", "path", requestedPath, "err", err)
 		return "", fmt.Errorf("canonicalize path %s: %w", requestedPath, err)
 	}
+	if err := manager.guardDocumentCodebase(ctx, requestedPath, canonicalPath); err != nil {
+		return "", err
+	}
 	if err := manager.guardStateRoot(canonicalPath); err != nil {
 		return "", err
 	}
@@ -150,6 +153,20 @@ func (manager *Manager) startIndexCanonicalPath(
 		return "", err
 	}
 	return canonicalPath, nil
+}
+
+// guardDocumentCodebase returns an invalid path error when the resolved path
+// belongs to a codebase with Kind CodebaseKindDocument.
+func (manager *Manager) guardDocumentCodebase(ctx context.Context, requestedPath string, canonicalPath string) error {
+	manager.mu.Lock()
+	codebase, found := manager.findCodebaseByExactRoot(canonicalPath)
+	manager.mu.Unlock()
+	if !found || codebase.Kind != model.CodebaseKindDocument {
+		return nil
+	}
+	refusal := adapterr.NewInvalidPath(fmt.Sprintf("request path %q: StartIndex refuses codebase %q because it is a document codebase; only its document ingest writes collection %q", requestedPath, codebase.ID, codebase.CollectionName), nil)
+	slog.WarnContext(ctx, "start index refused document codebase", "path", requestedPath, "codebase_id", codebase.ID, "collection", codebase.CollectionName, "err", refusal)
+	return fmt.Errorf("start index for %s: %w", requestedPath, refusal)
 }
 
 func (manager *Manager) redirectStartIndex(
