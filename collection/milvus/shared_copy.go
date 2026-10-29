@@ -255,13 +255,16 @@ type CopyResult struct {
 
 // CopyFromAfter copies source rows with primary keys after afterID in VarChar
 // string order. An empty afterID copies every row, like [SharedStore.CopyFrom].
+//
 // The first pass writes each occurrence row after afterID. The second pass
-// reads every source row's vector, including vectors an earlier stopped copy
-// omitted for rows at or below afterID. It writes each distinct vector once
-// with every occurrence that references it, unless the vector row already
-// stores that complete set. Row IDs are content hashes. A row added after an
-// earlier pass can sort below afterID, so CopyFromAfter does not copy it.
-// [SharedStore.ReconcileCopy] copies that row.
+// reads every source row's vector, including vectors that an earlier stopped
+// copy omitted for rows at or below afterID. It writes each distinct vector
+// once with every occurrence that references it, unless the vector row
+// already stores that complete set.
+//
+// A source row added after an earlier pass can have an ID at or below
+// afterID. CopyFromAfter does not copy that row. [SharedStore.ReconcileCopy]
+// copies it.
 func (store *SharedStore) CopyFromAfter(ctx context.Context, source string, target string, declaration collection.Declaration, afterID string, progress ProgressFunc) (CopyResult, error) {
 	result := CopyResult{Occurrences: 0, VectorsWritten: 0}
 	if err := store.requireDeclarationCovers(ctx, source, declaration); err != nil {
@@ -683,7 +686,9 @@ func (store *SharedStore) ReconcileCopy(ctx context.Context, source string, targ
 	if err := store.removeExtraRows(ctx, source, occurrences, &result, progress); err != nil {
 		return result, err
 	}
-	result.UnreferencedVectors, err = store.removeUnreferencedVectors(ctx, occurrences, ReconcilePhaseVectors, progress)
+	result.UnreferencedVectors, err = store.removeUnreferencedVectors(ctx, occurrences, func(done int64, total int64) {
+		progress.report(ReconcilePhaseVectors, done, total)
+	})
 	if err != nil {
 		return result, err
 	}

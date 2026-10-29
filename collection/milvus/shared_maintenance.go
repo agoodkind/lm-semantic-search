@@ -280,13 +280,17 @@ func (store *SharedStore) rebuildDenseIndex(ctx context.Context, vectors string,
 // stopped after its vector upsert and before its occurrence upsert leaves such
 // rows.
 func (store *SharedStore) RemoveUnreferencedVectors(ctx context.Context, collectionName string) (int64, error) {
-	return store.removeUnreferencedVectors(ctx, collectionName, ReconcilePhaseVectors, nil)
+	return store.removeUnreferencedVectors(ctx, collectionName, nil)
 }
 
-// removeUnreferencedVectors performs [SharedStore.RemoveUnreferencedVectors]
-// and reports progress. After each page, progress receives phase and the
-// number of vector rows checked.
-func (store *SharedStore) removeUnreferencedVectors(ctx context.Context, collectionName string, phase CopyPhase, progress ProgressFunc) (int64, error) {
+// removeUnreferencedVectors performs [SharedStore.RemoveUnreferencedVectors].
+// It deletes every vector row that no occurrence row references and returns
+// the number of deleted vector rows.
+// It first counts the vector rows, then calls pageDone with 0 and that count
+// before the first page. After each page, it calls pageDone with the number of
+// vector rows checked so far and the count. If pageDone is nil, it does not
+// call it. The caller chooses the progress phase.
+func (store *SharedStore) removeUnreferencedVectors(ctx context.Context, collectionName string, pageDone func(done int64, total int64)) (int64, error) {
 	store.write.Lock()
 	defer store.write.Unlock()
 	occurrences := strings.TrimSpace(collectionName)
@@ -295,7 +299,12 @@ func (store *SharedStore) removeUnreferencedVectors(ctx context.Context, collect
 	if err != nil {
 		return 0, err
 	}
-	progress.report(phase, 0, total)
+	report := func(done int64) {
+		if pageDone != nil {
+			pageDone(done, total)
+		}
+	}
+	report(0)
 	var checked int64
 	var removed int64
 	err = store.iterateBatch(ctx, vectors, VectorKeyField+` != ""`, []string{VectorKeyField}, vectorKeyBatchSize, func(resultSet milvusclient.ResultSet) error {
@@ -313,7 +322,7 @@ func (store *SharedStore) removeUnreferencedVectors(ctx context.Context, collect
 			return removeErr
 		}
 		checked += int64(len(keys))
-		progress.report(phase, min(checked, total), total)
+		report(min(checked, total))
 		return nil
 	})
 	return removed, err
