@@ -355,7 +355,6 @@ func (store *SharedStore) writeCopiedVectors(ctx context.Context, source string,
 			return collection.ErrSearchResultIncomplete
 		}
 		scanned += int64(resultSet.ResultCount)
-		defer progress.report(CopyPhaseVectors, scanned, total)
 		records := map[string]*vectorRecord{}
 		dimension := 0
 		for rowIndex := range resultSet.ResultCount {
@@ -375,12 +374,15 @@ func (store *SharedStore) writeCopiedVectors(ctx context.Context, source string,
 			dimension = len(vector)
 			records[key] = newVectorRecord(key, vector, scalars)
 		}
-		if len(records) == 0 {
-			return nil
+		if len(records) > 0 {
+			pageWritten, err := store.writeExactVectors(ctx, occurrences, vectors, dimension, scalars, records)
+			written += pageWritten
+			if err != nil {
+				return err
+			}
 		}
-		pageWritten, err := store.writeExactVectors(ctx, occurrences, vectors, dimension, scalars, records)
-		written += pageWritten
-		return err
+		progress.report(CopyPhaseVectors, scanned, total)
+		return nil
 	})
 	return written, err
 }
@@ -520,8 +522,11 @@ func (store *SharedStore) VerifyCopy(ctx context.Context, source string, target 
 			return err
 		}
 		report.SourceRows += int64(len(sourceRows))
-		defer progress.report(VerifyPhaseRows, report.SourceRows, sourceTotal)
-		return store.compareCopyPage(ctx, target, declaration, sourceRows, &report)
+		if err := store.compareCopyPage(ctx, target, declaration, sourceRows, &report); err != nil {
+			return err
+		}
+		progress.report(VerifyPhaseRows, report.SourceRows, sourceTotal)
+		return nil
 	})
 	if err != nil {
 		return report, err
@@ -628,7 +633,6 @@ func (store *SharedStore) countExtraRows(ctx context.Context, source string, tar
 			ids = append(ids, id)
 		}
 		report.TargetRows += int64(len(ids))
-		defer progress.report(VerifyPhaseExtraRows, report.TargetRows, total)
 		present, err := store.inner.client.Get(ctx, milvusclient.NewQueryOption(source).
 			WithIDs(primaryKeyColumn(IDField, ids)).
 			WithOutputFields(IDField).
@@ -650,6 +654,7 @@ func (store *SharedStore) countExtraRows(ctx context.Context, source string, tar
 				report.Extra = appendSample(report.Extra, id)
 			}
 		}
+		progress.report(VerifyPhaseExtraRows, report.TargetRows, total)
 		return nil
 	})
 }
@@ -673,7 +678,6 @@ func (store *SharedStore) countUnreferencedVectors(ctx context.Context, target s
 	progress.report(VerifyPhaseReferences, 0, referenceTotal)
 	err = store.iterateBatch(ctx, target, IDField+` != ""`, []string{VectorKeyField}, copyMaxIDBatchSize, func(resultSet milvusclient.ResultSet) error {
 		referenceRows += int64(resultSet.ResultCount)
-		defer progress.report(VerifyPhaseReferences, referenceRows, referenceTotal)
 		for rowIndex := range resultSet.ResultCount {
 			key, keyErr := requiredString(resultSet, VectorKeyField, rowIndex)
 			if keyErr != nil {
@@ -685,6 +689,7 @@ func (store *SharedStore) countUnreferencedVectors(ctx context.Context, target s
 			}
 			referenced[digest] = struct{}{}
 		}
+		progress.report(VerifyPhaseReferences, referenceRows, referenceTotal)
 		return nil
 	})
 	if err != nil {
@@ -692,7 +697,6 @@ func (store *SharedStore) countUnreferencedVectors(ctx context.Context, target s
 	}
 	progress.report(VerifyPhaseVectors, 0, vectorTotal)
 	return store.iterateBatch(ctx, vectors, VectorKeyField+` != ""`, []string{VectorKeyField}, copyMaxIDBatchSize, func(resultSet milvusclient.ResultSet) error {
-		defer func() { progress.report(VerifyPhaseVectors, report.TargetVectors, vectorTotal) }()
 		for rowIndex := range resultSet.ResultCount {
 			key, keyErr := requiredString(resultSet, VectorKeyField, rowIndex)
 			if keyErr != nil {
@@ -707,6 +711,7 @@ func (store *SharedStore) countUnreferencedVectors(ctx context.Context, target s
 				report.UnreferencedVectors++
 			}
 		}
+		progress.report(VerifyPhaseVectors, report.TargetVectors, vectorTotal)
 		return nil
 	})
 }
