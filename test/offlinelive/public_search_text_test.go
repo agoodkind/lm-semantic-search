@@ -5,6 +5,7 @@ package offlinelive
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -19,7 +20,7 @@ const (
 	cliCommandPackage   = "goodkind.io/lm-semantic-search/cmd/lm-semantic-search"
 	mcpSearchToolName   = "search_code"
 	publicSearchLimit   = 5
-	searchHeaderPrefix  = "Found " + "5" + " results for query:"
+	searchHeaderFormat  = "Found %d results for query:"
 	searchLocationLabel = "Location: "
 )
 
@@ -46,8 +47,9 @@ func requirePublicSearchText(t *testing.T, surface string, text string) {
 			t.Fatalf("The %s search text contains %q:\n%s", surface, decoration, text)
 		}
 	}
-	if !strings.HasPrefix(text, searchHeaderPrefix) {
-		t.Fatalf("The %s search text does not start with %q:\n%s", surface, searchHeaderPrefix, text)
+	headerPrefix := fmt.Sprintf(searchHeaderFormat, publicSearchLimit)
+	if !strings.HasPrefix(text, headerPrefix) {
+		t.Fatalf("The %s search text does not start with %q:\n%s", surface, headerPrefix, text)
 	}
 	if !strings.Contains(text, searchLocationLabel) {
 		t.Fatalf("The %s search text does not contain a result %q line:\n%s", surface, searchLocationLabel, text)
