@@ -25,16 +25,17 @@ const (
 	VerifyPhaseVectors CopyPhase = "verify_vectors"
 )
 
-// CopyProgress reports the rows one phase has processed. Total is the row
-// count the phase reads, counted when the phase starts.
+// CopyProgress reports the rows one phase has processed.
+// Done is the number of rows the phase has processed.
+// Total is the number of rows the phase reads, counted when the phase starts.
 type CopyProgress struct {
 	Phase CopyPhase
 	Done  int64
 	Total int64
 }
 
-// ProgressFunc receives a [CopyProgress] after each page of a phase. A nil
-// ProgressFunc receives nothing.
+// ProgressFunc receives a [CopyProgress] after each page of a phase.
+// A nil ProgressFunc does not receive progress reports.
 type ProgressFunc func(CopyProgress)
 
 func (progress ProgressFunc) report(phase CopyPhase, done int64, total int64) {
