@@ -72,42 +72,32 @@ func (store *SharedStore) Rank(ctx context.Context, request collection.SearchReq
 		limit = defaultSearchLimit
 	}
 	depth := rankingDepthFor(limit)
-	// The BM25 and dense legs run at the same time. The first leg error cancels
-	// the other leg, and Rank returns that error.
-	legsCtx, cancelLegs := context.WithCancel(ctx)
-	defer cancelLegs()
+	// The BM25 and dense legs run at the same time. Only a BM25 error cancels the other leg.
+	// Rank returns a BM25 error before a dense error.
+	denseCtx, cancelDense := context.WithCancel(ctx)
+	defer cancelDense()
 	var (
-		legs    sync.WaitGroup
-		failure sync.Once
-		legErr  error
-		sparse  []legHit
-		dense   []legHit
+		legs      sync.WaitGroup
+		sparse    []legHit
+		dense     []legHit
+		sparseErr error
+		denseErr  error
 	)
-	fail := func(err error) {
-		failure.Do(func() {
-			legErr = err
-			cancelLegs()
-		})
-	}
 	legs.Go(func() {
-		hits, err := store.sparseLeg(legsCtx, occurrences, request.Query, compiled, groupColumn, grouped, depth)
-		if err != nil {
-			fail(err)
-			return
+		sparse, sparseErr = store.sparseLeg(ctx, occurrences, request.Query, compiled, groupColumn, grouped, depth)
+		if sparseErr != nil {
+			cancelDense()
 		}
-		sparse = hits
 	})
 	legs.Go(func() {
-		hits, err := store.denseLeg(legsCtx, occurrences, request.Vector, inline, superset, groupColumn, grouped, depth)
-		if err != nil {
-			fail(err)
-			return
-		}
-		dense = hits
+		dense, denseErr = store.denseLeg(denseCtx, occurrences, request.Vector, inline, superset, groupColumn, grouped, depth)
 	})
 	legs.Wait()
-	if legErr != nil {
-		return nil, legErr
+	if sparseErr != nil {
+		return nil, sparseErr
+	}
+	if denseErr != nil {
+		return nil, denseErr
 	}
 	return fuseLegs(dense, sparse, depth), nil
 }
