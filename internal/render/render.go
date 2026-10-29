@@ -589,7 +589,7 @@ func renderSearch(searchView view.SearchView) string {
 	resolution := strings.Join(searchView.ResolutionLines, "\n")
 
 	if len(searchView.Results) == 0 {
-		noResults := fmt.Sprintf("🔍 No results found for query: %q in codebase '%s'", searchView.Query, searchView.CodebasePath)
+		noResults := fmt.Sprintf("No results found for query: %q in codebase '%s'", searchView.Query, searchView.CodebasePath)
 		return joinSearchSections(searchView, noResults, status, resolution, false)
 	}
 
@@ -613,14 +613,14 @@ func renderSearch(searchView view.SearchView) string {
 	// Lead with the result count and the results themselves so a client that
 	// shows only the first line or truncates long output still surfaces the
 	// answer. The in-progress warning and tip trail the results.
-	header := fmt.Sprintf("🔍 Found %d results for query: %q in codebase '%s'", len(searchView.Results), searchView.Query, searchView.CodebasePath)
+	header := fmt.Sprintf("Found %d results for query: %q in codebase '%s'", len(searchView.Results), searchView.Query, searchView.CodebasePath)
 	body := header + "\n\n" + strings.Join(formatted, "\n\n")
 	return joinSearchSections(searchView, body, status, resolution, true)
 }
 
 func renderConversationSearch(conversationView view.ConversationSearchView) string {
 	if len(conversationView.Results) == 0 {
-		return fmt.Sprintf("🔍 No conversation results found for query: %q in collection '%s'", conversationView.Query, conversationView.CollectionID)
+		return fmt.Sprintf("No conversation results found for query: %q in collection '%s'", conversationView.Query, conversationView.CollectionID)
 	}
 
 	formatted := make([]string, 0, len(conversationView.Results))
@@ -638,7 +638,7 @@ func renderConversationSearch(conversationView view.ConversationSearchView) stri
 		))
 	}
 
-	header := fmt.Sprintf("🔍 Found %d conversation results for query: %q in collection '%s'", len(conversationView.Results), conversationView.Query, conversationView.CollectionID)
+	header := fmt.Sprintf("Found %d conversation results for query: %q in collection '%s'", len(conversationView.Results), conversationView.Query, conversationView.CollectionID)
 	return header + "\n\n" + strings.Join(formatted, "\n\n")
 }
 
