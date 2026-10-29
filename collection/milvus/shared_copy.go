@@ -19,7 +19,7 @@ const (
 	copyBatchSize = 256
 	// copyReportSampleLimit bounds the row IDs a copy report lists per class.
 	copyReportSampleLimit = 100
-	// copyMaxIDBatchSize bounds the IDs one page of MaxOccurrenceID reads.
+	// copyMaxIDBatchSize sets the page size for reads that return only IDs or vector keys.
 	copyMaxIDBatchSize = 16_384
 )
 
@@ -707,7 +707,7 @@ func (store *SharedStore) removeExtraRows(ctx context.Context, source string, ta
 		return err
 	}
 	progress.report(ReconcilePhaseExtraRows, 0, total)
-	return store.iterateBatch(ctx, target, IDField+` != ""`, []string{IDField}, copyBatchSize, func(resultSet milvusclient.ResultSet) error {
+	return store.iterateBatch(ctx, target, IDField+` != ""`, []string{IDField}, copyMaxIDBatchSize, func(resultSet milvusclient.ResultSet) error {
 		ids, err := pageIDs(resultSet)
 		if err != nil {
 			return err
@@ -802,7 +802,7 @@ func (store *SharedStore) countExtraRows(ctx context.Context, source string, tar
 		return err
 	}
 	progress.report(VerifyPhaseExtraRows, 0, total)
-	return store.iterateBatch(ctx, target, IDField+` != ""`, []string{IDField}, copyBatchSize, func(resultSet milvusclient.ResultSet) error {
+	return store.iterateBatch(ctx, target, IDField+` != ""`, []string{IDField}, copyMaxIDBatchSize, func(resultSet milvusclient.ResultSet) error {
 		ids := make([]string, 0, resultSet.ResultCount)
 		for rowIndex := range resultSet.ResultCount {
 			id, err := requiredString(resultSet, IDField, rowIndex)
