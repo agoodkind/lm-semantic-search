@@ -207,8 +207,8 @@ func (store *SharedStore) searchVectors(ctx context.Context, vectors string, vec
 	option := milvusclient.NewSearchOption(vectors, limit, []entity.Vector{entity.FloatVector(vector)}).
 		WithANNSField(DenseVectorField).
 		WithOutputFields(VectorKeyField)
-	for key, value := range store.inner.options.DenseSearchParams {
-		option = option.WithSearchParam(key, value)
+	if len(store.inner.options.DenseSearchParams) > 0 {
+		option = option.WithAnnParam(denseAnnParam(store.inner.options.DenseSearchParams))
 	}
 	if expression != "" {
 		option = option.WithFilter(expression)
