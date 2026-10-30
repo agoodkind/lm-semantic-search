@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"math"
 	"sync"
 
@@ -14,31 +15,57 @@ import (
 // rankReuseKey is the context key for a rank reuse scope.
 type rankReuseKey struct{}
 
-// vectorKeyEntry stores vector keys from one search in score order. Its complete field is true when the search returned fewer keys than its limit and the list includes every matching vector.
-type vectorKeyEntry struct {
-	keys     []scoredKey
-	complete bool
-}
-
-// rankReuseScope saves vector key lists and reuse decisions for one request. Each SharedStore reads only its own entries.
-type rankReuseScope struct {
-	mutex    sync.Mutex
-	entries  map[rankReuseEntryKey]vectorKeyEntry
-	reusable map[rankReuseEntryKey]bool
-}
-
-// rankReuseEntryKey identifies a scope entry by SharedStore and lookup key, separating stores even when their databases have collections with the same name.
+// rankReuseEntryKey identifies a scoped vector search by SharedStore, a key built from the collection, filter expression and query vector bytes, and the result limit. Different stores or limits use separate entries.
 type rankReuseEntryKey struct {
 	store *SharedStore
 	key   string
+	limit int
 }
 
-// prefixStableIndexTypes contains FLAT, IVF_FLAT, and IVF_SQ8. Searches using these indexes select candidates independently of the result limit, and larger results share the smaller result's first keys unless scores tie at the cut.
-var prefixStableIndexTypes = map[string]bool{"FLAT": true, "IVF_FLAT": true, "IVF_SQ8": true}
+// vectorKeyEntry stores the result of one scoped vector search. Its done channel closes after the search sets keys and err.
+type vectorKeyEntry struct {
+	done chan struct{}
+	keys []scoredKey
+	err  error
+}
 
-// WithRankReuse returns a context with a scope for one request. SharedStore.Rank can reuse a search within that scope when the collection, filter, and query vector match. Rank searches Milvus when the context has no scope.
-func WithRankReuse(ctx context.Context) context.Context {
-	return context.WithValue(ctx, rankReuseKey{}, &rankReuseScope{mutex: sync.Mutex{}, entries: map[rankReuseEntryKey]vectorKeyEntry{}, reusable: map[rankReuseEntryKey]bool{}})
+// rankReuseScope tracks vector searches for one request. Background searches use ctx, a child of the request context that cancel ends. background counts running background searches, and speculated records queries that started one.
+type rankReuseScope struct {
+	ctx        context.Context
+	cancel     context.CancelFunc
+	background sync.WaitGroup
+	mutex      sync.Mutex
+	entries    map[rankReuseEntryKey]*vectorKeyEntry
+	speculated map[rankReuseEntryKey]bool
+}
+
+// WithRankReuse returns a context and an end function for one request. SharedStore.Rank reuses searches with the same store, collection, filter, query vector, and limit. Call end when the request finishes to cancel and await background searches. Without a scope, Rank searches Milvus on every call.
+func WithRankReuse(ctx context.Context) (context.Context, func()) {
+	scopeCtx, cancel := context.WithCancel(ctx)
+	scope := &rankReuseScope{
+		ctx:        scopeCtx,
+		cancel:     cancel,
+		background: sync.WaitGroup{},
+		mutex:      sync.Mutex{},
+		entries:    map[rankReuseEntryKey]*vectorKeyEntry{},
+		speculated: map[rankReuseEntryKey]bool{},
+	}
+	end := func() {
+		cancel()
+		scope.background.Wait()
+	}
+	return context.WithValue(ctx, rankReuseKey{}, scope), end
+}
+
+// firstSearch reports whether the scope remains open and key has not started a background search. It records key when both conditions hold.
+func (scope *rankReuseScope) firstSearch(key rankReuseEntryKey) bool {
+	scope.mutex.Lock()
+	defer scope.mutex.Unlock()
+	if scope.speculated[key] || scope.ctx.Err() != nil {
+		return false
+	}
+	scope.speculated[key] = true
+	return true
 }
 
 func vectorKeyCacheKey(vectors string, expression string, vector []float32) string {
@@ -55,78 +82,62 @@ func vectorKeyCacheKey(vectors string, expression string, vector []float32) stri
 	return hex.EncodeToString(digest.Sum(nil))
 }
 
-// lookup returns a copy of up to fetch keys when a saved list has at least fetch keys or is complete. It also reports whether the next key has the same score as the last returned key.
-func (scope *rankReuseScope) lookup(key rankReuseEntryKey, fetch int) ([]scoredKey, bool, bool) {
+// claim returns the entry for key and reports whether the caller created it and must run its search.
+func (scope *rankReuseScope) claim(key rankReuseEntryKey) (*vectorKeyEntry, bool) {
 	scope.mutex.Lock()
 	defer scope.mutex.Unlock()
-	entry, found := scope.entries[key]
-	if !found || (len(entry.keys) < fetch && !entry.complete) {
-		return nil, false, false
+	if entry, found := scope.entries[key]; found {
+		return entry, false
 	}
-	return append([]scoredKey(nil), entry.keys[:min(fetch, len(entry.keys))]...), true, tiedAtCut(entry.keys, fetch)
+	entry := &vectorKeyEntry{done: make(chan struct{}), keys: nil, err: nil}
+	scope.entries[key] = entry
+	return entry, true
 }
 
-// tiedAtCut reports whether the list has more than fetch keys and the key at position fetch has the same score as the preceding key.
-func tiedAtCut(keys []scoredKey, fetch int) bool {
-	return fetch > 0 && len(keys) > fetch && keys[fetch-1].score == keys[fetch].score
+// searchInto runs one vector search, stores its keys and error in entry, and closes entry.done.
+func (store *SharedStore) searchInto(ctx context.Context, entry *vectorKeyEntry, vectors string, vector []float32, expression string, limit int) {
+	entry.keys, entry.err = store.searchVectors(ctx, vectors, vector, expression, limit)
+	close(entry.done)
 }
 
-// store saves a list of vector keys under its key.
-func (scope *rankReuseScope) store(key rankReuseEntryKey, keys []scoredKey, complete bool) {
-	scope.mutex.Lock()
-	defer scope.mutex.Unlock()
-	scope.entries[key] = vectorKeyEntry{keys: keys, complete: complete}
-}
-
-// reusableIndex reports whether the store's dense index type appears in prefixStableIndexTypes. It reads the index definition from Milvus once per store and collection in a scope and saves the answer.
-func (store *SharedStore) reusableIndex(ctx context.Context, scope *rankReuseScope, vectors string) (bool, error) {
-	key := rankReuseEntryKey{store: store, key: vectors}
-	scope.mutex.Lock()
-	reusable, known := scope.reusable[key]
-	scope.mutex.Unlock()
-	if known {
-		return reusable, nil
-	}
-	definition, err := store.denseIndexDefinition(ctx, vectors)
-	if err != nil {
-		return false, err
-	}
-	reusable = prefixStableIndexTypes[definition.indexType]
-	scope.mutex.Lock()
-	scope.reusable[key] = reusable
-	scope.mutex.Unlock()
-	return reusable, nil
-}
-
-// rankedVectorKeys returns up to fetch keys in score order. With a scope and a reusable index, it reuses saved keys or saves a search for fetch times denseFetchGrowth keys, capped at collection.RankingDepth. Otherwise, or when scores tie at the cut, it searches for fetch keys.
+// rankedVectorKeys returns the best fetch vector keys in score order. Without a scope, it searches Milvus. With a scope, it starts one background search per query for fetch times denseFetchGrowth keys, capped at collection.RankingDepth. It reuses exact limits and searches directly if reuse fails.
 func (store *SharedStore) rankedVectorKeys(ctx context.Context, vectors string, vector []float32, expression string, fetch int) ([]scoredKey, error) {
 	scope, scoped := ctx.Value(rankReuseKey{}).(*rankReuseScope)
 	if !scoped {
 		return store.searchVectors(ctx, vectors, vector, expression, fetch)
 	}
-	reusable, err := store.reusableIndex(ctx, scope, vectors)
-	if err != nil {
-		return nil, err
+	base := vectorKeyCacheKey(vectors, expression, vector)
+	next := min(fetch*denseFetchGrowth, collection.RankingDepth)
+	if next > fetch && scope.firstSearch(rankReuseEntryKey{store: store, key: base, limit: 0}) {
+		if speculative, owner := scope.claim(rankReuseEntryKey{store: store, key: base, limit: next}); owner {
+			scope.background.Add(1)
+			go func() {
+				defer scope.background.Done()
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						speculative.err = fmt.Errorf("background vector search of %s panicked: %v", vectors, recovered)
+						close(speculative.done)
+					}
+				}()
+				store.searchInto(scope.ctx, speculative, vectors, vector, expression, next)
+			}()
+		}
 	}
-	if !reusable {
+	entry, owner := scope.claim(rankReuseEntryKey{store: store, key: base, limit: fetch})
+	if owner {
+		store.searchInto(ctx, entry, vectors, vector, expression, fetch)
+	} else {
+		select {
+		case <-entry.done:
+		case <-ctx.Done():
+			return nil, SearchError(ctx, "dense vector search", vectors, ctx.Err())
+		}
+	}
+	if entry.err != nil {
+		if owner {
+			return nil, entry.err
+		}
 		return store.searchVectors(ctx, vectors, vector, expression, fetch)
 	}
-	key := rankReuseEntryKey{store: store, key: vectorKeyCacheKey(vectors, expression, vector)}
-	cached, found, tied := scope.lookup(key, fetch)
-	if found && !tied {
-		return cached, nil
-	}
-	if found {
-		return store.searchVectors(ctx, vectors, vector, expression, fetch)
-	}
-	limit := min(fetch*denseFetchGrowth, collection.RankingDepth)
-	keys, err := store.searchVectors(ctx, vectors, vector, expression, limit)
-	if err != nil {
-		return nil, err
-	}
-	scope.store(key, keys, len(keys) < limit)
-	if tiedAtCut(keys, fetch) {
-		return store.searchVectors(ctx, vectors, vector, expression, fetch)
-	}
-	return append([]scoredKey(nil), keys[:min(fetch, len(keys))]...), nil
+	return append([]scoredKey(nil), entry.keys...), nil
 }

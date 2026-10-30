@@ -115,7 +115,7 @@ func TestSharedStoreRankReuseKeepsStoresInSeparateDatabasesApart(t *testing.T) {
 		if slices.Equal(firstWant, secondWant) {
 			t.Fatalf("%s: both databases returned the same candidates; the fixture needs different rows in each database", pair.name)
 		}
-		scope := milvusstore.WithRankReuse(ctx)
+		scope := rankReuseScope(t, ctx)
 		firstGot, err := pair.first.Rank(scope, request)
 		if err != nil {
 			t.Fatalf("%s: scoped rank in the default database: %v", pair.name, err)

@@ -209,7 +209,7 @@ func TestSharedStoreRankReuseMatchesUnscopedOnIVFSQ8Ties(t *testing.T) {
 			unscoped := newStore()
 			again := newStore()
 			scopedStore := newStore()
-			scope := milvusstore.WithRankReuse(ctx)
+			scope := rankReuseScope(t, ctx)
 			for _, limit := range limits {
 				request.Limit = limit
 				want, err := unscoped.Rank(ctx, request)
@@ -243,7 +243,7 @@ func requireScopedRankReusesSearch(t *testing.T, ctx context.Context, newStore f
 	t.Helper()
 	reader := newStore()
 	request := collection.SearchRequest{Collection: ivfReuseCollection, Query: "milvus segment", Vector: vector, Declaration: declaration, Limit: 20}
-	scope := milvusstore.WithRankReuse(ctx)
+	scope := rankReuseScope(t, ctx)
 	if _, err := reader.Rank(scope, request); err != nil {
 		t.Fatalf("first scoped rank: %v", err)
 	}
@@ -265,7 +265,7 @@ func requireScopedRankReusesSearch(t *testing.T, ctx context.Context, newStore f
 	if err != nil {
 		t.Fatalf("unscoped rank: %v", err)
 	}
-	fresh, err := reader.Rank(milvusstore.WithRankReuse(ctx), request)
+	fresh, err := reader.Rank(rankReuseScope(t, ctx), request)
 	if err != nil {
 		t.Fatalf("rank in a new scope: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestSharedStoreRankReuseMatchesUnscopedOnHNSW(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unscoped rank: %v", err)
 	}
-	got, err := store.Rank(milvusstore.WithRankReuse(ctx), request)
+	got, err := store.Rank(rankReuseScope(t, ctx), request)
 	if err != nil {
 		t.Fatalf("scoped rank with ef 64: %v", err)
 	}

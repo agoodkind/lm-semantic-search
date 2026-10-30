@@ -47,11 +47,19 @@ func reuseRow(id string, content string, vector []float32) collection.Row {
 	}
 }
 
+// rankReuseScope returns a context with a reuse scope and ends the scope during test cleanup.
+func rankReuseScope(t *testing.T, ctx context.Context) context.Context {
+	t.Helper()
+	scoped, end := milvusstore.WithRankReuse(ctx)
+	t.Cleanup(end)
+	return scoped
+}
+
 func containsCandidate(candidates []milvusstore.Candidate, id string) bool {
 	return slices.ContainsFunc(candidates, func(candidate milvusstore.Candidate) bool { return candidate.PrimaryKey == id })
 }
 
-// TestSharedStoreRankReuseMatchesFreshStoreAndSeesOtherWriters checks that scoped Rank results match a fresh SharedStore and that unscoped and newly scoped Rank calls return a matching row written by another SharedStore.
+// TestSharedStoreRankReuseMatchesFreshStoreAndSeesOtherWriters checks scoped Rank against a fresh store on a FLAT pair. After another store writes the query vector, it checks that the existing scope omits the row and that unscoped Rank and a new scope return it.
 func TestSharedStoreRankReuseMatchesFreshStoreAndSeesOtherWriters(t *testing.T) {
 	requireIntegration(t)
 	stack := startThrowawayStack(t, "4g")
@@ -82,7 +90,7 @@ func TestSharedStoreRankReuseMatchesFreshStoreAndSeesOtherWriters(t *testing.T) 
 	query := normalizedVector(generator)
 	request := collection.SearchRequest{Collection: reuseCollection, Query: reuseSparseQuery, Vector: query, Declaration: sharedDeclaration}
 
-	scoped := milvusstore.WithRankReuse(ctx)
+	scoped := rankReuseScope(t, ctx)
 	request.Limit = reuseFirstLimit
 	if _, err := reader.Rank(scoped, request); err != nil {
 		t.Fatalf("first scoped rank: %v", err)
@@ -100,11 +108,24 @@ func TestSharedStoreRankReuseMatchesFreshStoreAndSeesOtherWriters(t *testing.T) 
 		t.Fatalf("second scoped Rank returned %d candidates that differ from the %d candidates of a new store", len(reused), len(fresh))
 	}
 
+	beforeWrite := rankReuseScope(t, ctx)
+	request.Limit = reuseFirstLimit
+	if _, err := reader.Rank(beforeWrite, request); err != nil {
+		t.Fatalf("first rank of the second scope: %v", err)
+	}
 	writer := newStore()
 	if err := writer.Upsert(ctx, reuseCollection, sharedDeclaration, []collection.Row{reuseRow(reuseNewRowID, reuseOtherContent, slices.Clone(query))}); err != nil {
 		t.Fatalf("upsert through the second store: %v", err)
 	}
 	time.Sleep(sharedVisibilityWait)
+	request.Limit = reuseSecondLimit
+	sameScope, err := reader.Rank(beforeWrite, request)
+	if err != nil {
+		t.Fatalf("second rank of the second scope: %v", err)
+	}
+	if containsCandidate(sameScope, reuseNewRowID) {
+		t.Fatalf("the second Rank in one scope searched Milvus again and returned row %s written after the first Rank", reuseNewRowID)
+	}
 	unscoped, err := reader.Rank(ctx, request)
 	if err != nil {
 		t.Fatalf("unscoped rank after the second store wrote: %v", err)
@@ -112,7 +133,7 @@ func TestSharedStoreRankReuseMatchesFreshStoreAndSeesOtherWriters(t *testing.T) 
 	if !containsCandidate(unscoped, reuseNewRowID) {
 		t.Fatalf("Rank without a reuse scope did not return row %s that a second SharedStore wrote", reuseNewRowID)
 	}
-	nextRequest, err := reader.Rank(milvusstore.WithRankReuse(ctx), request)
+	nextRequest, err := reader.Rank(rankReuseScope(t, ctx), request)
 	if err != nil {
 		t.Fatalf("rank in a new scope: %v", err)
 	}
