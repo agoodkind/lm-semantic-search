@@ -175,7 +175,7 @@ func (store *SharedStore) denseLeg(ctx context.Context, occurrences string, vect
 	vectors := VectorCollectionName(occurrences)
 	fetch := depth
 	for {
-		keys, err := store.searchVectors(ctx, vectors, vector, superset, fetch)
+		keys, err := store.rankedVectorKeys(ctx, vectors, vector, superset, fetch)
 		if err != nil {
 			return nil, err
 		}
