@@ -11,20 +11,29 @@ import (
 	"goodkind.io/lm-semantic-search/collection"
 )
 
-// UpdateRowScalars uses Milvus partial updates to write the listed scalar columns
-// and metadata of existing occurrence rows by ID. Before any write, it rejects an
-// empty or repeated ID, empty metadata, a column that the occurrence collection
-// does not store with the same type, an ID without a stored occurrence, or a value
-// that does not fit its column.
+// UpdateRowScalars writes the listed scalar columns and metadata of existing
+// occurrence rows by ID using Milvus partial updates. It preserves content,
+// vectors, vector keys, and all other stored column values.
 //
-// It adds the new values to the ranges of every referenced vector, then writes
-// occurrence rows in batches of 256. After every batch succeeds, it recomputes each
-// referenced vector's ranges from all of its occurrences. If a batch fails, it keeps
-// the widened ranges and returns the error and the number of rows in batches that
-// Milvus accepted.
+// Before any write, it rejects an empty or repeated ID, empty metadata, an ID
+// without a stored occurrence, and a column that the occurrence collection
+// does not store with the same type. It also rejects a missing scalar value,
+// a null value for a column that is not nullable, or a value of another type
+// than its column.
 //
-// It preserves content, vectors, vector keys, and all other columns. A SharedStore
-// serializes this update with its other writes.
+// UpdateRowScalars does not check metadata length. Milvus checks metadata
+// length when it receives each batch and can reject a later batch after earlier
+// batches committed.
+//
+// UpdateRowScalars adds the new values to the ranges of every referenced vector,
+// then writes the occurrence rows in batches of 256. After every batch succeeds,
+// it recomputes the ranges of the referenced vectors from all their occurrences.
+//
+// If a batch write fails, UpdateRowScalars keeps the widened ranges and returns
+// the error and the number of rows in batches that Milvus confirmed. The server
+// can still commit the failed batch, but the returned count does not include it.
+//
+// One SharedStore serializes this update with its other writes.
 func (store *SharedStore) UpdateRowScalars(ctx context.Context, collectionName string, columns []collection.ScalarColumn, rows []collection.Row) (int, error) {
 	occurrences := strings.TrimSpace(collectionName)
 	if occurrences == "" {
