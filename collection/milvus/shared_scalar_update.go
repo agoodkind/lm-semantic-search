@@ -43,7 +43,6 @@ func (store *SharedStore) UpdateRowScalars(ctx context.Context, collectionName s
 		return 0, nil
 	}
 	if err := validateScalarUpdate(occurrences, columns, rows); err != nil {
-		slog.ErrorContext(ctx, "row scalar update request is invalid", "collection", occurrences, "err", err)
 		return 0, err
 	}
 	ids := make([]string, 0, len(rows))
@@ -64,7 +63,6 @@ func (store *SharedStore) UpdateRowScalars(ctx context.Context, collectionName s
 	}
 	if len(missing) > 0 {
 		missingErr := fmt.Errorf("occurrence collection %s does not contain rows for %d requested ids; first missing id: %s", occurrences, len(missing), missing[0])
-		slog.ErrorContext(ctx, "row scalar update includes ids without stored occurrences", "collection", occurrences, "missing", len(missing), "err", missingErr)
 		return 0, missingErr
 	}
 	declaration, err := store.storedDeclaration(ctx, occurrences, "")
@@ -72,13 +70,12 @@ func (store *SharedStore) UpdateRowScalars(ctx context.Context, collectionName s
 		return 0, err
 	}
 	if err := requireStoredColumns(occurrences, declaration.Scalars, columns); err != nil {
-		slog.ErrorContext(ctx, "row scalar update includes a column absent from the occurrence collection", "collection", occurrences, "err", err)
 		return 0, err
 	}
 	options := make([]rowScalarWrite, 0, (len(rows)+sharedWriteBatchSize-1)/sharedWriteBatchSize)
 	for start := 0; start < len(rows); start += sharedWriteBatchSize {
 		batch := rows[start:min(start+sharedWriteBatchSize, len(rows))]
-		option, err := rowScalarOption(ctx, occurrences, columns, batch)
+		option, err := rowScalarOption(occurrences, columns, batch)
 		if err != nil {
 			return 0, err
 		}
@@ -93,7 +90,6 @@ func (store *SharedStore) UpdateRowScalars(ctx context.Context, collectionName s
 			writeErr := WrapError(ctx, err, "update row scalars in "+occurrences)
 			// Milvus can commit the failed batch after this call returns. Keep the widened
 			// ranges without recomputing them; they cover both the old and new values.
-			slog.ErrorContext(ctx, "row scalar update stopped after a batch failed", "collection", occurrences, "written", written, "requested", len(rows), "err", writeErr)
 			return written, writeErr
 		}
 		written += len(write.rows)
@@ -132,7 +128,6 @@ func (store *SharedStore) widenSupersets(ctx context.Context, occurrences string
 			vector, stored := vectorByKey[key]
 			if !stored {
 				missingErr := fmt.Errorf("vector collection %s does not contain vector key %s referenced by occurrence %s", vectors, key, row.ID)
-				slog.ErrorContext(ctx, "row scalar update found an occurrence that references a missing vector", "collection", vectors, "vector_key", key, "err", missingErr)
 				return missingErr
 			}
 			dimension = len(vector)
@@ -172,7 +167,7 @@ type rowScalarWrite struct {
 // rowScalarOption builds a Milvus partial update with each row's ID, metadata,
 // and listed scalar columns. It returns an error if a value is missing, is null
 // for a column that does not allow null, or has a different type than its column.
-func rowScalarOption(ctx context.Context, occurrences string, columns []collection.ScalarColumn, rows []collection.Row) (WriteOption, error) {
+func rowScalarOption(occurrences string, columns []collection.ScalarColumn, rows []collection.Row) (WriteOption, error) {
 	ids := make([]string, 0, len(rows))
 	metadata := make([]string, 0, len(rows))
 	for _, row := range rows {
@@ -181,8 +176,7 @@ func rowScalarOption(ctx context.Context, occurrences string, columns []collecti
 	}
 	scalarColumns, err := DeclaredScalarInsertColumns(occurrences, columns, rows)
 	if err != nil {
-		slog.ErrorContext(ctx, "failed to build row scalar update columns", "collection", occurrences, "err", err)
-		return nil, fmt.Errorf("build row scalar update columns for %s: %w", occurrences, err)
+		return nil, err
 	}
 	return milvusclient.NewColumnBasedInsertOption(occurrences).
 		WithVarcharColumn(IDField, ids).
