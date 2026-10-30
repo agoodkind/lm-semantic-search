@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/milvus-io/milvus/client/v3/entity"
 	"github.com/milvus-io/milvus/client/v3/milvusclient"
@@ -71,13 +72,32 @@ func (store *SharedStore) Rank(ctx context.Context, request collection.SearchReq
 		limit = defaultSearchLimit
 	}
 	depth := rankingDepthFor(limit)
-	sparse, err := store.sparseLeg(ctx, occurrences, request.Query, compiled, groupColumn, grouped, depth)
-	if err != nil {
-		return nil, err
+	// The BM25 and dense legs run at the same time. Only a BM25 error cancels the other leg.
+	// Rank returns a BM25 error before a dense error.
+	denseCtx, cancelDense := context.WithCancel(ctx)
+	defer cancelDense()
+	var (
+		legs      sync.WaitGroup
+		sparse    []legHit
+		dense     []legHit
+		sparseErr error
+		denseErr  error
+	)
+	legs.Go(func() {
+		sparse, sparseErr = store.sparseLeg(ctx, occurrences, request.Query, compiled, groupColumn, grouped, depth)
+		if sparseErr != nil {
+			cancelDense()
+		}
+	})
+	legs.Go(func() {
+		dense, denseErr = store.denseLeg(denseCtx, occurrences, request.Vector, inline, superset, groupColumn, grouped, depth)
+	})
+	legs.Wait()
+	if sparseErr != nil {
+		return nil, sparseErr
 	}
-	dense, err := store.denseLeg(ctx, occurrences, request.Vector, inline, superset, groupColumn, grouped, depth)
-	if err != nil {
-		return nil, err
+	if denseErr != nil {
+		return nil, denseErr
 	}
 	return fuseLegs(dense, sparse, depth), nil
 }
