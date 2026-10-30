@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 
 	"goodkind.io/lm-semantic-search/collection"
@@ -110,6 +111,8 @@ func (store *SharedStore) rankedVectorKeys(ctx context.Context, vectors string, 
 	next := min(fetch*denseFetchGrowth, collection.RankingDepth)
 	if next > fetch && scope.firstSearch(rankReuseEntryKey{store: store, key: base, limit: 0}) {
 		if speculative, owner := scope.claim(rankReuseEntryKey{store: store, key: base, limit: next}); owner {
+			// The background search reads a vector copy made before the goroutine starts because it can continue after Rank returns and the caller reuses the buffer.
+			owned := slices.Clone(vector)
 			scope.background.Add(1)
 			go func() {
 				defer scope.background.Done()
@@ -119,7 +122,7 @@ func (store *SharedStore) rankedVectorKeys(ctx context.Context, vectors string, 
 						close(speculative.done)
 					}
 				}()
-				store.searchInto(scope.ctx, speculative, vectors, vector, expression, next)
+				store.searchInto(scope.ctx, speculative, vectors, owned, expression, next)
 			}()
 		}
 	}
