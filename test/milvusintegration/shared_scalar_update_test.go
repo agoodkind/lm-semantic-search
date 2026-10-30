@@ -4,10 +4,12 @@ package milvusintegration
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +31,11 @@ const (
 	scalarUpdateRangeLow   = int64(1_789_999_000)
 	scalarUpdateRangeHigh  = int64(1_790_001_000)
 	scalarUpdateQuery      = "zzzunmatchedterm"
+	// scalarUpdateLargeRows sets the large request size to one row more than a write
+	// batch. The neighboring constants set metadata larger than the Milvus column limit.
+	scalarUpdateLargeRows     = 257
+	sharedWriteBatchRows      = 256
+	scalarUpdateOversizeBytes = 70_000
 )
 
 // storedScalarRow contains the occurrence row fields that the scalar update
@@ -40,6 +47,15 @@ type storedScalarRow struct {
 	conversationID string
 	vectorKey      string
 	timestampUnix  int64
+	others         string
+}
+
+// scalarUpdatePreservedFields lists the occurrence columns an update must preserve,
+// including their null states.
+var scalarUpdatePreservedFields = []string{
+	milvusstore.ContentHashField, milvusstore.EmbeddingModelField, milvusstore.SplitPartField,
+	milvusstore.StartLineField, milvusstore.EndLineField, milvusstore.FileExtensionField,
+	"provider", "workspaceRoot", "archived", "label",
 }
 
 // TestSharedStoreUpdateRowScalarsWidensVectorRanges stores four occurrences
@@ -73,6 +89,15 @@ func TestSharedStoreUpdateRowScalarsWidensVectorRanges(t *testing.T) {
 		scalarUpdateRow("upd-c", "conv-c", "only occurrence of the second vector", shared2, scalarUpdateZeroTime),
 		scalarUpdateRow("upd-d", "conv-d", "untouched occurrence of the third vector", shared3, scalarUpdateOtherTime),
 	}
+	rows[0].SplitPart = 5
+	rows[0].SplitPartRecorded = true
+	rows[0].StartLine = 3
+	rows[0].EndLine = 9
+	rows[0].FileExtension = ".go"
+	rows[0].Scalars["label"] = collection.StringScalar("kept label")
+	rows[0].Scalars["archived"] = collection.BoolScalar(true)
+	rows[0].Scalars["provider"] = collection.StringScalar("codex")
+	rows[2].Scalars["workspaceRoot"] = collection.StringScalar("/ws/7")
 	if err := shared.Upsert(ctx, scalarUpdateCollection, sharedDeclaration, rows); err != nil {
 		t.Fatalf("shared upsert: %v", err)
 	}
@@ -83,6 +108,9 @@ func TestSharedStoreUpdateRowScalarsWidensVectorRanges(t *testing.T) {
 		if hits := scalarUpdateSearch(t, shared, vector); len(hits) != 0 {
 			t.Fatalf("date-filtered search returned rows before the update: %v", hitIDs(hits))
 		}
+	}
+	if ids := hitIDs(scalarUpdateSearchRange(t, shared, shared1, scalarUpdateOldTime, scalarUpdateOldTime)); !slices.Equal(ids, []string{"upd-b"}) {
+		t.Fatalf("before the update, search on the unchanged occurrence date did not return only that occurrence: %v", ids)
 	}
 
 	timestampColumn := []collection.ScalarColumn{{Name: "timestampUnix", Type: collection.ScalarTypeInt64, Nullable: false, MaxLength: 0}}
@@ -129,11 +157,100 @@ func TestSharedStoreUpdateRowScalarsWidensVectorRanges(t *testing.T) {
 	if got := countRows(t, client, vectorCollection); got != 3 {
 		t.Fatalf("vector collection row count is wrong: %d", got)
 	}
+	if ids := hitIDs(scalarUpdateSearchRange(t, shared, shared1, scalarUpdateOldTime, scalarUpdateOldTime)); !slices.Equal(ids, []string{"upd-b"}) {
+		t.Fatalf("after the update, search on the unchanged occurrence date did not return only that occurrence: %v", ids)
+	}
 	for _, vector := range [][]float32{shared1, shared2} {
 		ids := hitIDs(scalarUpdateSearch(t, shared, vector))
 		slices.Sort(ids)
 		if !slices.Equal(ids, []string{"upd-a", "upd-c"}) {
 			t.Fatalf("date-filtered search did not return exactly the updated rows: %v", ids)
+		}
+	}
+}
+
+// TestSharedStoreUpdateRowScalarsHandlesALaterBatch stores 257 occurrences on a
+// throwaway Milvus stack. It checks that a wrong type on the last row returns a
+// count of 0 and an error without changing stored rows. It then sends metadata on
+// the last row that exceeds the Milvus column limit, causing Milvus to reject the
+// second batch. It checks that the call returns a count of 256 and an error, the
+// first 256 rows have the new time, and the last row retains its old time. It also
+// checks that vector bytes remain unchanged and a date-filtered dense search
+// returns updated rows from the first batch.
+func TestSharedStoreUpdateRowScalarsHandlesALaterBatch(t *testing.T) {
+	requireIntegration(t)
+	stack := startThrowawayStack(t, "4g")
+	client := dialMilvus(t, stack)
+	ctx := context.Background()
+	shared, err := milvusstore.NewShared(client, milvusstore.Options{Hybrid: true, EmbeddingModel: "generated-model", DenseIndex: index.NewFlatIndex(entity.COSINE)})
+	if err != nil {
+		t.Fatalf("new shared store: %v", err)
+	}
+	if err := shared.EnsureCollection(ctx, collection.EnsureRequest{Collection: scalarUpdateCollection, Declaration: sharedDeclaration, Dimension: sharedDimension}); err != nil {
+		t.Fatalf("ensure %s: %v", scalarUpdateCollection, err)
+	}
+	vectorCollection := milvusstore.VectorCollectionName(scalarUpdateCollection)
+	loadSharedCollections(t, client, scalarUpdateCollection, vectorCollection)
+	generator := rand.New(rand.NewPCG(sharedSeed, sharedSeed+11))
+	rows := make([]collection.Row, 0, scalarUpdateLargeRows)
+	vectors := make([][]float32, 0, scalarUpdateLargeRows)
+	for position := range scalarUpdateLargeRows {
+		vector := normalizedVector(generator)
+		vectors = append(vectors, vector)
+		rows = append(rows, scalarUpdateRow(fmt.Sprintf("bulk-%03d", position), "conv-bulk", fmt.Sprintf("occurrence %d of the large update", position), vector, scalarUpdateZeroTime))
+	}
+	if err := shared.Upsert(ctx, scalarUpdateCollection, sharedDeclaration, rows); err != nil {
+		t.Fatalf("shared upsert: %v", err)
+	}
+	time.Sleep(sharedVisibilityWait)
+	before := readScalarRows(t, client, rows)
+	vectorsBefore := readVectorBits(t, client, vectorCollection, vectors)
+	timestampColumn := []collection.ScalarColumn{{Name: "timestampUnix", Type: collection.ScalarTypeInt64, Nullable: false, MaxLength: 0}}
+
+	wrongType := make([]collection.Row, 0, len(rows))
+	for _, row := range rows {
+		wrongType = append(wrongType, scalarUpdateChange(row.ID, scalarUpdateNewTimeA))
+	}
+	wrongType[len(wrongType)-1].Scalars = map[string]collection.ScalarValue{"timestampUnix": collection.StringScalar("not a time")}
+	if updated, err := shared.UpdateRowScalars(ctx, scalarUpdateCollection, timestampColumn, wrongType); err == nil || updated != 0 {
+		t.Fatalf("update with a wrong type did not return count 0 and an error; count and error: %d, %v", updated, err)
+	}
+	time.Sleep(sharedVisibilityWait)
+	if after := readScalarRows(t, client, rows); !scalarRowsEqual(before, after) {
+		t.Fatal("update with a wrong type changed stored rows")
+	}
+
+	rejected := make([]collection.Row, 0, len(rows))
+	for _, row := range rows {
+		rejected = append(rejected, scalarUpdateChange(row.ID, scalarUpdateNewTimeA))
+	}
+	rejected[len(rejected)-1].Metadata = `{"kind":"message","padding":"` + strings.Repeat("x", scalarUpdateOversizeBytes) + `"}`
+	updated, err := shared.UpdateRowScalars(ctx, scalarUpdateCollection, timestampColumn, rejected)
+	if err == nil || updated != scalarUpdateLargeRows-1 {
+		t.Fatalf("update with a rejected second batch did not return count 256 and an error; count and error: %d, %v", updated, err)
+	}
+	time.Sleep(sharedVisibilityWait)
+	after := readScalarRows(t, client, rows)
+	for position, row := range rows {
+		wantTime := scalarUpdateNewTimeA
+		if position == len(rows)-1 {
+			wantTime = scalarUpdateZeroTime
+		}
+		if after[row.ID].timestampUnix != wantTime {
+			t.Fatalf("stored time after the partial update is incorrect; row, got, want: %s: %d, %d", row.ID, after[row.ID].timestampUnix, wantTime)
+		}
+	}
+	if vectorsAfter := readVectorBits(t, client, vectorCollection, vectors); !vectorBitsEqual(vectorsBefore, vectorsAfter) {
+		t.Fatal("vector bytes changed after the update")
+	}
+	failedKey := milvusstore.VectorKey(vectors[len(vectors)-1])
+	if maximum := readVectorMaximum(t, client, vectorCollection, failedKey, "timestampUnix"); maximum < scalarUpdateNewTimeA {
+		t.Fatalf("vector range does not cover the last row's new time after the failed batch; vector key, stored maximum, new time: %s: %d, %d", failedKey, maximum, scalarUpdateNewTimeA)
+	}
+	for _, position := range []int{0, sharedWriteBatchRows - 1} {
+		ids := hitIDs(scalarUpdateSearch(t, shared, vectors[position]))
+		if !slices.Contains(ids, rows[position].ID) {
+			t.Fatalf("date-filtered search did not return an updated row from the accepted batch; row and returned ids: %s: %v", rows[position].ID, ids)
 		}
 	}
 }
@@ -179,7 +296,12 @@ func scalarUpdateChange(id string, timestampUnix int64) collection.Row {
 
 func scalarUpdateSearch(t *testing.T, shared *milvusstore.SharedStore, vector []float32) []collection.Hit {
 	t.Helper()
-	lower, upper := scalarUpdateRangeLow, scalarUpdateRangeHigh
+	return scalarUpdateSearchRange(t, shared, vector, scalarUpdateRangeLow, scalarUpdateRangeHigh)
+}
+
+func scalarUpdateSearchRange(t *testing.T, shared *milvusstore.SharedStore, vector []float32, lower int64, upper int64) []collection.Hit {
+	t.Helper()
+	upper++
 	filter := collection.ColumnRange("timestampUnix", &lower, &upper)
 	hits, err := shared.Search(context.Background(), collection.SearchRequest{
 		Collection:  scalarUpdateCollection,
@@ -213,7 +335,7 @@ func readScalarRows(t *testing.T, client *milvusclient.Client, rows []collection
 	}
 	resultSet, err := client.Query(ctx, milvusclient.NewQueryOption(scalarUpdateCollection).
 		WithIDs(column.NewColumnVarChar(milvusstore.IDField, ids)).
-		WithOutputFields(milvusstore.IDField, milvusstore.ContentField, milvusstore.RelativePathField, milvusstore.MetadataField, "conversationId", milvusstore.VectorKeyField, "timestampUnix").
+		WithOutputFields(append([]string{milvusstore.IDField, milvusstore.ContentField, milvusstore.RelativePathField, milvusstore.MetadataField, "conversationId", milvusstore.VectorKeyField, "timestampUnix"}, scalarUpdatePreservedFields...)...).
 		WithConsistencyLevel(entity.ClStrong))
 	if err != nil {
 		t.Fatalf("read occurrence rows: %v", err)
@@ -227,7 +349,11 @@ func readScalarRows(t *testing.T, client *milvusclient.Client, rows []collection
 		conversation, _ := resultSet.GetColumn("conversationId").GetAsString(rowIndex)
 		key, _ := resultSet.GetColumn(milvusstore.VectorKeyField).GetAsString(rowIndex)
 		timestampUnix, _ := resultSet.GetColumn("timestampUnix").GetAsInt64(rowIndex)
-		stored[id] = storedScalarRow{content: content, relativePath: path, metadata: metadata, conversationID: conversation, vectorKey: key, timestampUnix: timestampUnix}
+		var others strings.Builder
+		for _, name := range scalarUpdatePreservedFields {
+			others.WriteString(name + "=" + scalarCellText(t, resultSet.GetColumn(name), rowIndex) + ";")
+		}
+		stored[id] = storedScalarRow{content: content, relativePath: path, metadata: metadata, conversationID: conversation, vectorKey: key, timestampUnix: timestampUnix, others: others.String()}
 	}
 	if len(stored) != len(rows) {
 		t.Fatalf("occurrence query returned the wrong number of rows; got and want: %d, %d", len(stored), len(rows))
@@ -267,6 +393,44 @@ func readVectorBits(t *testing.T, client *milvusclient.Client, vectorCollection 
 		t.Fatalf("vector collection row count is wrong: %d", len(bits))
 	}
 	return bits
+}
+
+func readVectorMaximum(t *testing.T, client *milvusclient.Client, vectorCollection string, key string, columnName string) int64 {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), milvusCallTimeout)
+	defer cancel()
+	field := "maximum_" + columnName
+	resultSet, err := client.Query(ctx, milvusclient.NewQueryOption(vectorCollection).
+		WithIDs(column.NewColumnVarChar(milvusstore.VectorKeyField, []string{key})).
+		WithOutputFields(milvusstore.VectorKeyField, field).
+		WithConsistencyLevel(entity.ClStrong))
+	if err != nil || resultSet.ResultCount != 1 {
+		t.Fatalf("cannot read vector range; vector key, result count, error: %s: %d, %v", key, resultSet.ResultCount, err)
+	}
+	maximum, err := resultSet.GetColumn(field).GetAsInt64(0)
+	if err != nil {
+		t.Fatalf("cannot read vector range; vector key, result count, error: %s: %d, %v", key, resultSet.ResultCount, err)
+	}
+	return maximum
+}
+
+func scalarCellText(t *testing.T, resultColumn column.Column, rowIndex int) string {
+	t.Helper()
+	if resultColumn == nil {
+		t.Fatal("query result does not contain a requested column")
+	}
+	isNull, err := resultColumn.IsNull(rowIndex)
+	if err != nil {
+		t.Fatalf("could not read query cell; column and error: %s: %v", resultColumn.Name(), err)
+	}
+	if isNull {
+		return "null"
+	}
+	value, err := resultColumn.Get(rowIndex)
+	if err != nil {
+		t.Fatalf("could not read query cell; column and error: %s: %v", resultColumn.Name(), err)
+	}
+	return fmt.Sprint(value)
 }
 
 func scalarRowsEqual(left map[string]storedScalarRow, right map[string]storedScalarRow) bool {

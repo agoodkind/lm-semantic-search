@@ -11,14 +11,20 @@ import (
 	"goodkind.io/lm-semantic-search/collection"
 )
 
-// UpdateRowScalars uses a Milvus partial update to write the listed scalar
-// columns and metadata of existing occurrence rows by ID. It then recomputes
-// the column ranges for every referenced vector from all of its occurrences.
-// Content, vectors, vector keys, and all other columns retain their stored
-// values. It returns the number of updated rows. It fails before any write if
-// a row ID is empty or repeated, metadata is empty, a listed column is absent
-// from the occurrence collection or has a different type, or an ID has no
-// stored occurrence. A SharedStore serializes this update with its other writes.
+// UpdateRowScalars uses Milvus partial updates to write the listed scalar columns
+// and metadata of existing occurrence rows by ID. Before any write, it rejects an
+// empty or repeated ID, empty metadata, a column that the occurrence collection
+// does not store with the same type, an ID without a stored occurrence, or a value
+// that does not fit its column.
+//
+// It adds the new values to the ranges of every referenced vector, then writes
+// occurrence rows in batches of 256. After every batch succeeds, it recomputes each
+// referenced vector's ranges from all of its occurrences. If a batch fails, it keeps
+// the widened ranges and returns the error and the number of rows in batches that
+// Milvus accepted.
+//
+// It preserves content, vectors, vector keys, and all other columns. A SharedStore
+// serializes this update with its other writes.
 func (store *SharedStore) UpdateRowScalars(ctx context.Context, collectionName string, columns []collection.ScalarColumn, rows []collection.Row) (int, error) {
 	occurrences := strings.TrimSpace(collectionName)
 	if occurrences == "" {
@@ -60,26 +66,104 @@ func (store *SharedStore) UpdateRowScalars(ctx context.Context, collectionName s
 		slog.ErrorContext(ctx, "row scalar update includes a column absent from the occurrence collection", "collection", occurrences, "err", err)
 		return 0, err
 	}
+	options := make([]rowScalarWrite, 0, (len(rows)+sharedWriteBatchSize-1)/sharedWriteBatchSize)
 	for start := 0; start < len(rows); start += sharedWriteBatchSize {
 		batch := rows[start:min(start+sharedWriteBatchSize, len(rows))]
-		if err := store.writeRowScalars(ctx, occurrences, columns, batch); err != nil {
+		option, err := rowScalarOption(ctx, occurrences, columns, batch)
+		if err != nil {
 			return 0, err
 		}
+		options = append(options, rowScalarWrite{option: option, rows: batch})
+	}
+	if err := store.widenSupersets(ctx, occurrences, declaration.Scalars, keyByID, rows); err != nil {
+		return 0, err
+	}
+	written := 0
+	for _, write := range options {
+		if _, err := store.inner.client.Upsert(ctx, write.option); err != nil {
+			writeErr := WrapError(ctx, err, "update row scalars in "+occurrences)
+			// Milvus can commit the failed batch after this call returns. Keep the widened
+			// ranges without recomputing them; they cover both the old and new values.
+			slog.ErrorContext(ctx, "row scalar update stopped after a batch failed", "collection", occurrences, "written", written, "requested", len(rows), "err", writeErr)
+			return written, writeErr
+		}
+		written += len(write.rows)
 	}
 	keys := make(map[string]struct{}, len(keyByID))
 	for _, key := range keyByID {
 		keys[key] = struct{}{}
 	}
 	if err := store.rebuildSupersets(ctx, occurrences, declaration.Scalars, sortedKeys(keys)); err != nil {
-		return 0, err
+		return written, err
 	}
 	slog.InfoContext(ctx, "collection.shared_row_scalars_updated", "collection", occurrences, "rows", len(rows), "vectors", len(keys))
 	return len(rows), nil
 }
 
-// writeRowScalars sends one Milvus partial update containing each row's ID,
-// metadata, and listed scalar columns.
-func (store *SharedStore) writeRowScalars(ctx context.Context, occurrences string, columns []collection.ScalarColumn, rows []collection.Row) error {
+// widenSupersets adds the new scalar values of the requested rows to the stored
+// ranges of each referenced vector. It rewrites only vector rows with changed
+// ranges, using their stored vectors. If a later occurrence write fails, each
+// vector range still covers both the old and new values.
+func (store *SharedStore) widenSupersets(ctx context.Context, occurrences string, scalars []collection.ScalarColumn, keyByID map[string]string, rows []collection.Row) error {
+	vectors := VectorCollectionName(occurrences)
+	keySet := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		keySet[keyByID[row.ID]] = struct{}{}
+	}
+	vectorByKey, err := store.vectorsByKey(ctx, vectors, sortedKeys(keySet))
+	if err != nil {
+		return err
+	}
+	records := make(map[string]*vectorRecord, len(keySet))
+	dimension := 0
+	for _, row := range rows {
+		key := keyByID[row.ID]
+		record, found := records[key]
+		if !found {
+			vector, stored := vectorByKey[key]
+			if !stored {
+				missingErr := fmt.Errorf("vector collection %s does not contain vector key %s referenced by occurrence %s", vectors, key, row.ID)
+				slog.ErrorContext(ctx, "row scalar update found an occurrence that references a missing vector", "collection", vectors, "vector_key", key, "err", missingErr)
+				return missingErr
+			}
+			dimension = len(vector)
+			record = newVectorRecord(key, vector, scalars)
+			records[key] = record
+		}
+		record.addRow(scalars, row.Scalars)
+	}
+	unchanged, err := store.mergeStoredSupersets(ctx, vectors, scalars, records)
+	if err != nil {
+		return err
+	}
+	ordered := make([]*vectorRecord, 0, len(records))
+	for _, key := range sortedRecordKeys(records) {
+		if _, skip := unchanged[key]; !skip {
+			ordered = append(ordered, records[key])
+		}
+	}
+	for start := 0; start < len(ordered); start += sharedWriteBatchSize {
+		option, err := vectorUpsertOption(vectors, dimension, scalars, ordered[start:min(start+sharedWriteBatchSize, len(ordered))])
+		if err != nil {
+			return err
+		}
+		if _, err := store.inner.client.Upsert(ctx, option); err != nil {
+			return WrapError(ctx, err, "widen Milvus vector ranges in "+vectors)
+		}
+	}
+	return nil
+}
+
+// rowScalarWrite contains one prepared partial update and the rows it writes.
+type rowScalarWrite struct {
+	option WriteOption
+	rows   []collection.Row
+}
+
+// rowScalarOption builds a Milvus partial update with each row's ID, metadata,
+// and listed scalar columns. It returns an error if a value is missing, is null
+// for a column that does not allow null, or has a different type than its column.
+func rowScalarOption(ctx context.Context, occurrences string, columns []collection.ScalarColumn, rows []collection.Row) (WriteOption, error) {
 	ids := make([]string, 0, len(rows))
 	metadata := make([]string, 0, len(rows))
 	for _, row := range rows {
@@ -89,17 +173,13 @@ func (store *SharedStore) writeRowScalars(ctx context.Context, occurrences strin
 	scalarColumns, err := DeclaredScalarInsertColumns(occurrences, columns, rows)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to build row scalar update columns", "collection", occurrences, "err", err)
-		return fmt.Errorf("build row scalar update columns for %s: %w", occurrences, err)
+		return nil, fmt.Errorf("build row scalar update columns for %s: %w", occurrences, err)
 	}
-	option := milvusclient.NewColumnBasedInsertOption(occurrences).
+	return milvusclient.NewColumnBasedInsertOption(occurrences).
 		WithVarcharColumn(IDField, ids).
 		WithVarcharColumn(MetadataField, metadata).
 		WithColumns(scalarColumns...).
-		WithPartialUpdate(true)
-	if _, err := store.inner.client.Upsert(ctx, option); err != nil {
-		return WrapError(ctx, err, "update row scalars in "+occurrences)
-	}
-	return nil
+		WithPartialUpdate(true), nil
 }
 
 func validateScalarUpdate(occurrences string, columns []collection.ScalarColumn, rows []collection.Row) error {
