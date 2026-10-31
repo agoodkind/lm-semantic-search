@@ -18,7 +18,7 @@ require (
 	github.com/milvus-io/milvus-proto/go-api/v3 v3.0.4
 	github.com/milvus-io/milvus/client/v3 v3.0.0
 	github.com/milvus-io/milvus/pkg/v3 v3.0.4
-	github.com/openai/openai-go/v3 v3.88.0
+	github.com/openai/openai-go/v3 v3.89.0
 	github.com/rjeczalik/notify v0.9.3
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/mod v0.42.0
