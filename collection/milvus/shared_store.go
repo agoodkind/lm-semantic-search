@@ -23,6 +23,8 @@ const (
 	// sharedWriteBatchSize bounds the rows one shared upsert request writes.
 	sharedWriteBatchSize = 256
 	sharedIteratorBatch  = 1000
+	// rebuildIteratorBatch sets the rows per rebuildSupersets iterator page and stays below the Milvus query limit of 16,384 rows.
+	rebuildIteratorBatch = 16000
 )
 
 // SharedStore implements [collection.Store] on two Milvus collections. The
@@ -398,7 +400,7 @@ func (store *SharedStore) rebuildSupersets(ctx context.Context, occurrences stri
 		for _, declared := range scalars {
 			outputFields = append(outputFields, declared.Name)
 		}
-		err = store.iterate(ctx, occurrences, vectorKeysExpression(batch), outputFields, func(resultSet milvusclient.ResultSet) error {
+		err = store.iterateWithBatch(ctx, occurrences, vectorKeysExpression(batch), outputFields, rebuildIteratorBatch, func(resultSet milvusclient.ResultSet) error {
 			return addOccurrenceCells(resultSet, scalars, records)
 		})
 		if err != nil {

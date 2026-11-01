@@ -36,6 +36,10 @@ const (
 	scalarUpdateLargeRows     = 257
 	sharedWriteBatchRows      = 256
 	scalarUpdateOversizeBytes = 70_000
+	scalarUpdatePagedRows       = 16_100
+	scalarUpdatePagedLowOffset  = 50
+	scalarUpdatePagedHighOffset = 25
+	scalarUpdatePagedSpike      = int64(1_800_000_000)
 )
 
 // storedScalarRow contains the occurrence row fields that the scalar update
@@ -255,6 +259,106 @@ func TestSharedStoreUpdateRowScalarsHandlesALaterBatch(t *testing.T) {
 	}
 }
 
+// The test checks vector date ranges, stored rows, and vector bytes when one
+// vector has more occurrences than one rebuild page, even after a failed write.
+func TestSharedStoreUpdateRowScalarsRebuildsAcrossIteratorPages(t *testing.T) {
+	requireIntegration(t)
+	stack := startThrowawayStack(t, "4g")
+	client := dialMilvus(t, stack)
+	ctx := context.Background()
+	shared, err := milvusstore.NewShared(client, milvusstore.Options{Hybrid: true, EmbeddingModel: "generated-model", DenseIndex: index.NewFlatIndex(entity.COSINE)})
+	if err != nil {
+		t.Fatalf("The test could not create the shared store: %v", err)
+	}
+	if err := shared.EnsureCollection(ctx, collection.EnsureRequest{Collection: scalarUpdateCollection, Declaration: sharedDeclaration, Dimension: sharedDimension}); err != nil {
+		t.Fatalf("The shared store could not ensure the collection: %v", err)
+	}
+	vectorCollection := milvusstore.VectorCollectionName(scalarUpdateCollection)
+	loadSharedCollections(t, client, scalarUpdateCollection, vectorCollection)
+
+	vector := normalizedVector(rand.New(rand.NewPCG(sharedSeed, sharedSeed+13)))
+	key := milvusstore.VectorKey(vector)
+	rows := make([]collection.Row, 0, scalarUpdatePagedRows)
+	for position := range scalarUpdatePagedRows {
+		timestampUnix := scalarUpdateOldTime
+		switch position {
+		case scalarUpdatePagedRows - scalarUpdatePagedLowOffset:
+			timestampUnix = scalarUpdateOtherTime
+		case scalarUpdatePagedRows - scalarUpdatePagedHighOffset:
+			timestampUnix = scalarUpdateNewTimeC
+		}
+		rows = append(rows, scalarUpdateRow(fmt.Sprintf("paged-%05d", position), "conv-paged", fmt.Sprintf("paged occurrence %d", position), vector, timestampUnix))
+	}
+	for start := 0; start < len(rows); start += sharedWriteBatchRows {
+		if err := shared.Upsert(ctx, scalarUpdateCollection, sharedDeclaration, rows[start:min(start+sharedWriteBatchRows, len(rows))]); err != nil {
+			t.Fatalf("The shared store could not seed the occurrence rows: %v", err)
+		}
+	}
+	time.Sleep(sharedVisibilityWait)
+	before := readScalarRows(t, client, rows)
+	vectorsBefore := readVectorBits(t, client, vectorCollection, [][]float32{vector})
+	timestampColumn := []collection.ScalarColumn{{Name: "timestampUnix", Type: collection.ScalarTypeInt64, Nullable: false, MaxLength: 0}}
+	updateFirstRows := func(timestampUnix int64) {
+		t.Helper()
+		changes := make([]collection.Row, 0, sharedWriteBatchRows)
+		for _, row := range rows[:sharedWriteBatchRows] {
+			changes = append(changes, scalarUpdateChange(row.ID, timestampUnix))
+		}
+		updated, updateErr := shared.UpdateRowScalars(ctx, scalarUpdateCollection, timestampColumn, changes)
+		if updateErr != nil || updated != sharedWriteBatchRows {
+			t.Fatalf("UpdateRowScalars did not write every row; written count: %d, error: %v", updated, updateErr)
+		}
+		time.Sleep(sharedVisibilityWait)
+	}
+	requireRange := func(stage string, wantMinimum int64, wantMaximum int64) {
+		t.Helper()
+		minimum := readVectorBound(t, client, vectorCollection, key, "minimum_timestampUnix")
+		maximum := readVectorBound(t, client, vectorCollection, key, "maximum_timestampUnix")
+		if minimum != wantMinimum || maximum != wantMaximum {
+			t.Fatalf("The stored vector range differs from the wanted range at stage %s; stored minimum: %d, stored maximum: %d, wanted minimum: %d, wanted maximum: %d", stage, minimum, maximum, wantMinimum, wantMaximum)
+		}
+	}
+
+	requireRange("seeded", scalarUpdateOtherTime, scalarUpdateNewTimeC)
+	updateFirstRows(scalarUpdatePagedSpike)
+	requireRange("widened", scalarUpdateOtherTime, scalarUpdatePagedSpike)
+	updateFirstRows(scalarUpdateNewTimeA)
+	requireRange("narrowed", scalarUpdateOtherTime, scalarUpdateNewTimeC)
+
+	after := readScalarRows(t, client, rows)
+	want := make(map[string]storedScalarRow, len(before))
+	for id, row := range before {
+		want[id] = row
+	}
+	for _, row := range rows[:sharedWriteBatchRows] {
+		changed := want[row.ID]
+		changed.timestampUnix = scalarUpdateNewTimeA
+		changed.metadata = scalarUpdateChange(row.ID, scalarUpdateNewTimeA).Metadata
+		want[row.ID] = changed
+	}
+	if !scalarRowsEqual(after, want) {
+		t.Fatal("Stored rows differ beyond the updated date and metadata.")
+	}
+	if vectorsAfter := readVectorBits(t, client, vectorCollection, [][]float32{vector}); !vectorBitsEqual(vectorsBefore, vectorsAfter) {
+		t.Fatal("Vector bytes changed after the updates.")
+	}
+
+	rejected := make([]collection.Row, 0, sharedWriteBatchRows+1)
+	for _, row := range rows[:sharedWriteBatchRows+1] {
+		rejected = append(rejected, scalarUpdateChange(row.ID, scalarUpdatePagedSpike))
+	}
+	rejected[len(rejected)-1].Metadata = `{"kind":"message","padding":"` + strings.Repeat("x", scalarUpdateOversizeBytes) + `"}`
+	updated, err := shared.UpdateRowScalars(ctx, scalarUpdateCollection, timestampColumn, rejected)
+	if err == nil || updated != sharedWriteBatchRows {
+		t.Fatalf("UpdateRowScalars did not return 256 written rows and an error for the rejected later batch; written count: %d, error: %v", updated, err)
+	}
+	time.Sleep(sharedVisibilityWait)
+	requireRange("failed write", scalarUpdateOtherTime, scalarUpdatePagedSpike)
+	if vectorsAfter := readVectorBits(t, client, vectorCollection, [][]float32{vector}); !vectorBitsEqual(vectorsBefore, vectorsAfter) {
+		t.Fatal("Vector bytes changed after the failed write.")
+	}
+}
+
 func scalarUpdateRow(id string, conversation string, content string, vector []float32, timestampUnix int64) collection.Row {
 	return collection.Row{
 		ID:                id,
@@ -412,6 +516,24 @@ func readVectorMaximum(t *testing.T, client *milvusclient.Client, vectorCollecti
 		t.Fatalf("cannot read vector range; vector key, result count, error: %s: %d, %v", key, resultSet.ResultCount, err)
 	}
 	return maximum
+}
+
+func readVectorBound(t *testing.T, client *milvusclient.Client, vectorCollection string, key string, field string) int64 {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), milvusCallTimeout)
+	defer cancel()
+	resultSet, err := client.Query(ctx, milvusclient.NewQueryOption(vectorCollection).
+		WithIDs(column.NewColumnVarChar(milvusstore.VectorKeyField, []string{key})).
+		WithOutputFields(milvusstore.VectorKeyField, field).
+		WithConsistencyLevel(entity.ClStrong))
+	if err != nil || resultSet.ResultCount != 1 {
+		t.Fatalf("The test could not read the stored range bound for vector key %s with result count %d and error %v", key, resultSet.ResultCount, err)
+	}
+	bound, err := resultSet.GetColumn(field).GetAsInt64(0)
+	if err != nil {
+		t.Fatalf("The test could not read the stored range bound for vector key %s with result count %d and error %v", key, resultSet.ResultCount, err)
+	}
+	return bound
 }
 
 func scalarCellText(t *testing.T, resultColumn column.Column, rowIndex int) string {
