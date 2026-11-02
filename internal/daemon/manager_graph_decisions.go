@@ -89,8 +89,9 @@ func (manager *Manager) readDatabaseDecisions(ctx context.Context, codebaseID st
 }
 
 // retainGraphDecisions copies a graph's decision record outside the graph files.
-// If the file for the canonical path contains a different record, it writes
-// the new record to a second file.
+// If the file for the canonical path contains a different record, it copies
+// that older record to a second file and writes the new record to the file
+// that the next index restores.
 func (manager *Manager) retainGraphDecisions(ctx context.Context, codebaseID string, canonicalPath string, cachedEngine *cbm.Engine) error {
 	content, err := manager.readGraphDecisions(ctx, codebaseID, cachedEngine)
 	if err != nil {
@@ -110,8 +111,11 @@ func (manager *Manager) retainGraphDecisions(ctx context.Context, codebaseID str
 		if bytes.Equal(existing, data) {
 			return nil
 		}
-		retainedPath = retainedPath + "." + codebaseID
-		slog.WarnContext(ctx, "The retained graph decisions differ; the daemon will write a second file", "codebase_id", codebaseID, "path", retainedPath)
+		olderPath := retainedPath + "." + codebaseID
+		slog.WarnContext(ctx, "The retained graph decisions differ; the daemon will copy the older record to a second file", "codebase_id", codebaseID, "path", olderPath)
+		if err = store.WriteFileAtomically(olderPath, existing, retainedDecisionsCopyType); err != nil {
+			return fmt.Errorf("the daemon could not copy the older retained graph decision record: %w", err)
+		}
 	}
 	if err = store.WriteFileAtomically(retainedPath, data, retainedDecisionsCopyType); err != nil {
 		return fmt.Errorf("the daemon could not write the retained graph decision record: %w", err)

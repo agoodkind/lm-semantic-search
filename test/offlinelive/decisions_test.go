@@ -3,6 +3,8 @@
 package offlinelive
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -14,6 +16,7 @@ import (
 
 const (
 	retainedDecisionsContent   = "## PURPOSE\nSynthetic retained decision record\n"
+	olderDecisionsContent      = "## PURPOSE\nSynthetic older decision record\n"
 	retainedDecisionsDirectory = "retained-decisions"
 	decisionToolName           = "manage_adr"
 	decisionStatusUpdated      = "updated"
@@ -68,6 +71,47 @@ func TestClearIndexKeepsDecisionsForNextIndex(t *testing.T) {
 	}
 	if len(retainedFiles) != 0 {
 		t.Fatalf("The retained decisions directory contains %d files after restore instead of 0", len(retainedFiles))
+	}
+}
+
+// TestClearIndexRestoresNewestDecisions seeds an older retained record for an
+// indexed path, calls ClearIndex, and indexes the path again. It checks that
+// the index restores the newer record and that one remaining retained file
+// contains the older record.
+func TestClearIndexRestoresNewestDecisions(t *testing.T) {
+	harness := newHarness(t)
+	requireCompleted(t, harness.indexFixture())
+	harness.updateDecisions()
+	canonicalPath := harness.indexStatus().GetCodebase().GetCanonicalPath()
+	digest := sha256.Sum256([]byte(canonicalPath))
+	retainedDirectory := filepath.Join(harness.config.GraphDir, retainedDecisionsDirectory)
+	if err := os.MkdirAll(retainedDirectory, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned an error: %v", err)
+	}
+	seededPath := filepath.Join(retainedDirectory, hex.EncodeToString(digest[:])+".adr")
+	if err := os.WriteFile(seededPath, []byte(olderDecisionsContent), decisionFilePermission); err != nil {
+		t.Fatalf("WriteFile returned an error: %v", err)
+	}
+
+	harness.clearIndex()
+	requireCompleted(t, harness.indexFixture())
+
+	if got := harness.readDecisions(); got != retainedDecisionsContent {
+		t.Fatalf("The decision record after ClearIndex and a new index is %q instead of %q", got, retainedDecisionsContent)
+	}
+	retainedFiles, err := os.ReadDir(retainedDirectory)
+	if err != nil {
+		t.Fatalf("ReadDir returned an error: %v", err)
+	}
+	if len(retainedFiles) != 1 {
+		t.Fatalf("The retained decisions directory contains %d files instead of 1", len(retainedFiles))
+	}
+	olderRecord, err := os.ReadFile(filepath.Join(retainedDirectory, retainedFiles[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile returned an error: %v", err)
+	}
+	if string(olderRecord) != olderDecisionsContent {
+		t.Fatalf("The second retained file contains %q instead of %q", olderRecord, olderDecisionsContent)
 	}
 }
 
