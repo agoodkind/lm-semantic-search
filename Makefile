@@ -146,8 +146,9 @@ live: | $(GO_MK_PREREQS)
 
 # offline-live runs the self-contained offline-profile acceptance suite against
 # an isolated in-process daemon, embedded vector store, and embedded ONNX model.
+# The offline-live tests can run longer than the default go test timeout.
 offline-live: | $(GO_MK_PREREQS)
-	go test -tags offlinelive -count=1 ./test/offlinelive/
+	go test -tags offlinelive -count=1 -timeout 20m ./test/offlinelive/
 
 # milvus-integration runs the opt-in suite that proves the daemon's collection
 # load controls against a real Milvus. Each test starts its own throwaway
