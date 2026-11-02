@@ -109,7 +109,7 @@ func (manager *Manager) removeCodebaseArtifacts(
 		slog.ErrorContext(ctx, "remove Merkle snapshot failed", "codebase_id", codebase.ID, "err", wrappedErr)
 		return wrappedErr
 	}
-	if err := manager.clearGraphCache(ctx, codebase.ID); err != nil {
+	if err := manager.clearGraphCache(ctx, codebase.ID, codebase.CanonicalPath); err != nil {
 		wrappedErr := fmt.Errorf("remove graph cache for %s: %w", codebase.ID, err)
 		slog.ErrorContext(ctx, "remove graph cache failed", "codebase_id", codebase.ID, "err", wrappedErr)
 		return wrappedErr

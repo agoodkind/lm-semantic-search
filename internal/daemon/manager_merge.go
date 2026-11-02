@@ -72,6 +72,7 @@ func (manager *Manager) absorbDescendants(ctx context.Context, descendants []mod
 	manager.policyMutationMutex.Lock()
 	manager.mu.Lock()
 	removed := make([]string, 0, len(descendants))
+	removedPaths := make(map[string]string, len(descendants))
 	for _, child := range descendants {
 		current, ok := manager.codebases[child.ID]
 		if !ok || current.ActiveJobID != "" {
@@ -79,6 +80,7 @@ func (manager *Manager) absorbDescendants(ctx context.Context, descendants []mod
 		}
 		delete(manager.codebases, child.ID)
 		removed = append(removed, child.ID)
+		removedPaths[child.ID] = current.CanonicalPath
 		if rmErr := os.Remove(manager.merklePath(child.ID)); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			slog.WarnContext(ctx, "remove absorbed child merkle failed", "child_codebase_id", child.ID, "err", rmErr)
 		}
@@ -92,8 +94,8 @@ func (manager *Manager) absorbDescendants(ctx context.Context, descendants []mod
 	manager.policyMutationMutex.Unlock()
 
 	for _, id := range removed {
-		if err := manager.clearGraphCache(ctx, id); err != nil {
-			slog.WarnContext(ctx, "remove absorbed child graph failed", "child_codebase_id", id, "err", err)
+		if err := manager.clearGraphCache(ctx, id, removedPaths[id]); err != nil {
+			slog.ErrorContext(ctx, "absorbDescendants could not remove the child graph", "child_codebase_id", id, "err", err)
 		}
 		manager.notifyCodebaseRemoved(ctx, id)
 	}

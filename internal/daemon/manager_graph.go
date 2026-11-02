@@ -229,12 +229,28 @@ func defaultGraphIndex(ctx context.Context, engine *cbm.Engine, canonicalPath st
 	return nil
 }
 
-func (manager *Manager) clearGraphCache(ctx context.Context, codebaseID string) error {
+// clearGraphCache copies the codebase's decision record to a file for its path
+// before removing the graph files. It keeps the graph files if the copy fails.
+// The manager rejects new graph operations while the clearing state is active.
+// It releases graphMutex during the copy.
+func (manager *Manager) clearGraphCache(ctx context.Context, codebaseID string, canonicalPath string) error {
 	manager.graphMutex.Lock()
 	state := manager.graphLifecycleStateLocked(codebaseID)
 	state.clearing = true
 	for state.active > 0 {
 		state.idle.Wait()
+	}
+	cachedEngine := manager.graphEngines[codebaseID]
+	manager.graphMutex.Unlock()
+
+	retainErr := manager.retainGraphDecisions(ctx, codebaseID, canonicalPath, cachedEngine)
+
+	manager.graphMutex.Lock()
+	if retainErr != nil {
+		delete(manager.graphLifecycle, codebaseID)
+		manager.graphMutex.Unlock()
+		slog.ErrorContext(ctx, "clearGraphCache could not copy the graph decision record", "codebase_id", codebaseID, "err", retainErr)
+		return fmt.Errorf("clearGraphCache could not copy the graph decision record: %w", retainErr)
 	}
 
 	if engine, found := manager.graphEngines[codebaseID]; found {
@@ -275,6 +291,12 @@ func (manager *Manager) indexGraphNonFatal(ctx context.Context, codebaseID strin
 		releaseIndex()
 		slog.WarnContext(ctx, "open graph engine failed; continuing without graph index", "codebase_id", codebaseID, "err", err)
 		return fmt.Errorf("open graph engine: %w", err)
+	}
+	if err = manager.restoreRetainedDecisions(ctx, codebaseID, canonicalPath); err != nil {
+		release()
+		releaseIndex()
+		slog.ErrorContext(ctx, "indexGraphNonFatal could not restore the retained graph decision record", "codebase_id", codebaseID, "path", canonicalPath, "err", err)
+		return fmt.Errorf("indexGraphNonFatal could not restore the retained graph decision record: %w", err)
 	}
 
 	result := make(chan error, 1)
@@ -416,6 +438,8 @@ func (manager *Manager) graphPaths(codebaseID string) []string {
 		basePath,
 		basePath + "-wal",
 		basePath + "-shm",
+		manager.graphDecisionsPath(codebaseID),
+		manager.graphDecisionsPath(codebaseID) + graphDecisionsTempSuffix,
 	}
 }
 

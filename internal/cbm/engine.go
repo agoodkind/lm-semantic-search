@@ -41,6 +41,21 @@ type indexArguments struct {
 	Name           string `json:"name"`
 }
 
+type decisionArguments struct {
+	Project string `json:"project"`
+	Mode    string `json:"mode"`
+}
+
+type decisionRecord struct {
+	Content string `json:"content"`
+}
+
+const (
+	decisionToolName    = "manage_adr"
+	decisionReadMode    = "get"
+	projectNotFoundText = "project not found"
+)
+
 type mcpEnvelope struct {
 	Content []mcpContent `json:"content"`
 	IsError bool         `json:"isError"`
@@ -166,6 +181,43 @@ func (engine *Engine) Tool(toolName string, argumentsJSON string) (string, error
 	defer engine.mutex.Unlock()
 
 	return engine.callToolLocked(toolName, argumentsJSON)
+}
+
+// ReadDecisions returns the project's architecture decision record. It returns
+// an empty string if the project does not have a record or a readable graph
+// database.
+func (engine *Engine) ReadDecisions() (string, error) {
+	argumentsJSON, err := json.Marshal(decisionArguments{Project: engine.project, Mode: decisionReadMode})
+	if err != nil {
+		slog.Error("The engine failed to marshal manage_adr arguments", "project", engine.project, "err", err)
+		return "", fmt.Errorf("ReadDecisions could not encode manage_adr arguments as JSON: %w", err)
+	}
+	rawJSON, err := engine.Tool(decisionToolName, string(argumentsJSON))
+	if err != nil {
+		slog.Error("The call to manage_adr failed", "project", engine.project, "err", err)
+		return "", fmt.Errorf("ReadDecisions could not call manage_adr: %w", err)
+	}
+
+	var envelope mcpEnvelope
+	if err = json.Unmarshal([]byte(rawJSON), &envelope); err != nil {
+		slog.Error("manage_adr returned invalid JSON", "project", engine.project, "err", err)
+		return "", fmt.Errorf("manage_adr returned invalid JSON: %w", err)
+	}
+	text := envelopeText(envelope)
+	if envelope.IsError {
+		if text == projectNotFoundText {
+			return "", nil
+		}
+		slog.Error("manage_adr returned an error", "project", engine.project, "err", text)
+		return "", fmt.Errorf("manage_adr returned an error: %s", text)
+	}
+
+	var record decisionRecord
+	if err = json.Unmarshal([]byte(text), &record); err != nil {
+		slog.Error("manage_adr returned an invalid record", "project", engine.project, "err", err)
+		return "", fmt.Errorf("manage_adr returned an invalid record: %w", err)
+	}
+	return record.Content, nil
 }
 
 // Close frees the underlying cbm server handle. Close is safe to call twice.

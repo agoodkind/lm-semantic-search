@@ -196,7 +196,7 @@ func TestGraphStateRecordsReadyAndReconcilesStaleGraph(t *testing.T) {
 	recorded.GraphState = model.GraphStateStale
 	manager.codebases[codebase.ID] = recorded
 	manager.mu.Unlock()
-	if err = manager.clearGraphCache(context.Background(), codebase.ID); err != nil {
+	if err = manager.clearGraphCache(context.Background(), codebase.ID, repoPath); err != nil {
 		t.Fatalf("clearGraphCache returned error: %v", err)
 	}
 	if !manager.shouldReconcileGraph(codebase.ID, snapshotHash, collectionPresencePresent) {
@@ -218,7 +218,7 @@ func TestGraphStateRecordsReadyAndReconcilesStaleGraph(t *testing.T) {
 }
 
 func TestClearGraphCacheRejectsNewOpenAndWaitsForActiveOperation(t *testing.T) {
-	manager, cfg, _ := newTestManager(t)
+	manager, cfg, repoPath := newTestManager(t)
 	codebaseID := "graph-lifecycle"
 	graphPath := filepath.Join(cfg.GraphDir, codebaseID+".db")
 	if err := os.WriteFile(graphPath, []byte("graph"), 0o644); err != nil {
@@ -232,7 +232,7 @@ func TestClearGraphCacheRejectsNewOpenAndWaitsForActiveOperation(t *testing.T) {
 
 	clearDone := make(chan error, 1)
 	go func() {
-		clearDone <- manager.clearGraphCache(context.Background(), codebaseID)
+		clearDone <- manager.clearGraphCache(context.Background(), codebaseID, repoPath)
 	}()
 	waitForGraphClearing(t, manager, codebaseID)
 
@@ -303,7 +303,7 @@ func TestIndexGraphNonFatalReturnsOnCancelAndClearWaitsForWorker(t *testing.T) {
 	}
 	clearDone := make(chan error, 1)
 	go func() {
-		clearDone <- manager.clearGraphCache(context.Background(), codebaseID)
+		clearDone <- manager.clearGraphCache(context.Background(), codebaseID, repoPath)
 	}()
 
 	select {

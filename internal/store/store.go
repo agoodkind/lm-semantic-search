@@ -60,6 +60,18 @@ func WriteRegistry(path string, registry model.RegistryFile) error {
 	})
 }
 
+// WriteFileAtomically writes data to a temporary file and flushes it before
+// replacing the target file with a rename.
+func WriteFileAtomically(path string, data []byte, description string) error {
+	return replaceFileAtomically(path, description, func(file *os.File) error {
+		if _, writeErr := file.Write(data); writeErr != nil {
+			slog.Error("The store failed to write file bytes", "component", "store", "description", description, "path", path, "err", writeErr)
+			return fmt.Errorf("WriteFileAtomically could not write the data for %s: %w", description, writeErr)
+		}
+		return nil
+	})
+}
+
 // replaceFileAtomically is the single home for durably replacing a whole file.
 // It writes a temporary file beside the target, flushes both that file and the
 // directory entry, then renames, so a crash leaves either the old contents or

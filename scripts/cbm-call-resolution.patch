@@ -28,6 +28,47 @@ index af4fda31e41dbaa17383dc782afffbe8e08f4f5f..9b5c2dbc7aa7c4643694d89015077474
      cbm_arena_destroy(&result->arena);
      free(result);
  }
+diff --git a/src/mcp/mcp.c b/src/mcp/mcp.c
+index 5235aaab51bfc3b06652923fa1911c22cd5ffc43..a7a16fb5b8b6e326e06e0a65b40574f20793241a 100644
+--- a/src/mcp/mcp.c
++++ b/src/mcp/mcp.c
+@@ -40,6 +40,7 @@ enum {
+ #define SLEN(s) (sizeof(s) - 1)
+ #include "mcp/mcp.h"
+ #include "store/store.h"
++#include "store/adr_sidecar.h"
+ #include <sqlite3.h>
+ #include "cypher/cypher.h"
+ #include "pipeline/pipeline.h"
+@@ -4699,6 +4700,18 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
+     cbm_adr_t adr;
+     memset(&adr, 0, sizeof(adr));
+     bool have_adr = (cbm_store_adr_get(store, project, &adr) == CBM_STORE_OK);
++    char db_path[CBM_SZ_1K];
++    project_db_path(project, db_path, sizeof(db_path));
++    /* Restore the ADR from the sidecar if the rebuilt database lacks the row. */
++    if (!have_adr) {
++        char *saved = cbm_adr_sidecar_read(db_path);
++        if (saved) {
++            if (cbm_store_adr_store(store, project, saved) == CBM_STORE_OK) {
++                have_adr = (cbm_store_adr_get(store, project, &adr) == CBM_STORE_OK);
++            }
++            free(saved);
++        }
++    }
+     if (!have_adr) {
+         char *root_path = get_project_root(srv, project);
+         char *legacy = adr_read_legacy_file(root_path);
+@@ -4717,7 +4730,8 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
+ 
+     bool is_error = false;
+     if ((strcmp(mode_str, "update") == 0 || strcmp(mode_str, "store") == 0) && content) {
+-        if (cbm_store_adr_store(store, project, content) == CBM_STORE_OK) {
++        if (cbm_adr_sidecar_write(db_path, content) == 0 &&
++            cbm_store_adr_store(store, project, content) == CBM_STORE_OK) {
+             yyjson_mut_obj_add_str(doc, root_obj, "status", "updated");
+         } else {
+             yyjson_mut_obj_add_str(doc, root_obj, "status", "write_error");
 diff --git a/src/pipeline/import_local_name.h b/src/pipeline/import_local_name.h
 new file mode 100644
 index 0000000000000000000000000000000000000000..bb75d08cb1b26eb194722394bae7e98b245814da
@@ -601,3 +642,252 @@ index 7f9c72c826c6a516a9db165ffcec32fc18816bba..852b7afdaa4534fa8fc051799ed0172a
          }
      }
  
+diff --git a/src/pipeline/pipeline.c b/src/pipeline/pipeline.c
+index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..05d975b8544830fd4a10e26506db514b2716ce88 100644
+--- a/src/pipeline/pipeline.c
++++ b/src/pipeline/pipeline.c
+@@ -12,7 +12,14 @@
+  */
+ #include "foundation/constants.h"
+ 
+-enum { CBM_DIR_PERMS = 0755, PL_RING = 4, PL_RING_MASK = 3, PL_SEQ_PASSES = 6, PL_WAL_BUF = 1040 };
++enum {
++    CBM_DIR_PERMS = 0755,
++    PL_RING = 4,
++    PL_RING_MASK = 3,
++    PL_SEQ_PASSES = 6,
++    PL_WAL_BUF = 1040,
++    PL_ADR_CAPTURE_FAILED = 1
++};
+ #define PL_NSEC_PER_SEC 1000000000LL
+ #include "pipeline/pipeline.h"
+ #include "pipeline/artifact.h"
+@@ -22,6 +29,7 @@ enum { CBM_DIR_PERMS = 0755, PL_RING = 4, PL_RING_MASK = 3, PL_SEQ_PASSES = 6, P
+ #include "graph_buffer/graph_buffer.h"
+ #include "git/git_context.h"
+ #include "store/store.h"
++#include "store/adr_sidecar.h"
+ #include "discover/discover.h"
+ #include "discover/userconfig.h"
+ #include "foundation/platform.h"
+@@ -864,8 +872,29 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
+     return check_cancel(p) ? CBM_NOT_FOUND : 0;
+ }
+ 
+-/* Try incremental pipeline or delete old DB for reindex.
+- * Returns >= 0 if incremental was used (the return code), or -1 to proceed with full. */
++/* Copy the stored ADR to its sidecar before an index can replace the database.
++ * Skip the copy and leave any existing sidecar unchanged if the database
++ * cannot be read. */
++static int capture_adr_sidecar(const char *db_path, const char *project) {
++    cbm_store_t *store = cbm_store_open_path(db_path);
++    if (!store) {
++        return 0;
++    }
++    int rc = 0;
++    cbm_adr_t adr;
++    if (cbm_store_adr_get(store, project, &adr) == CBM_STORE_OK) {
++        if (adr.content) {
++            rc = cbm_adr_sidecar_write(db_path, adr.content);
++        }
++        cbm_store_adr_free(&adr);
++    }
++    cbm_store_close(store);
++    return rc;
++}
++
++/* Try the incremental index or delete the database for a full index.
++ * Return a value >= 0 after an incremental index or an ADR copy failure.
++ * Return -1 to start a full index. */
+ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *files, int file_count) {
+     char *db_path = resolve_db_path(p);
+     if (!db_path) {
+@@ -876,6 +905,11 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
+         free(db_path);
+         return CBM_NOT_FOUND;
+     }
++    if (capture_adr_sidecar(db_path, p->project_name) != 0) {
++        cbm_log_error("pipeline.err", "phase", "adr_capture", "project", p->project_name);
++        free(db_path);
++        return PL_ADR_CAPTURE_FAILED;
++    }
+     cbm_store_t *check_store = cbm_store_open_path(db_path);
+     if (check_store && cbm_store_check_integrity(check_store)) {
+         cbm_file_hash_t *hashes = NULL;
+@@ -974,13 +1008,16 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_info_t *fil
+     if (hash_store) {
+         cbm_store_delete_file_hashes(hash_store, p->project_name);
+ 
+-        /* Restore the ADR captured before the dump. Surface a failed restore
+-         * rather than silently dropping the ADR (the original #516 symptom). */
+-        if (p->saved_adr) {
+-            if (cbm_store_adr_store(hash_store, p->project_name, p->saved_adr) != CBM_STORE_OK) {
++        /* Restore the ADR captured before the dump and log a restore error.
++         * Read the sidecar if the database did not provide an ADR row (#516). */
++        char *sidecar_adr = p->saved_adr ? NULL : cbm_adr_sidecar_read(db_path);
++        const char *restored_adr = p->saved_adr ? p->saved_adr : sidecar_adr;
++        if (restored_adr) {
++            if (cbm_store_adr_store(hash_store, p->project_name, restored_adr) != CBM_STORE_OK) {
+                 cbm_log_error("pipeline.err", "phase", "adr_restore", "project", p->project_name);
+             }
+         }
++        free(sidecar_adr);
+         for (int i = 0; i < file_count; i++) {
+             struct stat fst;
+             if (stat(files[i].path, &fst) == 0) {
+diff --git a/src/pipeline/pipeline_incremental.c b/src/pipeline/pipeline_incremental.c
+index e5d1b4c9fe678c7c867cdb79b0ff2b0604ddb94c..528bc53382dcde96a8c3997e4c9a19f89149d67e 100644
+--- a/src/pipeline/pipeline_incremental.c
++++ b/src/pipeline/pipeline_incremental.c
+@@ -18,6 +18,7 @@ enum { INCR_RING_BUF = 4, INCR_RING_MASK = 3, INCR_TS_BUF = 24, INCR_WAL_BUF = 1
+ #include <time.h>
+ #include "pipeline/pipeline_internal.h"
+ #include "store/store.h"
++#include "store/adr_sidecar.h"
+ #include "graph_buffer/graph_buffer.h"
+ #include "discover/discover.h"
+ #include "foundation/log.h"
+@@ -651,6 +652,15 @@ static void dump_and_persist(cbm_gbuf_t *gbuf, const char *db_path, const char *
+     if (hash_store) {
+         persist_hashes(hash_store, project, files, file_count, mode_skipped, mode_skipped_count);
+ 
++        /* Restore the ADR from its sidecar after the dump replaces the DB. */
++        char *sidecar_adr = cbm_adr_sidecar_read(db_path);
++        if (sidecar_adr) {
++            if (cbm_store_adr_store(hash_store, project, sidecar_adr) != CBM_STORE_OK) {
++                cbm_log_error("incremental.err", "msg", "adr_restore_failed", "path", db_path);
++            }
++            free(sidecar_adr);
++        }
++
+         /* FTS5 rebuild after incremental dump.  The btree dump path bypasses
+          * any triggers that could have kept nodes_fts synchronized, so we
+          * rebuild from the nodes table here.  See the full-dump path in
+diff --git a/src/store/adr_sidecar.h b/src/store/adr_sidecar.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..d1ec3e2f6564537faf60b9c1b8d803bb8f42cf95
+--- /dev/null
++++ b/src/store/adr_sidecar.h
+@@ -0,0 +1,122 @@
++/*
++ * Store the project's architecture decision record in a file beside its graph
++ * database.
++ */
++#ifndef CBM_STORE_ADR_SIDECAR_H
++#define CBM_STORE_ADR_SIDECAR_H
++
++#include <fcntl.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#ifndef _WIN32
++#include <unistd.h>
++#endif
++
++#define CBM_ADR_SIDECAR_SUFFIX ".adr"
++#define CBM_ADR_SIDECAR_TEMP_SUFFIX ".adr.tmp"
++#define CBM_ADR_SIDECAR_PATH_SIZE 4096
++
++/* Return the sidecar content, or NULL if the file is empty or cannot be read.
++ * The caller must free the result. */
++static inline char *cbm_adr_sidecar_read(const char *db_path) {
++    char path[CBM_ADR_SIDECAR_PATH_SIZE];
++    int written = snprintf(path, sizeof(path), "%s%s", db_path, CBM_ADR_SIDECAR_SUFFIX);
++    if (written < 0 || (size_t)written >= sizeof(path)) {
++        return NULL;
++    }
++    struct stat info;
++    if (stat(path, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size <= 0) {
++        return NULL;
++    }
++    FILE *file = fopen(path, "rb");
++    if (!file) {
++        return NULL;
++    }
++    size_t size = (size_t)info.st_size;
++    char *content = (char *)malloc(size + 1);
++    if (content) {
++        size_t count = fread(content, 1, size, file);
++        if (count == size) {
++            content[count] = '\0';
++        } else {
++            free(content);
++            content = NULL;
++        }
++    }
++    (void)fclose(file);
++    return content;
++}
++
++/* Flush the directory entry after a rename. */
++static inline int cbm_adr_sidecar_sync_directory(const char *db_path) {
++#ifdef _WIN32
++    (void)db_path;
++    return 0;
++#else
++    char directory[CBM_ADR_SIDECAR_PATH_SIZE];
++    int written = snprintf(directory, sizeof(directory), "%s", db_path);
++    if (written < 0 || (size_t)written >= sizeof(directory)) {
++        return -1;
++    }
++    char *separator = strrchr(directory, '/');
++    if (!separator) {
++        (void)snprintf(directory, sizeof(directory), ".");
++    } else if (separator == directory) {
++        directory[1] = '\0';
++    } else {
++        *separator = '\0';
++    }
++    int descriptor = open(directory, O_RDONLY);
++    if (descriptor < 0) {
++        return -1;
++    }
++    int result = fsync(descriptor);
++    (void)close(descriptor);
++    return result;
++#endif
++}
++
++/* Write and flush a temporary file, then rename it to replace the sidecar.
++ * Skip the write if the content matches. Return 0 on success or -1 on failure. */
++static inline int cbm_adr_sidecar_write(const char *db_path, const char *content) {
++    char *current = cbm_adr_sidecar_read(db_path);
++    if (current) {
++        int unchanged = strcmp(current, content) == 0;
++        free(current);
++        if (unchanged) {
++            return 0;
++        }
++    }
++    char path[CBM_ADR_SIDECAR_PATH_SIZE];
++    char temp_path[CBM_ADR_SIDECAR_PATH_SIZE];
++    int path_size = snprintf(path, sizeof(path), "%s%s", db_path, CBM_ADR_SIDECAR_SUFFIX);
++    int temp_size =
++        snprintf(temp_path, sizeof(temp_path), "%s%s", db_path, CBM_ADR_SIDECAR_TEMP_SUFFIX);
++    if (path_size < 0 || (size_t)path_size >= sizeof(path) || temp_size < 0 ||
++        (size_t)temp_size >= sizeof(temp_path)) {
++        return -1;
++    }
++    FILE *file = fopen(temp_path, "wb");
++    if (!file) {
++        return -1;
++    }
++    size_t length = strlen(content);
++    int failed = fwrite(content, 1, length, file) != length || fflush(file) != 0;
++#ifndef _WIN32
++    if (!failed) {
++        failed = fsync(fileno(file)) != 0;
++    }
++#endif
++    if (fclose(file) != 0) {
++        failed = 1;
++    }
++    if (failed || rename(temp_path, path) != 0) {
++        (void)remove(temp_path);
++        return -1;
++    }
++    return cbm_adr_sidecar_sync_directory(db_path);
++}
++
++#endif /* CBM_STORE_ADR_SIDECAR_H */
