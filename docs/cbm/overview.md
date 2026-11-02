@@ -53,7 +53,7 @@ query_graph, trace_path, and get_architecture are read only, and manage_adr read
 
 ## How the engine is packaged
 
-The cbm submodule pins the public DeusData/codebase-memory-mcp upstream. The build exports that commit into an ignored source cache and applies the [call-resolution patch](../../scripts/cbm-call-resolution.patch) before compiling the localized static archive through the go-makefile cgo-dependency hook. A patch failure stops the build. The submodule stays clean, and repeated builds reuse native objects for the same upstream commit, patch content, and target platform. A normal `make build` produces the archive. Two properties matter for correctness:
+The cbm submodule pins the public DeusData/codebase-memory-mcp upstream. The build exports that commit into an ignored source cache and applies the [engine patch](../../scripts/cbm-call-resolution.patch) before compiling the localized static archive with the go-makefile cgo-dependency hook. The patch fixes call resolution, writes valid JSON properties for `ASYNC_CALLS` and `IMPORTS` edges and `Route` nodes, and decodes `IMPORTS` `local_name` values. A patch failure stops the build. The submodule stays clean, and repeated builds reuse native objects for the same upstream commit, patch content, and target platform. A normal `make build` produces the archive. Two properties matter for correctness:
 
 - Only a small set of the engine's `cbm_` entry-point symbols is exported from the archive; everything else is localized. This keeps the engine's internals from colliding with the daemon's other C dependencies.
 - The engine's bundled allocator is compiled so that it does not override the Go runtime's allocator.

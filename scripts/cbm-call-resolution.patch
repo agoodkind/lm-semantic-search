@@ -28,6 +28,65 @@ index af4fda31e41dbaa17383dc782afffbe8e08f4f5f..9b5c2dbc7aa7c4643694d89015077474
      cbm_arena_destroy(&result->arena);
      free(result);
  }
+diff --git a/src/pipeline/import_local_name.h b/src/pipeline/import_local_name.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..bb75d08cb1b26eb194722394bae7e98b245814da
+--- /dev/null
++++ b/src/pipeline/import_local_name.h
+@@ -0,0 +1,53 @@
++/*
++ * Read local_name from IMPORTS edge properties.
++ */
++#ifndef CBM_PIPELINE_IMPORT_LOCAL_NAME_H
++#define CBM_PIPELINE_IMPORT_LOCAL_NAME_H
++
++#include <yyjson/yyjson.h>
++
++#include <stdlib.h>
++#include <string.h>
++
++static inline char *cbm_import_local_name_copy(const char *text, size_t length) {
++    char *copy = (char *)malloc(length + 1);
++    if (copy) {
++        memcpy(copy, text, length);
++        copy[length] = '\0';
++    }
++    return copy;
++}
++
++/* Return the decoded local_name, or NULL when it is absent or empty.
++ * For stored rows with invalid JSON, return the text after the local_name marker
++ * and before the first quote, as the old readers did. The caller must free the
++ * result. */
++static inline char *cbm_import_local_name(const char *properties_json) {
++    if (!properties_json) {
++        return NULL;
++    }
++    yyjson_doc *document = yyjson_read(properties_json, strlen(properties_json), 0);
++    if (document) {
++        yyjson_val *value = yyjson_obj_get(yyjson_doc_get_root(document), "local_name");
++        const char *text = yyjson_get_str(value);
++        char *name = NULL;
++        if (text && text[0]) {
++            name = cbm_import_local_name_copy(text, strlen(text));
++        }
++        yyjson_doc_free(document);
++        return name;
++    }
++    static const char marker[] = "\"local_name\":\"";
++    const char *start = strstr(properties_json, marker);
++    if (!start) {
++        return NULL;
++    }
++    start += sizeof(marker) - 1;
++    const char *end = strchr(start, '"');
++    if (!end || end <= start) {
++        return NULL;
++    }
++    return cbm_import_local_name_copy(start, (size_t)(end - start));
++}
++
++#endif /* CBM_PIPELINE_IMPORT_LOCAL_NAME_H */
 diff --git a/src/pipeline/lsp_resolve.h b/src/pipeline/lsp_resolve.h
 index 5c66863dfccd50b6781885fe8cb2ddef64644da1..20cd61dc83f18f5809cb9121e9b0e5b4f71902f5 100644
 --- a/src/pipeline/lsp_resolve.h
@@ -134,10 +193,86 @@ index 5c66863dfccd50b6781885fe8cb2ddef64644da1..20cd61dc83f18f5809cb9121e9b0e5b4
   *
   * Per-file LSPs (notably py_lsp) sometimes emit `callee_qn` as the raw
 diff --git a/src/pipeline/pass_calls.c b/src/pipeline/pass_calls.c
-index 2e27adc1860e7fc0cb70490f2b2d94a83034ba93..1deb8deb0daf6203581b50bc43fecc422d658764 100644
+index 2e27adc1860e7fc0cb70490f2b2d94a83034ba93..711a497cd07adf629cdfe03d91e4bffe36ceb9b2 100644
 --- a/src/pipeline/pass_calls.c
 +++ b/src/pipeline/pass_calls.c
-@@ -418,16 +418,17 @@ static const cbm_gbuf_node_t *calls_find_source(cbm_pipeline_ctx_t *ctx, const c
+@@ -18,6 +18,7 @@ enum { PC_RING = 4, PC_RING_MASK = 3, PC_SIG_SCAN = 15, PC_REGEX_GRP = 2 };
+ #include "pipeline/pipeline.h"
+ #include <stdint.h>
+ #include "pipeline/pipeline_internal.h"
++#include "pipeline/import_local_name.h"
+ #include "pipeline/lsp_resolve.h"
+ #include "graph_buffer/graph_buffer.h"
+ #include "foundation/log.h"
+@@ -90,19 +91,7 @@ static const char *itoa_log(int val) {
+  * Returns parallel arrays of (local_name, module_qn) pairs. Caller frees. */
+ /* Parse "local_name":"value" from JSON properties string. Returns strdup'd key or NULL. */
+ static char *extract_local_name_from_json(const char *props_json) {
+-    if (!props_json) {
+-        return NULL;
+-    }
+-    const char *start = strstr(props_json, "\"local_name\":\"");
+-    if (!start) {
+-        return NULL;
+-    }
+-    start += strlen("\"local_name\":\"");
+-    const char *end = strchr(start, '"');
+-    if (!end || end <= start) {
+-        return NULL;
+-    }
+-    return cbm_strndup(start, end - start);
++    return cbm_import_local_name(props_json);
+ }
+ 
+ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
+@@ -246,13 +235,15 @@ static int64_t create_svc_route_node(cbm_pipeline_ctx_t *ctx, const char *url, c
+         prefix = broker ? broker : "async";
+     }
+     snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", prefix, qpath);
+-    const char *rp;
+-    if (svc == CBM_SVC_HTTP) {
+-        rp = method ? method : "{}";
++    char route_props[CBM_SZ_256];
++    if (method) {
++        snprintf(route_props, sizeof(route_props), "{\"method\":\"%s\"}", method);
++    } else if (broker) {
++        snprintf(route_props, sizeof(route_props), "{\"broker\":\"%s\"}", broker);
+     } else {
+-        rp = broker ? broker : "{}";
++        snprintf(route_props, sizeof(route_props), "{}");
+     }
+-    return cbm_gbuf_upsert_node(ctx->gbuf, "Route", url, route_qn, "", 0, 0, rp);
++    return cbm_gbuf_upsert_node(ctx->gbuf, "Route", url, route_qn, "", 0, 0, route_props);
+ }
+ 
+ /* Insert an edge, splicing the call-site line (,"line":N) in before the closing
+@@ -348,20 +339,14 @@ static void emit_http_async_edge(cbm_pipeline_ctx_t *ctx, const CBMCall *call,
+     const char *broker =
+         (svc == CBM_SVC_ASYNC) ? cbm_service_pattern_broker(res->qualified_name) : NULL;
+     int64_t route_id = create_svc_route_node(ctx, url_or_topic, svc, method, broker);
+-    char esc_callee[CBM_SZ_256];
+-    char esc_url[CBM_SZ_256];
++    char esc_callee[CBM_SZ_2K];
++    char esc_url[CBM_SZ_2K];
+     cbm_json_escape(esc_callee, sizeof(esc_callee), call->callee_name);
+     cbm_json_escape(esc_url, sizeof(esc_url), url_or_topic);
+-    char props[CBM_SZ_512];
+-    snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"url_path\":\"%s\"%s%s%s%s%s}", esc_callee,
++    char props[CBM_SZ_8K];
++    snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"url_path\":\"%s\"%s%s%s%s%s%s}", esc_callee,
+              esc_url, method ? ",\"method\":\"" : "", method ? method : "", method ? "\"" : "",
+-             broker ? ",\"broker\":\"" : "", broker ? broker : "");
+-    if (broker) {
+-        size_t plen = strlen(props);
+-        if (plen > 0 && props[plen - SKIP_ONE] != '}') {
+-            snprintf(props + plen - 1, sizeof(props) - plen + SKIP_ONE, "\"}");
+-        }
+-    }
++             broker ? ",\"broker\":\"" : "", broker ? broker : "", broker ? "\"" : "");
+     calls_emit_edge(ctx->gbuf, source->id, route_id, edge_type, props, sizeof(props), call);
+ }
+ 
+@@ -418,16 +403,17 @@ static const cbm_gbuf_node_t *calls_find_source(cbm_pipeline_ctx_t *ctx, const c
  
  /* Resolve one call and emit the appropriate edge. Returns 1 if resolved, 0 if not. */
  static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
@@ -159,7 +294,7 @@ index 2e27adc1860e7fc0cb70490f2b2d94a83034ba93..1deb8deb0daf6203581b50bc43fecc42
      if (lsp) {
          const cbm_gbuf_node_t *target_node =
              cbm_pipeline_lsp_target_node(ctx->gbuf, ctx->project_name, lsp->callee_qn);
-@@ -600,6 +601,7 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
+@@ -600,6 +586,7 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
          char *module_qn = cbm_pipeline_fqn_module_dir(ctx->project_name, rel,
                                                        pc_module_is_dir(files[i].language));
  
@@ -167,7 +302,7 @@ index 2e27adc1860e7fc0cb70490f2b2d94a83034ba93..1deb8deb0daf6203581b50bc43fecc42
          /* Resolve each call */
          for (int c = 0; c < result->calls.count; c++) {
              CBMCall *call = &result->calls.items[c];
-@@ -607,14 +609,15 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
+@@ -607,14 +594,15 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
                  continue;
              }
              total_calls++;
@@ -185,11 +320,128 @@ index 2e27adc1860e7fc0cb70490f2b2d94a83034ba93..1deb8deb0daf6203581b50bc43fecc42
          free(module_qn);
          free_import_map(imp_keys, imp_vals, imp_count);
          if (result_owned) {
+diff --git a/src/pipeline/pass_definitions.c b/src/pipeline/pass_definitions.c
+index f0816068c25640ff77cf488b95c08693cda69e34..bd84462261bc5c70f89198001f8df000ec8a5fbc 100644
+--- a/src/pipeline/pass_definitions.c
++++ b/src/pipeline/pass_definitions.c
+@@ -22,6 +22,7 @@ enum { PD_JSON_FIELD_OVERHEAD = 6 };
+ #include "graph_buffer/graph_buffer.h"
+ #include "foundation/log.h"
+ #include "foundation/compat.h"
++#include "foundation/str_util.h"
+ #include "cbm.h"
+ #include "simhash/minhash.h"
+ #include "semantic/ast_profile.h"
+@@ -413,6 +414,25 @@ static int create_env_configures_for_file(cbm_pipeline_ctx_t *ctx, const CBMFile
+     return count;
+ }
+ 
++/* Build IMPORTS properties with the complete JSON-escaped local_name.
++ * The caller must free the result. */
++static char *import_edge_properties(const char *local_name) {
++    enum { PD_ESC_MAX_BYTES = 6, PD_ESC_RESERVE = 16 };
++    size_t escaped_cap = strlen(local_name) * PD_ESC_MAX_BYTES + PD_ESC_RESERVE;
++    char *escaped = malloc(escaped_cap);
++    if (!escaped) {
++        return NULL;
++    }
++    cbm_json_escape(escaped, (int)escaped_cap, local_name);
++    size_t props_cap = strlen(escaped) + sizeof("{\"local_name\":\"\"}");
++    char *props = malloc(props_cap);
++    if (props) {
++        snprintf(props, props_cap, "{\"local_name\":\"%s\"}", escaped);
++    }
++    free(escaped);
++    return props;
++}
++
+ /* Create IMPORTS edges for one file's imports.  Mirrors the resolution
+  * logic in pass_parallel.c register_and_link_def — keep the two in sync. */
+ static int create_import_edges_for_file(cbm_pipeline_ctx_t *ctx, const CBMFileResult *result,
+@@ -432,10 +452,13 @@ static int create_import_edges_for_file(cbm_pipeline_ctx_t *ctx, const CBMFileRe
+         const cbm_gbuf_node_t *target =
+             cbm_pipeline_resolve_import_node(ctx, rel, file_qn, imp, namespace_map);
+         if (target && target->id != source_node->id) {
+-            char imp_props[CBM_SZ_256];
+-            snprintf(imp_props, sizeof(imp_props), "{\"local_name\":\"%s\"}",
+-                     imp->local_name ? imp->local_name : "");
++            char *imp_props = import_edge_properties(imp->local_name ? imp->local_name : "");
++            if (!imp_props) {
++                cbm_log_error("pass.err", "pass", "definitions", "err", "import_edge_properties");
++                continue;
++            }
+             cbm_gbuf_insert_edge(ctx->gbuf, source_node->id, target->id, "IMPORTS", imp_props);
++            free(imp_props);
+             count++;
+         }
+     }
+diff --git a/src/pipeline/pass_lsp_cross.c b/src/pipeline/pass_lsp_cross.c
+index 31a7500aabb17f6ff9ec97f7db89d8acaced5dbb..8d50d4aacbf5b7f2dcb62f4c042632a769682eea 100644
+--- a/src/pipeline/pass_lsp_cross.c
++++ b/src/pipeline/pass_lsp_cross.c
+@@ -15,6 +15,7 @@
+  */
+ #include "pipeline/pass_lsp_cross.h"
+ #include "pipeline/pipeline_internal.h"
++#include "pipeline/import_local_name.h"
+ #include "lsp/go_lsp.h"
+ #include "lsp/c_lsp.h"
+ #include "lsp/py_lsp.h"
+@@ -240,19 +241,9 @@ static int pxc_build_import_map(const cbm_gbuf_t *gbuf, const char *project_name
+         const cbm_gbuf_node_t *target = cbm_gbuf_find_by_id(gbuf, e->target_id);
+         if (!target || !e->properties_json)
+             continue;
+-        const char *start = strstr(e->properties_json, "\"local_name\":\"");
+-        if (!start)
+-            continue;
+-        start += strlen("\"local_name\":\"");
+-        const char *end = strchr(start, '"');
+-        if (!end || end <= start)
+-            continue;
+-        size_t n = (size_t)(end - start);
+-        char *local = (char *)malloc(n + 1);
++        char *local = cbm_import_local_name(e->properties_json);
+         if (!local)
+             continue;
+-        memcpy(local, start, n);
+-        local[n] = '\0';
+         keys[count] = local;
+         vals[count] = target->qualified_name; /* borrowed from gbuf */
+         count++;
 diff --git a/src/pipeline/pass_parallel.c b/src/pipeline/pass_parallel.c
-index fefcf736a94157aecdda4f356cf1bdca4322b819..857645d42553aa66307e03988eeb677c1bc3cb53 100644
+index fefcf736a94157aecdda4f356cf1bdca4322b819..039dd28b24f0937e87e0b8fe862171c224329acb 100644
 --- a/src/pipeline/pass_parallel.c
 +++ b/src/pipeline/pass_parallel.c
-@@ -1730,57 +1730,12 @@ static void try_field_type_hint(resolve_ctx_t *rc, cbm_resolution_t *res, const
+@@ -51,6 +51,7 @@ enum { PP_CSHARP_M_PREFIX_LEN = 2 };
+ #define PP_RETAIN_TOTAL_BUDGET_BYTES (2LL * 1024 * 1024 * 1024)
+ #include "pipeline/pipeline.h"
+ #include "pipeline/pipeline_internal.h"
++#include "pipeline/import_local_name.h"
+ #include "pipeline/pass_lsp_cross.h" /* cbm_pxc_* helpers for fused cross-file LSP */
+ #include "pipeline/lsp_resolve.h"
+ #include "helpers.h" /* cbm_kind_in_set_free_cache — per-worker-thread cache teardown */
+@@ -361,15 +362,11 @@ static int build_import_map(const cbm_gbuf_t *gbuf, const char *project_name, co
+         if (!target || !e->properties_json) {
+             continue;
+         }
+-        const char *start = strstr(e->properties_json, "\"local_name\":\"");
+-        if (start) {
+-            start += strlen("\"local_name\":\"");
+-            const char *end = strchr(start, '"');
+-            if (end && end > start) {
+-                keys[count] = cbm_strndup(start, end - start);
+-                vals[count] = target->qualified_name;
+-                count++;
+-            }
++        char *local_name = cbm_import_local_name(e->properties_json);
++        if (local_name) {
++            keys[count] = local_name;
++            vals[count] = target->qualified_name;
++            count++;
+         }
+     }
+ 
+@@ -1730,57 +1727,12 @@ static void try_field_type_hint(resolve_ctx_t *rc, cbm_resolution_t *res, const
      }
  }
  
@@ -249,7 +501,7 @@ index fefcf736a94157aecdda4f356cf1bdca4322b819..857645d42553aa66307e03988eeb677c
  
      for (int c = 0; c < result->calls.count; c++) {
          CBMCall *call = &result->calls.items[c];
-@@ -1804,20 +1759,7 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
+@@ -1804,20 +1756,7 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
          cbm_resolution_t res = {0};
          const CBMResolvedCall *lsp = NULL;
          _rc_t0 = extract_now_ns();
@@ -271,7 +523,7 @@ index fefcf736a94157aecdda4f356cf1bdca4322b819..857645d42553aa66307e03988eeb677c
          atomic_fetch_add_explicit(&rc->time_ns_rc_lsp_lookup, extract_now_ns() - _rc_t0,
                                    memory_order_relaxed);
          _rc_t0 = extract_now_ns();
-@@ -1939,10 +1881,7 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
+@@ -1939,10 +1878,7 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
                                    memory_order_relaxed);
          ws->calls_resolved++;
      }
@@ -283,3 +535,69 @@ index fefcf736a94157aecdda4f356cf1bdca4322b819..857645d42553aa66307e03988eeb677c
  }
  
  /* Resolve usages for one file. */
+diff --git a/src/pipeline/pass_semantic.c b/src/pipeline/pass_semantic.c
+index 3c3c76da7edf17feded884defc71e6df485dc180..d50ff0e1d8183a786c45b9adced4dd8b61145327 100644
+--- a/src/pipeline/pass_semantic.c
++++ b/src/pipeline/pass_semantic.c
+@@ -16,6 +16,7 @@
+ #include "pipeline/pipeline.h"
+ #include <stdint.h>
+ #include "pipeline/pipeline_internal.h"
++#include "pipeline/import_local_name.h"
+ #include "graph_buffer/graph_buffer.h"
+ #include "foundation/log.h"
+ #include "foundation/compat.h"
+@@ -135,15 +136,11 @@ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
+             continue;
+         }
+ 
+-        const char *start = strstr(e->properties_json, "\"local_name\":\"");
+-        if (start) {
+-            start += strlen("\"local_name\":\"");
+-            const char *end = strchr(start, '"');
+-            if (end && end > start) {
+-                keys[count] = cbm_strndup(start, end - start);
+-                vals[count] = target->qualified_name;
+-                count++;
+-            }
++        char *local_name = cbm_import_local_name(e->properties_json);
++        if (local_name) {
++            keys[count] = local_name;
++            vals[count] = target->qualified_name;
++            count++;
+         }
+     }
+ 
+diff --git a/src/pipeline/pass_usages.c b/src/pipeline/pass_usages.c
+index 7f9c72c826c6a516a9db165ffcec32fc18816bba..852b7afdaa4534fa8fc051799ed0172acfef2b43 100644
+--- a/src/pipeline/pass_usages.c
++++ b/src/pipeline/pass_usages.c
+@@ -15,6 +15,7 @@
+ #include "foundation/str_util.h" // cbm_json_escape
+ #include "pipeline/pipeline.h"
+ #include "pipeline/pipeline_internal.h"
++#include "pipeline/import_local_name.h"
+ #include "graph_buffer/graph_buffer.h"
+ #include "foundation/log.h"
+ #include "foundation/compat.h"
+@@ -145,15 +146,11 @@ static int build_import_map_from_edges(cbm_pipeline_ctx_t *ctx, const char *rel_
+             continue;
+         }
+ 
+-        const char *start = strstr(e->properties_json, "\"local_name\":\"");
+-        if (start) {
+-            start += strlen("\"local_name\":\"");
+-            const char *end = strchr(start, '"');
+-            if (end && end > start) {
+-                keys[count] = cbm_strndup(start, end - start);
+-                vals[count] = target->qualified_name;
+-                count++;
+-            }
++        char *local_name = cbm_import_local_name(e->properties_json);
++        if (local_name) {
++            keys[count] = local_name;
++            vals[count] = target->qualified_name;
++            count++;
+         }
+     }
+ 
