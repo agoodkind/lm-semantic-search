@@ -13,18 +13,20 @@ import (
 )
 
 const (
-	decisionsProject        = "decisions"
-	decisionsContent        = "## PURPOSE\nSynthetic \"decision\" record\n"
-	decisionsReplacement    = "## PURPOSE\nSynthetic replacement record\n"
-	decisionsRemoveRowSQL   = "testdata/decisions_remove_row.sql"
-	decisionsBreakLoadSQL   = "testdata/decisions_break_load.sql"
-	decisionsFunctionsQuery = "testdata/decisions_functions.cypher"
-	decisionsStatusUpdated  = "updated"
-	decisionsStatusRejected = "write_error"
-	decisionsAlphaSource    = "package repo\n\nfunc AlphaOne() string {\n\treturn \"alpha\"\n}\n"
-	decisionsBetaSource     = "package repo\n\nfunc BetaOne() string {\n\treturn \"beta\"\n}\n"
-	decisionsChangedSource  = "package repo\n\nfunc AlphaChanged() string {\n\treturn \"changed\"\n}\n"
-	decisionsFilePermission = 0o644
+	decisionsProject         = "decisions"
+	decisionsContent         = "## PURPOSE\nSynthetic \"decision\" record\n"
+	decisionsReplacement     = "## PURPOSE\nSynthetic replacement record\n"
+	decisionsInvalidDatabase = "invalid database"
+	decisionsBackupSuffix    = ".corrupt"
+	decisionsRemoveRowSQL    = "testdata/decisions_remove_row.sql"
+	decisionsBreakLoadSQL    = "testdata/decisions_break_load.sql"
+	decisionsFunctionsQuery  = "testdata/decisions_functions.cypher"
+	decisionsStatusUpdated   = "updated"
+	decisionsStatusRejected  = "write_error"
+	decisionsAlphaSource     = "package repo\n\nfunc AlphaOne() string {\n\treturn \"alpha\"\n}\n"
+	decisionsBetaSource      = "package repo\n\nfunc BetaOne() string {\n\treturn \"beta\"\n}\n"
+	decisionsChangedSource   = "package repo\n\nfunc AlphaChanged() string {\n\treturn \"changed\"\n}\n"
+	decisionsFilePermission  = 0o644
 )
 
 // decisionUpdateEnvelope stores the manage_adr fields that the tests read.
@@ -84,7 +86,7 @@ func TestEngineKeepsDecisionsAcrossIndexFailures(t *testing.T) {
 			name: "The database contains invalid data",
 			disrupt: func(t *testing.T, fixture decisionFixture) {
 				t.Helper()
-				writeFile(t, fixture.databasePath, "invalid database")
+				writeFile(t, fixture.databasePath, decisionsInvalidDatabase)
 			},
 		},
 		{
@@ -116,6 +118,24 @@ func TestEngineKeepsDecisionsAcrossIndexFailures(t *testing.T) {
 				t.Fatalf("The decision record after Index is %q instead of %q", got, decisionsContent)
 			}
 		})
+	}
+}
+
+// TestEngineKeepsInvalidDatabaseBeforeRebuild replaces the database with invalid
+// data and runs Index. It verifies that the renamed database contains the same
+// bytes.
+func TestEngineKeepsInvalidDatabaseBeforeRebuild(t *testing.T) {
+	fixture := newDecisionFixture(t)
+	writeFile(t, fixture.databasePath, decisionsInvalidDatabase)
+
+	indexDecisionFixture(t, fixture)
+
+	backup, err := os.ReadFile(fixture.databasePath + decisionsBackupSuffix)
+	if err != nil {
+		t.Fatalf("ReadFile returned an error: %v", err)
+	}
+	if string(backup) != decisionsInvalidDatabase {
+		t.Fatalf("The database backup contains %q instead of %q", backup, decisionsInvalidDatabase)
 	}
 }
 

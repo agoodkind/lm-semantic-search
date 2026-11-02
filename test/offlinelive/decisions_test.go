@@ -99,6 +99,9 @@ func TestClearIndexRestoresNewestDecisions(t *testing.T) {
 	if got := harness.readDecisions(); got != retainedDecisionsContent {
 		t.Fatalf("The decision record after ClearIndex and a new index is %q instead of %q", got, retainedDecisionsContent)
 	}
+	if _, statErr := os.Stat(seededPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("Stat(%q) returned %v instead of os.ErrNotExist", seededPath, statErr)
+	}
 	retainedFiles, err := os.ReadDir(retainedDirectory)
 	if err != nil {
 		t.Fatalf("ReadDir returned an error: %v", err)

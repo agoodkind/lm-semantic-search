@@ -111,7 +111,8 @@ func (manager *Manager) retainGraphDecisions(ctx context.Context, codebaseID str
 		if bytes.Equal(existing, data) {
 			return nil
 		}
-		olderPath := retainedPath + "." + codebaseID
+		olderDigest := sha256.Sum256(existing)
+		olderPath := retainedPath + "." + hex.EncodeToString(olderDigest[:])
 		slog.WarnContext(ctx, "The retained graph decisions differ; the daemon will copy the older record to a second file", "codebase_id", codebaseID, "path", olderPath)
 		if err = store.WriteFileAtomically(olderPath, existing, retainedDecisionsCopyType); err != nil {
 			return fmt.Errorf("the daemon could not copy the older retained graph decision record: %w", err)

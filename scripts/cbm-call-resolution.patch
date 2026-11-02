@@ -643,7 +643,7 @@ index 7f9c72c826c6a516a9db165ffcec32fc18816bba..852b7afdaa4534fa8fc051799ed0172a
      }
  
 diff --git a/src/pipeline/pipeline.c b/src/pipeline/pipeline.c
-index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..05d975b8544830fd4a10e26506db514b2716ce88 100644
+index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..3cbafc389b99e8080239c453fc8c07c7d0dff489 100644
 --- a/src/pipeline/pipeline.c
 +++ b/src/pipeline/pipeline.c
 @@ -12,7 +12,14 @@
@@ -670,7 +670,7 @@ index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..05d975b8544830fd4a10e26506db514b
  #include "discover/discover.h"
  #include "discover/userconfig.h"
  #include "foundation/platform.h"
-@@ -864,8 +872,29 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
+@@ -864,8 +872,40 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
      return check_cancel(p) ? CBM_NOT_FOUND : 0;
  }
  
@@ -696,13 +696,24 @@ index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..05d975b8544830fd4a10e26506db514b
 +    return rc;
 +}
 +
++/* Rename a database that fails to open or fails its integrity check to <database path>.corrupt.
++ * The database can contain an ADR that the sidecar lacks. Return false if the rename fails. */
++static bool backup_unreadable_db(const char *db_path) {
++    char backup_path[PL_WAL_BUF];
++    int written = snprintf(backup_path, sizeof(backup_path), "%s.corrupt", db_path);
++    if (written < 0 || (size_t)written >= sizeof(backup_path)) {
++        return false;
++    }
++    return rename(db_path, backup_path) == 0;
++}
++
 +/* Try the incremental index or delete the database for a full index.
 + * Return a value >= 0 after an incremental index or an ADR copy failure.
 + * Return -1 to start a full index. */
  static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *files, int file_count) {
      char *db_path = resolve_db_path(p);
      if (!db_path) {
-@@ -876,6 +905,11 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
+@@ -876,8 +916,14 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
          free(db_path);
          return CBM_NOT_FOUND;
      }
@@ -712,9 +723,28 @@ index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..05d975b8544830fd4a10e26506db514b
 +        return PL_ADR_CAPTURE_FAILED;
 +    }
      cbm_store_t *check_store = cbm_store_open_path(db_path);
-     if (check_store && cbm_store_check_integrity(check_store)) {
+-    if (check_store && cbm_store_check_integrity(check_store)) {
++    bool database_healthy = check_store && cbm_store_check_integrity(check_store);
++    if (database_healthy) {
          cbm_file_hash_t *hashes = NULL;
-@@ -974,13 +1008,16 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_info_t *fil
+         int hash_count = 0;
+         cbm_store_get_file_hashes(check_store, p->project_name, &hashes, &hash_count);
+@@ -914,7 +960,13 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
+             cbm_store_close(adr_store);
+         }
+     }
+-    cbm_unlink(db_path);
++    if (database_healthy) {
++        cbm_unlink(db_path);
++    } else if (!backup_unreadable_db(db_path)) {
++        cbm_log_error("pipeline.err", "phase", "db_backup", "project", p->project_name);
++        free(db_path);
++        return PL_ADR_CAPTURE_FAILED;
++    }
+     char wal[PL_WAL_BUF];
+     char shm[PL_WAL_BUF];
+     snprintf(wal, sizeof(wal), "%s-wal", db_path);
+@@ -974,13 +1026,16 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_info_t *fil
      if (hash_store) {
          cbm_store_delete_file_hashes(hash_store, p->project_name);
  
