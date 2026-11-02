@@ -29,7 +29,6 @@ const (
 	decisionsFilePermission  = 0o644
 )
 
-// decisionUpdateEnvelope stores the manage_adr fields that the tests read.
 type decisionUpdateEnvelope struct {
 	Content []struct {
 		Text string `json:"text"`
