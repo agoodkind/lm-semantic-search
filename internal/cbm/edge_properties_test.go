@@ -26,6 +26,7 @@ const (
 	wantBroker               = "kafka"
 	wantMethod               = "GET"
 	wantAsyncTopic           = "error"
+	wantPlainLocalName       = "inc"
 	wantQuotedLocalName      = `inc")`
 	wantMultilineLocalName   = "text(\"first\nsecond\")"
 	longLocalNameBytes       = 300
@@ -43,8 +44,9 @@ const (
 )
 
 var (
-	longCallPattern   = regexp.MustCompile(`(?m)^\t(\w+)\("([^"]+)"\)$`)
-	wantImportTargets = []string{"other", "helper", "longname"}
+	longCallPattern     = regexp.MustCompile(`(?m)^\t(\w+)\("([^"]+)"\)$`)
+	wantImportTargets   = []string{"plain", "other", "helper", "longname"}
+	unwantedImportNames = []string{"notimported", "dynamicpath"}
 )
 
 // queryGraphResponse stores the query_graph fields that the test reads.
@@ -72,10 +74,11 @@ type graphProperties struct {
 
 // TestEngineWritesValidGraphProperties indexes synthetic Go, Python, and PHP
 // files through the engine. It changes a Python file and a Go file, then runs an
-// incremental index. It reads properties with sqlite3 and checks valid JSON,
-// complete long callee and url_path values, and IMPORTS local_name values.
-// It checks Route broker and method values separately and IMPORTS targets with
-// query_graph.
+// incremental index. It uses sqlite3 to check that properties contain valid JSON
+// and complete long callee, url_path, and IMPORTS local_name values.
+// It checks Route broker and method values separately. It uses query_graph to
+// check IMPORTS targets and confirm that PHP expressions other than require and
+// include do not create IMPORTS edges.
 func TestEngineWritesValidGraphProperties(t *testing.T) {
 	repositoryPath := filepath.Join(t.TempDir(), "repository")
 	if err := os.CopyFS(repositoryPath, os.DirFS(edgePropertiesRepository)); err != nil {
@@ -143,7 +146,7 @@ func TestEngineWritesValidGraphProperties(t *testing.T) {
 		t.Errorf("Route method values are %q; want %q", methods, wantMethod)
 	}
 	wantLongLocalName := `value("` + strings.Repeat("a", longLocalNameBytes) + `")`
-	for _, wantLocalName := range []string{wantQuotedLocalName, wantMultilineLocalName, wantLongLocalName} {
+	for _, wantLocalName := range []string{wantPlainLocalName, wantQuotedLocalName, wantMultilineLocalName, wantLongLocalName} {
 		if !slices.Contains(localNames, wantLocalName) {
 			t.Errorf("IMPORTS local_name values are %q; want %q", localNames, wantLocalName)
 		}
@@ -152,6 +155,11 @@ func TestEngineWritesValidGraphProperties(t *testing.T) {
 	for _, wantTarget := range wantImportTargets {
 		if !slices.Contains(importTargets, wantTarget) {
 			t.Errorf("query_graph IMPORTS targets are %q; want %q", importTargets, wantTarget)
+		}
+	}
+	for _, unwantedTarget := range unwantedImportNames {
+		if slices.Contains(importTargets, unwantedTarget) {
+			t.Errorf("query_graph IMPORTS targets are %q; they must not include %q", importTargets, unwantedTarget)
 		}
 	}
 }

@@ -28,6 +28,82 @@ index af4fda31e41dbaa17383dc782afffbe8e08f4f5f..9b5c2dbc7aa7c4643694d89015077474
      cbm_arena_destroy(&result->arena);
      free(result);
  }
+diff --git a/internal/cbm/extract_imports.c b/internal/cbm/extract_imports.c
+index 717068a2b827f9dfb8dbfb6803b5ee4fa0cc10d7..8bf9e4e95977d2d268fde4047c579f1a68601ac6 100644
+--- a/internal/cbm/extract_imports.c
++++ b/internal/cbm/extract_imports.c
+@@ -1254,6 +1254,55 @@ static void emit_php_use_decl(CBMExtractCtx *ctx, TSNode decl) {
+     }
+ }
+ 
++static bool php_is_include_expression(const char *kind) {
++    return strcmp(kind, "require_expression") == 0 ||
++           strcmp(kind, "require_once_expression") == 0 ||
++           strcmp(kind, "include_expression") == 0 ||
++           strcmp(kind, "include_once_expression") == 0;
++}
++
++// Skip a double-quoted string that contains a variable.
++static bool php_string_is_literal(TSNode value) {
++    const char *kind = ts_node_type(value);
++    if (strcmp(kind, "string") == 0) {
++        return true;
++    }
++    if (strcmp(kind, "encapsed_string") != 0) {
++        return false;
++    }
++    uint32_t count = ts_node_named_child_count(value);
++    for (uint32_t i = 0; i < count; i++) {
++        const char *part = ts_node_type(ts_node_named_child(value, i));
++        if (strcmp(part, "string_content") != 0 && strcmp(part, "string_value") != 0 &&
++            strcmp(part, "escape_sequence") != 0) {
++            return false;
++        }
++    }
++    return true;
++}
++
++// Record a require or include only when its path is a string literal.
++// Skip computed paths.
++static void emit_php_include(CBMExtractCtx *ctx, TSNode include) {
++    CBMArena *a = ctx->arena;
++    if (ts_node_named_child_count(include) == 0) {
++        return;
++    }
++    TSNode value = ts_node_named_child(include, 0);
++    while (strcmp(ts_node_type(value), "parenthesized_expression") == 0 &&
++           ts_node_named_child_count(value) > 0) {
++        value = ts_node_named_child(value, 0);
++    }
++    if (!php_string_is_literal(value)) {
++        return;
++    }
++    char *path = strip_quotes(a, cbm_node_text(a, value, ctx->source));
++    if (path && path[0]) {
++        CBMImport imp = {.local_name = path_last(a, path), .module_path = path};
++        cbm_imports_push(&ctx->result->imports, a, imp);
++    }
++}
++
+ static void parse_php_imports(CBMExtractCtx *ctx) {
+     TSTreeCursor cursor = ts_tree_cursor_new(ctx->root);
+     if (!ts_tree_cursor_goto_first_child(&cursor)) {
+@@ -1265,10 +1314,11 @@ static void parse_php_imports(CBMExtractCtx *ctx) {
+         const char *kind = ts_node_type(node);
+         if (strcmp(kind, "namespace_use_declaration") == 0) {
+             emit_php_use_decl(ctx, node);
+-        } else if (strcmp(kind, "expression_statement") == 0) {
+-            // require / include / require_once / include_once
+-            if (!try_generic_path_fields(ctx, node)) {
+-                generic_import_from_text(ctx, node);
++        } else if (strcmp(kind, "expression_statement") == 0 &&
++                   ts_node_named_child_count(node) > 0) {
++            TSNode expression = ts_node_named_child(node, 0);
++            if (php_is_include_expression(ts_node_type(expression))) {
++                emit_php_include(ctx, expression);
+             }
+         }
+     } while (ts_tree_cursor_goto_next_sibling(&cursor));
 diff --git a/src/mcp/mcp.c b/src/mcp/mcp.c
 index 5235aaab51bfc3b06652923fa1911c22cd5ffc43..a7a16fb5b8b6e326e06e0a65b40574f20793241a 100644
 --- a/src/mcp/mcp.c
