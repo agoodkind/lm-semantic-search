@@ -14,6 +14,7 @@ import "C"
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -51,10 +52,13 @@ type decisionRecord struct {
 }
 
 const (
-	decisionToolName    = "manage_adr"
-	decisionReadMode    = "get"
-	projectNotFoundText = "project not found"
+	decisionToolName = "manage_adr"
+	decisionReadMode = "get"
 )
+
+// ErrDecisionsUnreadable reports a failure to read the graph database or its
+// architecture decision record.
+var ErrDecisionsUnreadable = errors.New("the engine could not read the graph decision record")
 
 type mcpEnvelope struct {
 	Content []mcpContent `json:"content"`
@@ -184,8 +188,8 @@ func (engine *Engine) Tool(toolName string, argumentsJSON string) (string, error
 }
 
 // ReadDecisions returns the project's architecture decision record. It returns
-// an empty string if the project does not have a record or a readable graph
-// database.
+// an empty string when manage_adr succeeds without a record. If manage_adr
+// reports an error, ReadDecisions returns an error wrapping ErrDecisionsUnreadable.
 func (engine *Engine) ReadDecisions() (string, error) {
 	argumentsJSON, err := json.Marshal(decisionArguments{Project: engine.project, Mode: decisionReadMode})
 	if err != nil {
@@ -205,11 +209,8 @@ func (engine *Engine) ReadDecisions() (string, error) {
 	}
 	text := envelopeText(envelope)
 	if envelope.IsError {
-		if text == projectNotFoundText {
-			return "", nil
-		}
 		slog.Error("manage_adr returned an error", "project", engine.project, "err", text)
-		return "", fmt.Errorf("manage_adr returned an error: %s", text)
+		return "", fmt.Errorf("ReadDecisions failed: %w: %s", ErrDecisionsUnreadable, text)
 	}
 
 	var record decisionRecord
