@@ -124,6 +124,75 @@ func TestClearIndexRestoresNewestDecisions(t *testing.T) {
 	}
 }
 
+// TestIndexKeepsBothDecisionsWhenRecordsConflict seeds an older retained record while
+// the graph has a different record, then forces an index. It verifies that the graph
+// keeps its record and the retained file keeps the older record. It then verifies
+// that ClearIndex keeps the older record in a second file and restores the newer record.
+func TestIndexKeepsBothDecisionsWhenRecordsConflict(t *testing.T) {
+	harness := newHarness(t)
+	repositoryPath := filepath.Join(t.TempDir(), decisionChildDirectory)
+	if err := os.CopyFS(repositoryPath, os.DirFS(harness.fixturePath)); err != nil {
+		t.Fatalf("CopyFS returned an error: %v", err)
+	}
+	harness.fixturePath = repositoryPath
+	requireCompleted(t, harness.indexFixture())
+	harness.updateDecisions()
+	canonicalPath := harness.indexStatus().GetCodebase().GetCanonicalPath()
+	digest := sha256.Sum256([]byte(canonicalPath))
+	retainedDirectory := filepath.Join(harness.config.GraphDir, retainedDecisionsDirectory)
+	if err := os.MkdirAll(retainedDirectory, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned an error: %v", err)
+	}
+	seededPath := filepath.Join(retainedDirectory, hex.EncodeToString(digest[:])+".adr")
+	if err := os.WriteFile(seededPath, []byte(olderDecisionsContent), decisionFilePermission); err != nil {
+		t.Fatalf("WriteFile returned an error: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repositoryPath, decisionParentSourceName), []byte(decisionParentSource), decisionFilePermission); err != nil {
+		t.Fatalf("WriteFile returned an error: %v", err)
+	}
+	response, err := harness.client.StartIndex(correlatedContext(), &pb.StartIndexRequest{
+		Path:     harness.fixturePath,
+		Force:    true,
+		Splitter: &pb.SplitterConfig{Type: "ast"},
+		Client:   harnessClientInfo(),
+	})
+	if err != nil {
+		t.Fatalf("StartIndex returned an error: %v", err)
+	}
+	requireCompleted(t, harness.waitForJob(response.GetJobId()))
+	if got := harness.readDecisions(); got != retainedDecisionsContent {
+		t.Fatalf("The decision record after the forced index is %q instead of %q", got, retainedDecisionsContent)
+	}
+	retained, err := os.ReadFile(seededPath)
+	if err != nil {
+		t.Fatalf("ReadFile returned an error for the retained record: %v", err)
+	}
+	if string(retained) != olderDecisionsContent {
+		t.Fatalf("The retained file contains %q instead of %q", retained, olderDecisionsContent)
+	}
+
+	harness.clearIndex()
+	requireCompleted(t, harness.indexFixture())
+	if got := harness.readDecisions(); got != retainedDecisionsContent {
+		t.Fatalf("The decision record after ClearIndex and a new index is %q instead of %q", got, retainedDecisionsContent)
+	}
+	retainedFiles, err := os.ReadDir(retainedDirectory)
+	if err != nil {
+		t.Fatalf("ReadDir returned an error: %v", err)
+	}
+	if len(retainedFiles) != 1 {
+		t.Fatalf("The retained decisions directory contains %d files instead of 1", len(retainedFiles))
+	}
+	olderRecord, err := os.ReadFile(filepath.Join(retainedDirectory, retainedFiles[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile returned an error: %v", err)
+	}
+	if string(olderRecord) != olderDecisionsContent {
+		t.Fatalf("The second retained file contains %q instead of %q", olderRecord, olderDecisionsContent)
+	}
+}
+
 // TestAbsorbedChildKeepsDecisions indexes a child path, then its parent path.
 // The parent index removes the child codebase. The test clears the parent,
 // indexes the child path again, and reads the decision record with GraphTool.
@@ -326,7 +395,6 @@ func (harness *harness) readDecisions() string {
 	return harness.callDecisionTool(`{"mode":"get"}`).Content
 }
 
-// callDecisionTool uses GraphTool to call manage_adr and returns its result.
 func (harness *harness) callDecisionTool(arguments string) decisionToolResult {
 	harness.t.Helper()
 	response, err := harness.client.GraphTool(correlatedContext(), &pb.GraphToolRequest{

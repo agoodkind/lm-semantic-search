@@ -31,6 +31,8 @@ const (
 	decisionsDamageRowSQL     = "testdata/decisions_damage_row.sql"
 	decisionsFailIntegritySQL = "testdata/decisions_fail_integrity.sql"
 	decisionsSelectRowSQL     = "testdata/decisions_select_row.sql"
+	decisionsDropSummarySQL   = "testdata/decisions_drop_summary.sql"
+	decisionsBlockRestoreSQL  = "testdata/decisions_block_restore.sql"
 	decisionsRemoveRowSQL     = "testdata/decisions_remove_row.sql"
 	decisionsBreakLoadSQL     = "testdata/decisions_break_load.sql"
 	decisionsFunctionsQuery   = "testdata/decisions_functions.cypher"
@@ -39,6 +41,8 @@ const (
 	decisionsAlphaSource      = "package repo\n\nfunc AlphaOne() string {\n\treturn \"alpha\"\n}\n"
 	decisionsBetaSource       = "package repo\n\nfunc BetaOne() string {\n\treturn \"beta\"\n}\n"
 	decisionsChangedSource    = "package repo\n\nfunc AlphaChanged() string {\n\treturn \"changed\"\n}\n"
+	decisionsGammaSource      = "package repo\n\nfunc GammaOne() string {\n\treturn \"gamma\"\n}\n"
+	decisionsDeltaSource      = "package repo\n\nfunc DeltaOne() string {\n\treturn \"delta\"\n}\n"
 	decisionsFilePermission   = 0o644
 )
 
@@ -319,6 +323,91 @@ func TestEngineKeepsGraphWhenDecisionFileCannotBeWritten(t *testing.T) {
 	}
 }
 
+// TestEngineKeepsGraphWhenDecisionReadFails removes the decision column from a database
+// that passes its integrity check. It verifies that Index reports an error and
+// keeps the existing graph.
+func TestEngineKeepsGraphWhenDecisionReadFails(t *testing.T) {
+	testCases := []struct {
+		name    string
+		disrupt func(t *testing.T, fixture decisionFixture)
+	}{
+		{name: "A full index", disrupt: addSourcesForFullIndex},
+		{name: "An incremental index", disrupt: changeAlphaSource},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newDecisionFixture(t)
+			runSQLiteFile(t, fixture.databasePath, decisionsDropSummarySQL)
+			testCase.disrupt(t, fixture)
+
+			engine := openDecisionEngine(t, fixture)
+			defer engine.Close()
+			if err := engine.Index(context.Background(), fixture.repositoryPath, "fast"); err == nil {
+				t.Fatal("Index returned nil instead of an error for the failed decision read")
+			}
+			functionNames := queryColumn(t, engine, decisionsProject, decisionsFunctionsQuery)
+			if !slices.Contains(functionNames, "AlphaOne") {
+				t.Fatalf("The graph does not contain AlphaOne after the failed Index: %q", functionNames)
+			}
+		})
+	}
+}
+
+// TestEngineIndexReportsFailedDecisionRestore changes source files and runs a full
+// index and an incremental index. Index does not dump the database without a source
+// change. The test places a directory at the database's shared memory path. The dump
+// can write the database, but SQLite cannot store the decision row. The test verifies
+// that Index reports an error and the decision file keeps the record.
+func TestEngineIndexReportsFailedDecisionRestore(t *testing.T) {
+	testCases := []struct {
+		name    string
+		disrupt func(t *testing.T, fixture decisionFixture)
+	}{
+		{name: "A full index", disrupt: addSourcesForFullIndex},
+		{name: "An incremental index", disrupt: changeAlphaSource},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newDecisionFixture(t)
+			sharedMemoryPath := fixture.databasePath + "-shm"
+			if err := os.RemoveAll(sharedMemoryPath); err != nil {
+				t.Fatalf("RemoveAll returned an error: %v", err)
+			}
+			if err := os.Mkdir(sharedMemoryPath, 0o755); err != nil {
+				t.Fatalf("Mkdir returned an error: %v", err)
+			}
+			writeFile(t, filepath.Join(sharedMemoryPath, "entry"), "blocks unlink")
+			testCase.disrupt(t, fixture)
+
+			engine := openDecisionEngine(t, fixture)
+			defer engine.Close()
+			if err := engine.Index(context.Background(), fixture.repositoryPath, "fast"); err == nil {
+				t.Fatal("Index returned nil instead of an error for the failed decision restore")
+			}
+			saved, readErr := os.ReadFile(fixture.decisionsPath)
+			if readErr != nil {
+				t.Fatalf("ReadFile returned an error: %v", readErr)
+			}
+			if string(saved) != decisionsContent {
+				t.Fatalf("The decision file contains %q instead of %q", saved, decisionsContent)
+			}
+		})
+	}
+}
+
+// TestEngineReportsFailedDecisionRestore blocks the row that manage_adr restores
+// from the decision file. It verifies that ReadDecisions reports an error.
+func TestEngineReportsFailedDecisionRestore(t *testing.T) {
+	fixture := newDecisionFixture(t)
+	runSQLiteFile(t, fixture.databasePath, decisionsBlockRestoreSQL)
+
+	engine := openDecisionEngine(t, fixture)
+	defer engine.Close()
+	if _, err := engine.ReadDecisions(); !errors.Is(err, cbm.ErrDecisionsUnreadable) {
+		t.Fatalf("ReadDecisions returned %v instead of %v", err, cbm.ErrDecisionsUnreadable)
+	}
+}
+
 // TestEngineRejectsUpdateWhenDecisionFileCannotBeWritten checks that manage_adr
 // reports write_error and keeps the old record when the file write fails.
 func TestEngineRejectsUpdateWhenDecisionFileCannotBeWritten(t *testing.T) {
@@ -426,6 +515,13 @@ func updateDecisions(t *testing.T, engine *cbm.Engine, content string) string {
 func changeAlphaSource(t *testing.T, fixture decisionFixture) {
 	t.Helper()
 	writeFile(t, filepath.Join(fixture.repositoryPath, "alpha.go"), decisionsChangedSource)
+}
+
+// addSourcesForFullIndex adds enough source files for Index to select a full index.
+func addSourcesForFullIndex(t *testing.T, fixture decisionFixture) {
+	t.Helper()
+	writeFile(t, filepath.Join(fixture.repositoryPath, "gamma.go"), decisionsGammaSource)
+	writeFile(t, filepath.Join(fixture.repositoryPath, "delta.go"), decisionsDeltaSource)
 }
 
 // blockDecisionFile replaces the decision file with a directory that rename
