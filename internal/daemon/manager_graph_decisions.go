@@ -106,6 +106,10 @@ func (manager *Manager) backupUnreadableDatabase(ctx context.Context, codebaseID
 	walErr := os.Rename(databasePath+graphDatabaseWALSuffix, backupPath+graphDatabaseWALSuffix)
 	if walErr != nil && !errors.Is(walErr, os.ErrNotExist) {
 		slog.ErrorContext(ctx, "The daemon failed to rename the unreadable graph database WAL file", "codebase_id", codebaseID, "path", backupPath, "err", walErr)
+		if removeErr := os.Remove(backupPath); removeErr != nil {
+			slog.ErrorContext(ctx, "The daemon failed to remove the graph database backup name", "codebase_id", codebaseID, "path", backupPath, "err", removeErr)
+			return fmt.Errorf("the daemon could not rename the unreadable graph database WAL file for %s: %w", backupPath, errors.Join(walErr, removeErr))
+		}
 		return fmt.Errorf("the daemon could not rename the unreadable graph database WAL file for %s: %w", backupPath, walErr)
 	}
 	slog.WarnContext(ctx, "The daemon linked the unreadable graph database to a backup name", "codebase_id", codebaseID, "path", backupPath)

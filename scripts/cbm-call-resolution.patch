@@ -29,7 +29,7 @@ index af4fda31e41dbaa17383dc782afffbe8e08f4f5f..9b5c2dbc7aa7c4643694d89015077474
      free(result);
  }
 diff --git a/src/mcp/mcp.c b/src/mcp/mcp.c
-index 5235aaab51bfc3b06652923fa1911c22cd5ffc43..6ab142f22d128c04e5abb5124932cbbc665d5534 100644
+index 5235aaab51bfc3b06652923fa1911c22cd5ffc43..62dc2b1287093d89746bd1fbf4b812242d5faa9e 100644
 --- a/src/mcp/mcp.c
 +++ b/src/mcp/mcp.c
 @@ -40,6 +40,7 @@ enum {
@@ -68,7 +68,7 @@ index 5235aaab51bfc3b06652923fa1911c22cd5ffc43..6ab142f22d128c04e5abb5124932cbbc
              cbm_unlink(shm_path);
              return NULL;
          }
-@@ -4698,7 +4695,27 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
+@@ -4698,7 +4695,34 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
       * legacy file exists, import it so nothing is lost on upgrade. */
      cbm_adr_t adr;
      memset(&adr, 0, sizeof(adr));
@@ -92,12 +92,19 @@ index 5235aaab51bfc3b06652923fa1911c22cd5ffc43..6ab142f22d128c04e5abb5124932cbbc
 +                have_adr = (cbm_store_adr_get(store, project, &adr) == CBM_STORE_OK);
 +            }
 +            free(saved);
++            if (!have_adr && !updating) {
++                free(project);
++                free(mode_str);
++                free(content);
++                return cbm_mcp_text_result("manage_adr could not restore the decision record",
++                                           true);
++            }
 +        }
 +    }
      if (!have_adr) {
          char *root_path = get_project_root(srv, project);
          char *legacy = adr_read_legacy_file(root_path);
-@@ -4717,7 +4734,8 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
+@@ -4717,7 +4741,8 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
  
      bool is_error = false;
      if ((strcmp(mode_str, "update") == 0 || strcmp(mode_str, "store") == 0) && content) {
@@ -681,7 +688,7 @@ index 7f9c72c826c6a516a9db165ffcec32fc18816bba..852b7afdaa4534fa8fc051799ed0172a
      }
  
 diff --git a/src/pipeline/pipeline.c b/src/pipeline/pipeline.c
-index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..cbba0ebb01c3dacf53770d398554bcaeaece0a1c 100644
+index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..7ef1088f2af12906d53cb9acca4c4e7e7d817da1 100644
 --- a/src/pipeline/pipeline.c
 +++ b/src/pipeline/pipeline.c
 @@ -12,7 +12,14 @@
@@ -708,23 +715,27 @@ index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..cbba0ebb01c3dacf53770d398554bcae
  #include "discover/discover.h"
  #include "discover/userconfig.h"
  #include "foundation/platform.h"
-@@ -864,8 +872,29 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
+@@ -864,8 +872,33 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
      return check_cancel(p) ? CBM_NOT_FOUND : 0;
  }
  
 -/* Try incremental pipeline or delete old DB for reindex.
 - * Returns >= 0 if incremental was used (the return code), or -1 to proceed with full. */
-+/* Copy the stored ADR to its sidecar before an index can replace the database.
-+ * Skip the copy and leave any existing sidecar unchanged if the database
-+ * cannot be read. */
-+static int capture_adr_sidecar(const char *db_path, const char *project) {
++/* capture_adr_sidecar copies the stored ADR to its sidecar before an index can
++ * replace the database. It sets read_failed if it cannot open the store or the
++ * ADR read returns an error other than CBM_STORE_NOT_FOUND. It leaves any
++ * existing sidecar unchanged in either case. */
++static int capture_adr_sidecar(const char *db_path, const char *project, bool *read_failed) {
++    *read_failed = true;
 +    cbm_store_t *store = cbm_store_open_path(db_path);
 +    if (!store) {
 +        return 0;
 +    }
 +    int rc = 0;
 +    cbm_adr_t adr;
-+    if (cbm_store_adr_get(store, project, &adr) == CBM_STORE_OK) {
++    int status = cbm_store_adr_get(store, project, &adr);
++    *read_failed = status != CBM_STORE_OK && status != CBM_STORE_NOT_FOUND;
++    if (status == CBM_STORE_OK) {
 +        if (adr.content) {
 +            rc = cbm_adr_sidecar_write(db_path, adr.content);
 +        }
@@ -740,11 +751,12 @@ index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..cbba0ebb01c3dacf53770d398554bcae
  static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *files, int file_count) {
      char *db_path = resolve_db_path(p);
      if (!db_path) {
-@@ -876,8 +905,14 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
+@@ -876,8 +909,21 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
          free(db_path);
          return CBM_NOT_FOUND;
      }
-+    if (capture_adr_sidecar(db_path, p->project_name) != 0) {
++    bool adr_read_failed = false;
++    if (capture_adr_sidecar(db_path, p->project_name, &adr_read_failed) != 0) {
 +        cbm_log_error("pipeline.err", "phase", "adr_capture", "project", p->project_name);
 +        free(db_path);
 +        return PL_ADR_CAPTURE_FAILED;
@@ -752,11 +764,17 @@ index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..cbba0ebb01c3dacf53770d398554bcae
      cbm_store_t *check_store = cbm_store_open_path(db_path);
 -    if (check_store && cbm_store_check_integrity(check_store)) {
 +    bool database_healthy = check_store && cbm_store_check_integrity(check_store);
++    if (database_healthy && adr_read_failed) {
++        cbm_store_close(check_store);
++        cbm_log_error("pipeline.err", "phase", "adr_read", "project", p->project_name);
++        free(db_path);
++        return PL_ADR_CAPTURE_FAILED;
++    }
 +    if (database_healthy) {
          cbm_file_hash_t *hashes = NULL;
          int hash_count = 0;
          cbm_store_get_file_hashes(check_store, p->project_name, &hashes, &hash_count);
-@@ -914,7 +949,13 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
+@@ -914,7 +960,13 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
              cbm_store_close(adr_store);
          }
      }
@@ -771,7 +789,18 @@ index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..cbba0ebb01c3dacf53770d398554bcae
      char wal[PL_WAL_BUF];
      char shm[PL_WAL_BUF];
      snprintf(wal, sizeof(wal), "%s-wal", db_path);
-@@ -974,13 +1015,16 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_info_t *fil
+@@ -970,16 +1022,20 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_info_t *fil
+         return rc;
+     }
+     cbm_log_info("pass.timing", "pass", "dump", "elapsed_ms", itoa_buf((int)elapsed_ms(*t)));
++    /* dump_and_persist_hashes restores the ADR captured before the dump.
++     * It reads the sidecar if the database did not provide an ADR row (#516).
++     * If it cannot open the store or store the row, it returns
++     * PL_ADR_CAPTURE_FAILED. */
++    char *sidecar_adr = p->saved_adr ? NULL : cbm_adr_sidecar_read(db_path);
++    const char *restored_adr = p->saved_adr ? p->saved_adr : sidecar_adr;
+     cbm_store_t *hash_store = cbm_store_open_path(db_path);
++    bool adr_restore_failed = restored_adr && !hash_store;
      if (hash_store) {
          cbm_store_delete_file_hashes(hash_store, p->project_name);
  
@@ -779,21 +808,30 @@ index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..cbba0ebb01c3dacf53770d398554bcae
 -         * rather than silently dropping the ADR (the original #516 symptom). */
 -        if (p->saved_adr) {
 -            if (cbm_store_adr_store(hash_store, p->project_name, p->saved_adr) != CBM_STORE_OK) {
-+        /* Restore the ADR captured before the dump and log a restore error.
-+         * Read the sidecar if the database did not provide an ADR row (#516). */
-+        char *sidecar_adr = p->saved_adr ? NULL : cbm_adr_sidecar_read(db_path);
-+        const char *restored_adr = p->saved_adr ? p->saved_adr : sidecar_adr;
-+        if (restored_adr) {
-+            if (cbm_store_adr_store(hash_store, p->project_name, restored_adr) != CBM_STORE_OK) {
-                 cbm_log_error("pipeline.err", "phase", "adr_restore", "project", p->project_name);
-             }
+-                cbm_log_error("pipeline.err", "phase", "adr_restore", "project", p->project_name);
+-            }
++        if (restored_adr &&
++            cbm_store_adr_store(hash_store, p->project_name, restored_adr) != CBM_STORE_OK) {
++            adr_restore_failed = true;
          }
-+        free(sidecar_adr);
          for (int i = 0; i < file_count; i++) {
              struct stat fst;
-             if (stat(files[i].path, &fst) == 0) {
+@@ -1007,8 +1063,13 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_info_t *fil
+         cbm_store_close(hash_store);
+         cbm_log_info("pass.timing", "pass", "persist_hashes", "files", itoa_buf(file_count));
+     }
++    free(sidecar_adr);
+     free(p->saved_adr);
+     p->saved_adr = NULL;
++    if (adr_restore_failed) {
++        cbm_log_error("pipeline.err", "phase", "adr_restore", "project", p->project_name);
++        return PL_ADR_CAPTURE_FAILED;
++    }
+ 
+     /* Export persistent artifact if enabled */
+     if (p->persistence) {
 diff --git a/src/pipeline/pipeline_incremental.c b/src/pipeline/pipeline_incremental.c
-index e5d1b4c9fe678c7c867cdb79b0ff2b0604ddb94c..528bc53382dcde96a8c3997e4c9a19f89149d67e 100644
+index e5d1b4c9fe678c7c867cdb79b0ff2b0604ddb94c..58b213c4d0e1e0601ad0f36c1d679d8b4919a2be 100644
 --- a/src/pipeline/pipeline_incremental.c
 +++ b/src/pipeline/pipeline_incremental.c
 @@ -18,6 +18,7 @@ enum { INCR_RING_BUF = 4, INCR_RING_MASK = 3, INCR_TS_BUF = 24, INCR_WAL_BUF = 1
@@ -804,28 +842,87 @@ index e5d1b4c9fe678c7c867cdb79b0ff2b0604ddb94c..528bc53382dcde96a8c3997e4c9a19f8
  #include "graph_buffer/graph_buffer.h"
  #include "discover/discover.h"
  #include "foundation/log.h"
-@@ -651,6 +652,15 @@ static void dump_and_persist(cbm_gbuf_t *gbuf, const char *db_path, const char *
+@@ -624,14 +625,16 @@ static void run_postpasses(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *changed_fil
+                      itoa_buf((int)elapsed_ms(t)));
+     }
+ }
++enum { INCR_ADR_RESTORE_FAILED = 1 };
++
+ /* Delete old DB and dump merged graph + hashes to disk.
+  * Mode-skipped hash rows are preserved across the rebuild so subsequent
+  * reindexes can correctly distinguish "never indexed" from "indexed but
+  * not visited this pass". */
+-static void dump_and_persist(cbm_gbuf_t *gbuf, const char *db_path, const char *project,
+-                             cbm_file_info_t *files, int file_count,
+-                             const cbm_file_hash_t *mode_skipped, int mode_skipped_count,
+-                             const char *repo_path) {
++static int dump_and_persist(cbm_gbuf_t *gbuf, const char *db_path, const char *project,
++                            cbm_file_info_t *files, int file_count,
++                            const cbm_file_hash_t *mode_skipped, int mode_skipped_count,
++                            const char *repo_path) {
+     struct timespec t;
+     cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+ 
+@@ -647,10 +650,19 @@ static void dump_and_persist(cbm_gbuf_t *gbuf, const char *db_path, const char *
+     cbm_log_info("incremental.dump", "rc", itoa_buf(dump_rc), "elapsed_ms",
+                  itoa_buf((int)elapsed_ms(t)));
+ 
++    /* dump_and_persist restores the ADR from its sidecar after the dump
++     * replaces the database. If it cannot open the store or store the row,
++     * it returns INCR_ADR_RESTORE_FAILED. */
++    char *sidecar_adr = cbm_adr_sidecar_read(db_path);
+     cbm_store_t *hash_store = cbm_store_open_path(db_path);
++    bool adr_restore_failed = sidecar_adr && !hash_store;
      if (hash_store) {
          persist_hashes(hash_store, project, files, file_count, mode_skipped, mode_skipped_count);
  
-+        /* Restore the ADR from its sidecar after the dump replaces the DB. */
-+        char *sidecar_adr = cbm_adr_sidecar_read(db_path);
-+        if (sidecar_adr) {
-+            if (cbm_store_adr_store(hash_store, project, sidecar_adr) != CBM_STORE_OK) {
-+                cbm_log_error("incremental.err", "msg", "adr_restore_failed", "path", db_path);
-+            }
-+            free(sidecar_adr);
++        if (sidecar_adr && cbm_store_adr_store(hash_store, project, sidecar_adr) != CBM_STORE_OK) {
++            adr_restore_failed = true;
 +        }
 +
          /* FTS5 rebuild after incremental dump.  The btree dump path bypasses
           * any triggers that could have kept nodes_fts synchronized, so we
           * rebuild from the nodes table here.  See the full-dump path in
+@@ -668,10 +680,18 @@ static void dump_and_persist(cbm_gbuf_t *gbuf, const char *db_path, const char *
+         cbm_store_close(hash_store);
+     }
+ 
++    free(sidecar_adr);
++
+     /* Auto-update artifact if one already exists (persistence was enabled previously) */
+     if (repo_path && cbm_artifact_exists(repo_path)) {
+         cbm_artifact_export(db_path, repo_path, project, CBM_ARTIFACT_FAST);
+     }
++
++    if (adr_restore_failed) {
++        cbm_log_error("incremental.err", "msg", "adr_restore_failed", "path", db_path);
++        return INCR_ADR_RESTORE_FAILED;
++    }
++    return 0;
+ }
+ 
+ /* ── Incremental pipeline entry point ────────────────────────────── */
+@@ -854,11 +874,11 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
+      * covers incremental reindexes, not just full ones. */
+     cbm_pipeline_set_committed_counts(p, cbm_gbuf_node_count(existing),
+                                       cbm_gbuf_edge_count(existing));
+-    dump_and_persist(existing, db_path, project, files, file_count, mode_skipped,
+-                     mode_skipped_count, cbm_pipeline_repo_path(p));
++    int rc = dump_and_persist(existing, db_path, project, files, file_count, mode_skipped,
++                              mode_skipped_count, cbm_pipeline_repo_path(p));
+     free_mode_skipped(mode_skipped, mode_skipped_count);
+     cbm_gbuf_free(existing);
+ 
+     cbm_log_info("incremental.done", "elapsed_ms", itoa_buf((int)elapsed_ms(t0)));
+-    return 0;
++    return rc;
+ }
 diff --git a/src/store/adr_sidecar.h b/src/store/adr_sidecar.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..997b00b91e8b75beeb3eb5fea3069a2746498eaf
+index 0000000000000000000000000000000000000000..ec40478f839a2123f05645d24698c1e64e1f333d
 --- /dev/null
 +++ b/src/store/adr_sidecar.h
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,176 @@
 +/*
 + * Store the project's architecture decision record in a file beside its graph
 + * database.
@@ -983,11 +1080,19 @@ index 0000000000000000000000000000000000000000..997b00b91e8b75beeb3eb5fea3069a27
 +            }
 +            return -1;
 +        }
-+        if (rename(wal_path, backup_wal_path) != 0 && errno != ENOENT) {
++        int wal_moved = rename(wal_path, backup_wal_path) == 0;
++        if (!wal_moved && errno != ENOENT) {
 +            (void)unlink(backup_path);
 +            return -1;
 +        }
-+        return unlink(db_path);
++        if (unlink(db_path) != 0) {
++            if (wal_moved && rename(backup_wal_path, wal_path) != 0) {
++                return -1;
++            }
++            (void)unlink(backup_path);
++            return -1;
++        }
++        return 0;
 +    }
 +    return -1;
 +#endif
