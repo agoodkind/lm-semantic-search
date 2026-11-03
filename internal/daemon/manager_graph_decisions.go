@@ -17,6 +17,8 @@ import (
 
 const (
 	graphDatabaseSuffix       = ".db"
+	graphDatabaseBackupSuffix = ".corrupt"
+	graphDatabaseWALSuffix    = "-wal"
 	graphDecisionsSuffix      = ".adr"
 	graphDecisionsTempSuffix  = ".tmp"
 	retainedDecisionsDir      = "retained-decisions"
@@ -37,11 +39,15 @@ func (manager *Manager) retainedDecisionsPath(canonicalPath string) string {
 	return filepath.Join(manager.config.GraphDir, retainedDecisionsDir, hex.EncodeToString(digest[:])+graphDecisionsSuffix)
 }
 
-// readGraphDecisions reads the decision row from the graph database. It reads
-// the engine's decision file if the database does not provide a readable row.
+// readGraphDecisions reads the decision record from the graph database or, if
+// the database does not provide a readable record, the engine's decision file.
+// If the engine reports ErrDecisionsUnreadable and the file does not contain a
+// record, it links any remaining database to a backup name and renames any WAL
+// file before clearGraphCache removes the original database path.
 func (manager *Manager) readGraphDecisions(ctx context.Context, codebaseID string, cachedEngine *cbm.Engine) (string, error) {
 	content, err := manager.readDatabaseDecisions(ctx, codebaseID, cachedEngine)
-	if err != nil {
+	databaseUnreadable := errors.Is(err, cbm.ErrDecisionsUnreadable)
+	if err != nil && !databaseUnreadable {
 		return "", err
 	}
 	if content != "" {
@@ -50,14 +56,60 @@ func (manager *Manager) readGraphDecisions(ctx context.Context, codebaseID strin
 
 	decisionsPath := manager.graphDecisionsPath(codebaseID)
 	data, readErr := os.ReadFile(decisionsPath)
-	if errors.Is(readErr, os.ErrNotExist) {
-		return "", nil
-	}
-	if readErr != nil {
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		slog.ErrorContext(ctx, "The daemon failed to read the graph decisions file", "codebase_id", codebaseID, "path", decisionsPath, "err", readErr)
 		return "", fmt.Errorf("the daemon could not read graph decisions file %s: %w", decisionsPath, readErr)
 	}
+	if len(data) == 0 && databaseUnreadable {
+		if backupErr := manager.backupUnreadableDatabase(ctx, codebaseID); backupErr != nil {
+			return "", backupErr
+		}
+	}
 	return string(data), nil
+}
+
+// closeCachedGraphEngine closes the cached engine and removes it from
+// graphEngines before the daemon backs up the database and its WAL file.
+// SQLite can write to the WAL file while a connection remains open.
+func (manager *Manager) closeCachedGraphEngine(codebaseID string) {
+	manager.graphMutex.Lock()
+	defer manager.graphMutex.Unlock()
+	if engine, found := manager.graphEngines[codebaseID]; found {
+		engine.Close()
+		delete(manager.graphEngines, codebaseID)
+	}
+}
+
+// backupUnreadableDatabase closes the cached engine, links the graph database
+// to an unused backup name, and renames any WAL file to match. It tries
+// <database path>.corrupt first, then .corrupt.1, .corrupt.2, and later numbers.
+// [os.Link] does not replace an existing database backup. If the database path
+// does not exist, backupUnreadableDatabase returns without creating a backup.
+func (manager *Manager) backupUnreadableDatabase(ctx context.Context, codebaseID string) error {
+	manager.closeCachedGraphEngine(codebaseID)
+	databasePath := filepath.Join(manager.config.GraphDir, codebaseID+graphDatabaseSuffix)
+	backupPath := databasePath + graphDatabaseBackupSuffix
+	for attempt := 1; ; attempt++ {
+		linkErr := os.Link(databasePath, backupPath)
+		if linkErr == nil {
+			break
+		}
+		if errors.Is(linkErr, os.ErrNotExist) {
+			return nil
+		}
+		if !errors.Is(linkErr, os.ErrExist) {
+			slog.ErrorContext(ctx, "The daemon failed to link the unreadable graph database to its backup name", "codebase_id", codebaseID, "path", backupPath, "err", linkErr)
+			return fmt.Errorf("the daemon could not link the unreadable graph database to %s: %w", backupPath, linkErr)
+		}
+		backupPath = fmt.Sprintf("%s%s.%d", databasePath, graphDatabaseBackupSuffix, attempt)
+	}
+	walErr := os.Rename(databasePath+graphDatabaseWALSuffix, backupPath+graphDatabaseWALSuffix)
+	if walErr != nil && !errors.Is(walErr, os.ErrNotExist) {
+		slog.ErrorContext(ctx, "The daemon failed to rename the unreadable graph database WAL file", "codebase_id", codebaseID, "path", backupPath, "err", walErr)
+		return fmt.Errorf("the daemon could not rename the unreadable graph database WAL file for %s: %w", backupPath, walErr)
+	}
+	slog.WarnContext(ctx, "The daemon linked the unreadable graph database to a backup name", "codebase_id", codebaseID, "path", backupPath)
+	return nil
 }
 
 // readDatabaseDecisions reads the decision row when the graph database exists.

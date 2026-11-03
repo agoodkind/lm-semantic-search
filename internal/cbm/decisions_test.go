@@ -3,33 +3,45 @@ package cbm_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/lm-semantic-search/internal/cbm"
 )
 
 const (
-	decisionsProject         = "decisions"
-	decisionsContent         = "## PURPOSE\nSynthetic \"decision\" record\n"
-	decisionsReplacement     = "## PURPOSE\nSynthetic replacement record\n"
-	decisionsInvalidDatabase = "invalid database"
-	decisionsBackupSuffix    = ".corrupt"
-	decisionsRemoveRowSQL    = "testdata/decisions_remove_row.sql"
-	decisionsBreakLoadSQL    = "testdata/decisions_break_load.sql"
-	decisionsFunctionsQuery  = "testdata/decisions_functions.cypher"
-	decisionsStatusUpdated   = "updated"
-	decisionsStatusRejected  = "write_error"
-	decisionsAlphaSource     = "package repo\n\nfunc AlphaOne() string {\n\treturn \"alpha\"\n}\n"
-	decisionsBetaSource      = "package repo\n\nfunc BetaOne() string {\n\treturn \"beta\"\n}\n"
-	decisionsChangedSource   = "package repo\n\nfunc AlphaChanged() string {\n\treturn \"changed\"\n}\n"
-	decisionsFilePermission  = 0o644
+	decisionsProject          = "decisions"
+	decisionsContent          = "## PURPOSE\nSynthetic \"decision\" record\n"
+	decisionsReplacement      = "## PURPOSE\nSynthetic replacement record\n"
+	decisionsInvalidDatabase  = "invalid database"
+	decisionsSecondInvalid    = "second invalid database"
+	decisionsBackupSuffix     = ".corrupt"
+	decisionsOtherProject     = "decisions-other"
+	decisionsHoldWALSQL       = "testdata/decisions_hold_wal.sql"
+	decisionsHolderReady      = "holder-ready"
+	decisionsHolderWait       = 10 * time.Second
+	decisionsHolderPoll       = 10 * time.Millisecond
+	decisionsWALContent       = "Synthetic WAL decision record"
+	decisionsDamageRowSQL     = "testdata/decisions_damage_row.sql"
+	decisionsFailIntegritySQL = "testdata/decisions_fail_integrity.sql"
+	decisionsSelectRowSQL     = "testdata/decisions_select_row.sql"
+	decisionsRemoveRowSQL     = "testdata/decisions_remove_row.sql"
+	decisionsBreakLoadSQL     = "testdata/decisions_break_load.sql"
+	decisionsFunctionsQuery   = "testdata/decisions_functions.cypher"
+	decisionsStatusUpdated    = "updated"
+	decisionsStatusRejected   = "write_error"
+	decisionsAlphaSource      = "package repo\n\nfunc AlphaOne() string {\n\treturn \"alpha\"\n}\n"
+	decisionsBetaSource       = "package repo\n\nfunc BetaOne() string {\n\treturn \"beta\"\n}\n"
+	decisionsChangedSource    = "package repo\n\nfunc AlphaChanged() string {\n\treturn \"changed\"\n}\n"
+	decisionsFilePermission   = 0o644
 )
 
-// decisionUpdateEnvelope stores the manage_adr fields that the tests read.
 type decisionUpdateEnvelope struct {
 	Content []struct {
 		Text string `json:"text"`
@@ -136,6 +148,133 @@ func TestEngineKeepsInvalidDatabaseBeforeRebuild(t *testing.T) {
 	}
 	if string(backup) != decisionsInvalidDatabase {
 		t.Fatalf("The database backup contains %q instead of %q", backup, decisionsInvalidDatabase)
+	}
+}
+
+// TestEngineKeepsEachInvalidDatabase checks that successive Index calls save
+// two invalid databases in separate backups without replacing the first backup.
+func TestEngineKeepsEachInvalidDatabase(t *testing.T) {
+	fixture := newDecisionFixture(t)
+	writeFile(t, fixture.databasePath, decisionsInvalidDatabase)
+	indexDecisionFixture(t, fixture)
+	writeFile(t, fixture.databasePath, decisionsSecondInvalid)
+	indexDecisionFixture(t, fixture)
+
+	wantBackups := map[string]string{
+		fixture.databasePath + decisionsBackupSuffix:        decisionsInvalidDatabase,
+		fixture.databasePath + decisionsBackupSuffix + ".1": decisionsSecondInvalid,
+	}
+	for path, want := range wantBackups {
+		backup, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile returned an error: %v", err)
+		}
+		if string(backup) != want {
+			t.Fatalf("The backup %s contains %q instead of %q", path, backup, want)
+		}
+	}
+}
+
+// TestEngineBackupKeepsWALAfterIntegrityFailure checks that manage_adr backs up
+// the database and its WAL file after an integrity check fails. It uses sqlite3
+// to read the updated decision record from the new backup and checks that the
+// earlier backup remains unchanged.
+func TestEngineBackupKeepsWALAfterIntegrityFailure(t *testing.T) {
+	fixture := newDecisionFixture(t)
+	earlierBackupPath := fixture.databasePath + decisionsBackupSuffix
+	writeFile(t, earlierBackupPath, decisionsInvalidDatabase)
+	removeFile(t, fixture.decisionsPath)
+	runSQLiteFile(t, fixture.databasePath, decisionsFailIntegritySQL)
+	walInfo, err := os.Stat(fixture.databasePath + "-wal")
+	if err != nil {
+		t.Fatalf("Stat of the WAL file returned an error: %v", err)
+	}
+	if walInfo.Size() == 0 {
+		t.Fatal("The WAL file is empty before the read")
+	}
+	stopHolder := holdDatabaseConnection(t, fixture.databasePath)
+	defer stopHolder()
+
+	// manage_adr opens the requested project's database and checks its integrity when
+	// the request specifies a different project from the engine's current project.
+	engine, err := cbm.Open(decisionsOtherProject, fixture.cacheDir)
+	if err != nil {
+		t.Fatalf("Open returned an error: %v", err)
+	}
+	defer engine.Close()
+	arguments, err := json.Marshal(map[string]string{"project": decisionsProject, "mode": "get"})
+	if err != nil {
+		t.Fatalf("Marshal returned an error: %v", err)
+	}
+	rawResponse, err := engine.Tool("manage_adr", string(arguments))
+	if err != nil {
+		t.Fatalf("manage_adr returned an error: %v", err)
+	}
+	var envelope struct {
+		IsError bool `json:"isError"`
+	}
+	if err = json.Unmarshal([]byte(rawResponse), &envelope); err != nil {
+		t.Fatalf("The test could not decode the manage_adr response: %v: %s", err, rawResponse)
+	}
+	if !envelope.IsError {
+		t.Fatalf("manage_adr did not report an error for the failed integrity check: %s", rawResponse)
+	}
+
+	if _, statErr := os.Stat(fixture.databasePath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("Stat of the database returned %v instead of os.ErrNotExist", statErr)
+	}
+	backupWAL, err := os.Stat(earlierBackupPath + ".1-wal")
+	if err != nil {
+		t.Fatalf("Stat of the backup WAL file returned an error: %v", err)
+	}
+	if backupWAL.Size() == 0 {
+		t.Fatal("The backup WAL file is empty")
+	}
+	if _, statErr := os.Stat(fixture.databasePath + "-wal"); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("Stat of the original WAL file returned %v instead of os.ErrNotExist", statErr)
+	}
+	stopHolder()
+	earlier, err := os.ReadFile(earlierBackupPath)
+	if err != nil {
+		t.Fatalf("ReadFile of the earlier backup returned an error: %v", err)
+	}
+	if string(earlier) != decisionsInvalidDatabase {
+		t.Fatalf("The earlier backup contains %q instead of %q", earlier, decisionsInvalidDatabase)
+	}
+	script, err := os.ReadFile(decisionsSelectRowSQL)
+	if err != nil {
+		t.Fatalf("ReadFile of the select script returned an error: %v", err)
+	}
+	stored := strings.TrimSpace(string(runSQLite(t, earlierBackupPath+".1", script)))
+	if stored != decisionsWALContent {
+		t.Fatalf("The new backup stores %q instead of %q", stored, decisionsWALContent)
+	}
+}
+
+// TestEngineReportsUnreadableDecisionRow damages the decision table and checks
+// that ReadDecisions returns an error wrapping ErrDecisionsUnreadable.
+func TestEngineReportsUnreadableDecisionRow(t *testing.T) {
+	fixture := newDecisionFixture(t)
+	removeFile(t, fixture.decisionsPath)
+	runSQLiteFile(t, fixture.databasePath, decisionsDamageRowSQL)
+
+	engine := openDecisionEngine(t, fixture)
+	defer engine.Close()
+	if _, err := engine.ReadDecisions(); !errors.Is(err, cbm.ErrDecisionsUnreadable) {
+		t.Fatalf("ReadDecisions returned %v instead of %v", err, cbm.ErrDecisionsUnreadable)
+	}
+}
+
+// TestEngineReportsUnreadableDatabase replaces the database with invalid data
+// and checks that ReadDecisions returns an error wrapping ErrDecisionsUnreadable.
+func TestEngineReportsUnreadableDatabase(t *testing.T) {
+	fixture := newDecisionFixture(t)
+	writeFile(t, fixture.databasePath, decisionsInvalidDatabase)
+
+	engine := openDecisionEngine(t, fixture)
+	defer engine.Close()
+	if _, err := engine.ReadDecisions(); !errors.Is(err, cbm.ErrDecisionsUnreadable) {
+		t.Fatalf("ReadDecisions returned %v instead of %v", err, cbm.ErrDecisionsUnreadable)
 	}
 }
 
@@ -309,6 +448,53 @@ func runSQLiteFile(t *testing.T, databasePath string, scriptPath string) {
 	if output := strings.TrimSpace(string(runSQLite(t, databasePath, script))); output != "" {
 		t.Fatalf("The SQL script %s printed %q instead of empty output", scriptPath, output)
 	}
+}
+
+// holdDatabaseConnection opens a second SQLite connection in a sqlite3 process.
+// This connection prevents SQLite from deleting the WAL file when the engine
+// closes its connection. The returned function kills sqlite3 without copying
+// pending WAL changes into the database.
+func holdDatabaseConnection(t *testing.T, databasePath string) func() {
+	t.Helper()
+	script, err := os.ReadFile(decisionsHoldWALSQL)
+	if err != nil {
+		t.Fatalf("holdDatabaseConnection could not read the script: %v", err)
+	}
+	directory := t.TempDir()
+	holder := exec.CommandContext(context.Background(), "sqlite3", databasePath)
+	holder.Dir = directory
+	stdin, err := holder.StdinPipe()
+	if err != nil {
+		t.Fatalf("StdinPipe returned an error: %v", err)
+	}
+	if err = holder.Start(); err != nil {
+		t.Fatalf("Start returned an error: %v", err)
+	}
+	stopped := false
+	stop := func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		_ = holder.Process.Kill()
+		_ = holder.Wait()
+		_ = stdin.Close()
+	}
+	if _, err = stdin.Write(script); err != nil {
+		stop()
+		t.Fatalf("Write returned an error: %v", err)
+	}
+	readyPath := filepath.Join(directory, decisionsHolderReady)
+	deadline := time.Now().Add(decisionsHolderWait)
+	for time.Now().Before(deadline) {
+		if info, statErr := os.Stat(readyPath); statErr == nil && info.Size() > 0 {
+			return stop
+		}
+		time.Sleep(decisionsHolderPoll)
+	}
+	stop()
+	t.Fatal("The second SQLite connection did not open before the limit")
+	return stop
 }
 
 func writeFile(t *testing.T, path string, content string) {

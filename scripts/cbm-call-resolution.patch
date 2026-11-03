@@ -105,7 +105,7 @@ index 717068a2b827f9dfb8dbfb6803b5ee4fa0cc10d7..8bf9e4e95977d2d268fde4047c579f1a
          }
      } while (ts_tree_cursor_goto_next_sibling(&cursor));
 diff --git a/src/mcp/mcp.c b/src/mcp/mcp.c
-index 5235aaab51bfc3b06652923fa1911c22cd5ffc43..a7a16fb5b8b6e326e06e0a65b40574f20793241a 100644
+index 5235aaab51bfc3b06652923fa1911c22cd5ffc43..6ab142f22d128c04e5abb5124932cbbc665d5534 100644
 --- a/src/mcp/mcp.c
 +++ b/src/mcp/mcp.c
 @@ -40,6 +40,7 @@ enum {
@@ -116,10 +116,48 @@ index 5235aaab51bfc3b06652923fa1911c22cd5ffc43..a7a16fb5b8b6e326e06e0a65b40574f2
  #include <sqlite3.h>
  #include "cypher/cypher.h"
  #include "pipeline/pipeline.h"
-@@ -4699,6 +4700,18 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
+@@ -918,20 +919,16 @@ static cbm_store_t *resolve_store(cbm_mcp_server_t *srv, const char *project) {
+                           "backing up corrupt db to .corrupt — re-index required");
+             cbm_store_close(srv->store);
+             srv->store = NULL;
+-            /* #557 (data loss): rename the corrupt DB to a .corrupt backup instead
+-             * of unlinking it, so the user's graph is recoverable / reportable.
+-             * Re-index rebuilds a fresh DB at `path`. WAL/SHM are transient. */
+-            char bak_path[MCP_FIELD_SIZE];
+-            snprintf(bak_path, sizeof(bak_path), "%s.corrupt", path);
+-            cbm_unlink(bak_path); /* clear any prior backup so rename succeeds on Windows */
+-            if (rename(path, bak_path) != 0) {
+-                cbm_unlink(path); /* rename failed (e.g. cross-device) — fall back to delete */
++            /* #557 (data loss): the database and its WAL file can contain an architecture
++             * decision record. A failed backup does not delete the original database path.
++             * Re-indexing creates a new database at `path` after a successful backup. */
++            if (cbm_db_backup_unreadable(path) != 0) {
++                cbm_log_error("store.auto_clean", "project", project, "path", path, "action",
++                              "The engine could not back up the database");
++                return NULL;
+             }
+-            char wal_path[MCP_FIELD_SIZE];
+             char shm_path[MCP_FIELD_SIZE];
+-            snprintf(wal_path, sizeof(wal_path), "%s-wal", path);
+             snprintf(shm_path, sizeof(shm_path), "%s-shm", path);
+-            cbm_unlink(wal_path);
+             cbm_unlink(shm_path);
+             return NULL;
+         }
+@@ -4698,7 +4695,27 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
+      * legacy file exists, import it so nothing is lost on upgrade. */
      cbm_adr_t adr;
      memset(&adr, 0, sizeof(adr));
-     bool have_adr = (cbm_store_adr_get(store, project, &adr) == CBM_STORE_OK);
+-    bool have_adr = (cbm_store_adr_get(store, project, &adr) == CBM_STORE_OK);
++    int adr_status = cbm_store_adr_get(store, project, &adr);
++    bool have_adr = (adr_status == CBM_STORE_OK);
++    bool updating = strcmp(mode_str, "update") == 0 || strcmp(mode_str, "store") == 0;
++    if (adr_status == CBM_STORE_ERR && !updating) {
++        free(project);
++        free(mode_str);
++        free(content);
++        return cbm_mcp_text_result("manage_adr could not read the decision record", true);
++    }
 +    char db_path[CBM_SZ_1K];
 +    project_db_path(project, db_path, sizeof(db_path));
 +    /* Restore the ADR from the sidecar if the rebuilt database lacks the row. */
@@ -135,7 +173,7 @@ index 5235aaab51bfc3b06652923fa1911c22cd5ffc43..a7a16fb5b8b6e326e06e0a65b40574f2
      if (!have_adr) {
          char *root_path = get_project_root(srv, project);
          char *legacy = adr_read_legacy_file(root_path);
-@@ -4717,7 +4730,8 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
+@@ -4717,7 +4734,8 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
  
      bool is_error = false;
      if ((strcmp(mode_str, "update") == 0 || strcmp(mode_str, "store") == 0) && content) {
@@ -719,7 +757,7 @@ index 7f9c72c826c6a516a9db165ffcec32fc18816bba..852b7afdaa4534fa8fc051799ed0172a
      }
  
 diff --git a/src/pipeline/pipeline.c b/src/pipeline/pipeline.c
-index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..3cbafc389b99e8080239c453fc8c07c7d0dff489 100644
+index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..cbba0ebb01c3dacf53770d398554bcaeaece0a1c 100644
 --- a/src/pipeline/pipeline.c
 +++ b/src/pipeline/pipeline.c
 @@ -12,7 +12,14 @@
@@ -746,7 +784,7 @@ index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..3cbafc389b99e8080239c453fc8c07c7
  #include "discover/discover.h"
  #include "discover/userconfig.h"
  #include "foundation/platform.h"
-@@ -864,8 +872,40 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
+@@ -864,8 +872,29 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
      return check_cancel(p) ? CBM_NOT_FOUND : 0;
  }
  
@@ -772,24 +810,13 @@ index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..3cbafc389b99e8080239c453fc8c07c7
 +    return rc;
 +}
 +
-+/* Rename a database that fails to open or fails its integrity check to <database path>.corrupt.
-+ * The database can contain an ADR that the sidecar lacks. Return false if the rename fails. */
-+static bool backup_unreadable_db(const char *db_path) {
-+    char backup_path[PL_WAL_BUF];
-+    int written = snprintf(backup_path, sizeof(backup_path), "%s.corrupt", db_path);
-+    if (written < 0 || (size_t)written >= sizeof(backup_path)) {
-+        return false;
-+    }
-+    return rename(db_path, backup_path) == 0;
-+}
-+
 +/* Try the incremental index or delete the database for a full index.
 + * Return a value >= 0 after an incremental index or an ADR copy failure.
 + * Return -1 to start a full index. */
  static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *files, int file_count) {
      char *db_path = resolve_db_path(p);
      if (!db_path) {
-@@ -876,8 +916,14 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
+@@ -876,8 +905,14 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
          free(db_path);
          return CBM_NOT_FOUND;
      }
@@ -805,14 +832,14 @@ index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..3cbafc389b99e8080239c453fc8c07c7
          cbm_file_hash_t *hashes = NULL;
          int hash_count = 0;
          cbm_store_get_file_hashes(check_store, p->project_name, &hashes, &hash_count);
-@@ -914,7 +960,13 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
+@@ -914,7 +949,13 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
              cbm_store_close(adr_store);
          }
      }
 -    cbm_unlink(db_path);
 +    if (database_healthy) {
 +        cbm_unlink(db_path);
-+    } else if (!backup_unreadable_db(db_path)) {
++    } else if (cbm_db_backup_unreadable(db_path) != 0) {
 +        cbm_log_error("pipeline.err", "phase", "db_backup", "project", p->project_name);
 +        free(db_path);
 +        return PL_ADR_CAPTURE_FAILED;
@@ -820,7 +847,7 @@ index 1cdfda02b2e62d4c9d30d32502d43ff6e8149f54..3cbafc389b99e8080239c453fc8c07c7
      char wal[PL_WAL_BUF];
      char shm[PL_WAL_BUF];
      snprintf(wal, sizeof(wal), "%s-wal", db_path);
-@@ -974,13 +1026,16 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_info_t *fil
+@@ -974,13 +1015,16 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_info_t *fil
      if (hash_store) {
          cbm_store_delete_file_hashes(hash_store, p->project_name);
  
@@ -871,10 +898,10 @@ index e5d1b4c9fe678c7c867cdb79b0ff2b0604ddb94c..528bc53382dcde96a8c3997e4c9a19f8
           * rebuild from the nodes table here.  See the full-dump path in
 diff --git a/src/store/adr_sidecar.h b/src/store/adr_sidecar.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..d1ec3e2f6564537faf60b9c1b8d803bb8f42cf95
+index 0000000000000000000000000000000000000000..997b00b91e8b75beeb3eb5fea3069a2746498eaf
 --- /dev/null
 +++ b/src/store/adr_sidecar.h
-@@ -0,0 +1,122 @@
+@@ -0,0 +1,168 @@
 +/*
 + * Store the project's architecture decision record in a file beside its graph
 + * database.
@@ -882,6 +909,7 @@ index 0000000000000000000000000000000000000000..d1ec3e2f6564537faf60b9c1b8d803bb
 +#ifndef CBM_STORE_ADR_SIDECAR_H
 +#define CBM_STORE_ADR_SIDECAR_H
 +
++#include <errno.h>
 +#include <fcntl.h>
 +#include <stdio.h>
 +#include <stdlib.h>
@@ -894,6 +922,7 @@ index 0000000000000000000000000000000000000000..d1ec3e2f6564537faf60b9c1b8d803bb
 +#define CBM_ADR_SIDECAR_SUFFIX ".adr"
 +#define CBM_ADR_SIDECAR_TEMP_SUFFIX ".adr.tmp"
 +#define CBM_ADR_SIDECAR_PATH_SIZE 4096
++#define CBM_DB_BACKUP_NAME_LIMIT 1000
 +
 +/* Return the sidecar content, or NULL if the file is empty or cannot be read.
 + * The caller must free the result. */
@@ -996,4 +1025,64 @@ index 0000000000000000000000000000000000000000..d1ec3e2f6564537faf60b9c1b8d803bb
 +    return cbm_adr_sidecar_sync_directory(db_path);
 +}
 +
++/* cbm_db_backup_unreadable backs up an unreadable database and its WAL file, if present.
++ * It tries <database path>.corrupt first, then numbered names through .corrupt.999.
++ * link does not replace an existing database backup. The database and WAL file can contain
++ * an architecture decision record that the sidecar file lacks. Close the engine's database
++ * connections before calling this function. It returns 0 on success or -1 on failure.
++ * A failed backup does not delete the original database path. */
++static inline int cbm_db_backup_unreadable(const char *db_path) {
++#ifdef _WIN32
++    (void)db_path;
++    return -1;
++#else
++    char backup_path[CBM_ADR_SIDECAR_PATH_SIZE];
++    char wal_path[CBM_ADR_SIDECAR_PATH_SIZE];
++    char backup_wal_path[CBM_ADR_SIDECAR_PATH_SIZE];
++    int wal_size = snprintf(wal_path, sizeof(wal_path), "%s-wal", db_path);
++    if (wal_size < 0 || (size_t)wal_size >= sizeof(wal_path)) {
++        return -1;
++    }
++    for (int attempt = 0; attempt < CBM_DB_BACKUP_NAME_LIMIT; attempt++) {
++        int written = attempt == 0
++                          ? snprintf(backup_path, sizeof(backup_path), "%s.corrupt", db_path)
++                          : snprintf(backup_path, sizeof(backup_path), "%s.corrupt.%d", db_path,
++                                     attempt);
++        int backup_wal_size = snprintf(backup_wal_path, sizeof(backup_wal_path), "%s-wal", backup_path);
++        if (written < 0 || (size_t)written >= sizeof(backup_path) || backup_wal_size < 0 ||
++            (size_t)backup_wal_size >= sizeof(backup_wal_path)) {
++            return -1;
++        }
++        if (link(db_path, backup_path) != 0) {
++            if (errno == EEXIST) {
++                continue;
++            }
++            return -1;
++        }
++        if (rename(wal_path, backup_wal_path) != 0 && errno != ENOENT) {
++            (void)unlink(backup_path);
++            return -1;
++        }
++        return unlink(db_path);
++    }
++    return -1;
++#endif
++}
++
 +#endif /* CBM_STORE_ADR_SIDECAR_H */
+diff --git a/src/store/store.c b/src/store/store.c
+index ea724a292a075164dab1906228bece5be75adaf4..e537edc62287c6880e44fda0c7baf483e33dd37e 100644
+--- a/src/store/store.c
++++ b/src/store/store.c
+@@ -5764,6 +5764,11 @@ int cbm_store_adr_get(cbm_store_t *s, const char *project, cbm_adr_t *out) {
+     }
+     bind_text(stmt, SKIP_ONE, project);
+     int rc = sqlite3_step(stmt);
++    if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
++        store_set_error_sqlite(s, "adr_get");
++        sqlite3_finalize(stmt);
++        return CBM_STORE_ERR;
++    }
+     if (rc != SQLITE_ROW) {
+         sqlite3_finalize(stmt);
+         store_set_error(s, "no ADR found");

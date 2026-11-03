@@ -3,11 +3,14 @@
 package offlinelive
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -24,6 +27,9 @@ const (
 	decisionParentSourceName   = "root.go"
 	decisionParentSource       = "package parent\n\nfunc ParentRoot() string {\n\treturn \"parent\"\n}\n"
 	decisionFilePermission     = 0o644
+	decisionDamageScript       = "../../internal/cbm/testdata/decisions_damage_row.sql"
+	decisionHeaderBytes        = 100
+	decisionDamageByte         = 0xA5
 )
 
 // decisionToolEnvelope stores the manage_adr fields that the tests read.
@@ -175,6 +181,120 @@ func TestClearIndexKeepsGraphWhenDecisionsCannotBeRetained(t *testing.T) {
 	harness.indexStatus()
 	if got := harness.readDecisions(); got != retainedDecisionsContent {
 		t.Fatalf("The decision record after the failed ClearIndex is %q instead of %q", got, retainedDecisionsContent)
+	}
+}
+
+// TestClearIndexKeepsUnreadableDatabase checks that ClearIndex backs up a damaged
+// database when neither the database nor the decision file provides a readable
+// record. It checks that the backup or its WAL file contains the record and that
+// an earlier backup remains unchanged. When the decision file or cached engine
+// provides the record, ClearIndex retains it without creating a backup.
+func TestClearIndexKeepsUnreadableDatabase(t *testing.T) {
+	testCases := []struct {
+		name             string
+		damage           func(t *testing.T, databasePath string)
+		keepDecisionFile bool
+		keepCachedEngine bool
+		earlierBackup    bool
+		wantBackupSuffix string
+	}{
+		{name: "A damaged decision table", damage: damageDecisionTable, wantBackupSuffix: ".corrupt"},
+		{name: "A damaged file header", damage: damageDatabaseHeader, wantBackupSuffix: ".corrupt"},
+		{name: "An earlier backup", damage: damageDatabaseHeader, earlierBackup: true, wantBackupSuffix: ".corrupt.1"},
+		{name: "A decision file", damage: damageDatabaseHeader, keepDecisionFile: true},
+		{name: "A cached engine", damage: damageDecisionTable, keepCachedEngine: true},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			harness := newHarness(t)
+			requireCompleted(t, harness.indexFixture())
+			harness.updateDecisions()
+			if got := harness.readDecisions(); got != retainedDecisionsContent {
+				t.Fatalf("The stored decision record is %q instead of %q", got, retainedDecisionsContent)
+			}
+			codebase := harness.indexStatus().GetCodebase()
+			databasePath := filepath.Join(harness.config.GraphDir, codebase.GetId()+".db")
+			if !testCase.keepDecisionFile {
+				if err := os.Remove(databasePath + ".adr"); err != nil {
+					t.Fatalf("Remove returned an error: %v", err)
+				}
+			}
+			if testCase.earlierBackup {
+				if err := os.WriteFile(databasePath+".corrupt", []byte(olderDecisionsContent), decisionFilePermission); err != nil {
+					t.Fatalf("WriteFile returned an error: %v", err)
+				}
+			}
+			if !testCase.keepCachedEngine {
+				harness.restart(harnessOptions{})
+			}
+			testCase.damage(t, databasePath)
+
+			harness.clearIndex()
+
+			if _, statErr := os.Stat(databasePath); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("Stat(%q) returned %v instead of os.ErrNotExist", databasePath, statErr)
+			}
+			digest := sha256.Sum256([]byte(codebase.GetCanonicalPath()))
+			retainedPath := filepath.Join(harness.config.GraphDir, retainedDecisionsDirectory, hex.EncodeToString(digest[:])+".adr")
+			retained, retainedErr := os.ReadFile(retainedPath)
+			if testCase.keepDecisionFile || testCase.keepCachedEngine {
+				if retainedErr != nil || string(retained) != retainedDecisionsContent {
+					t.Fatalf("ReadFile returned record %q and error %v. The expected record is %q", retained, retainedErr, retainedDecisionsContent)
+				}
+				if _, statErr := os.Stat(databasePath + ".corrupt"); !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatalf("Stat of the backup returned %v instead of os.ErrNotExist", statErr)
+				}
+				return
+			}
+			if !errors.Is(retainedErr, os.ErrNotExist) {
+				t.Fatalf("ReadFile of the retained record returned %v instead of os.ErrNotExist", retainedErr)
+			}
+			backup, err := os.ReadFile(databasePath + testCase.wantBackupSuffix)
+			if err != nil {
+				t.Fatalf("ReadFile of the backup returned an error: %v", err)
+			}
+			backupWAL, walErr := os.ReadFile(databasePath + testCase.wantBackupSuffix + "-wal")
+			if walErr != nil && !errors.Is(walErr, os.ErrNotExist) {
+				t.Fatalf("ReadFile of the backup WAL file returned an error: %v", walErr)
+			}
+			record := []byte(retainedDecisionsContent)
+			if !bytes.Contains(backup, record) && !bytes.Contains(backupWAL, record) {
+				t.Fatal("The backup and its WAL file do not contain the decision record")
+			}
+			if testCase.earlierBackup {
+				earlier, readErr := os.ReadFile(databasePath + ".corrupt")
+				if readErr != nil || string(earlier) != olderDecisionsContent {
+					t.Fatalf("ReadFile returned earlier backup %q and error %v. The expected content is %q", earlier, readErr, olderDecisionsContent)
+				}
+			}
+		})
+	}
+}
+
+func damageDatabaseHeader(t *testing.T, databasePath string) {
+	t.Helper()
+	data, err := os.ReadFile(databasePath)
+	if err != nil {
+		t.Fatalf("ReadFile returned an error: %v", err)
+	}
+	for i := range decisionHeaderBytes {
+		data[i] = decisionDamageByte
+	}
+	if err = os.WriteFile(databasePath, data, decisionFilePermission); err != nil {
+		t.Fatalf("WriteFile returned an error: %v", err)
+	}
+}
+
+func damageDecisionTable(t *testing.T, databasePath string) {
+	t.Helper()
+	script, err := os.ReadFile(decisionDamageScript)
+	if err != nil {
+		t.Fatalf("ReadFile returned an error: %v", err)
+	}
+	command := exec.CommandContext(context.Background(), "sqlite3", databasePath)
+	command.Stdin = bytes.NewReader(script)
+	if output, runErr := command.CombinedOutput(); runErr != nil {
+		t.Fatalf("sqlite3 returned an error: %v: %s", runErr, output)
 	}
 }
 
