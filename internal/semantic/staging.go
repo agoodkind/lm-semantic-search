@@ -370,61 +370,25 @@ func (service *Service) insertChunksBatched(
 	}()
 
 	for embeddingBatchIndex, embeddingBatch := range embeddingPacks {
-		embedded, err := service.embedChunkBatch(ctx, embeddingBatch, reuse)
+		batch, err := service.prepareChunkBatch(
+			ctx,
+			collectionName,
+			embeddingBatch,
+			reuse,
+			&current.ChunksDropped,
+			&refusedEmptyInputs,
+		)
 		if err != nil {
 			return err
-		}
-
-		reused := embedded.reused
-
-		keptChunks, keptVectors := filterEmbeddedChunks(embeddingBatch, embedded.vectors)
-		keptModels := embeddedRowModels(embedded)
-		catalogVectors := newlyEmbeddedReuseCatalog(keptChunks, keptVectors, reuse)
-
-		if emptyRefused := collectEmptyRefusedChunks(embeddingBatch, embedded); len(
-			emptyRefused,
-		) > 0 {
-			logEmptyContentRefused(ctx, collectionName, emptyRefused)
-			refusedEmptyInputs += safeInt32FromInt(len(emptyRefused))
-		}
-
-		// A reused chunk never reaches the embedder, so it cannot be refused and
-		// cannot enter this retry queue. The chunks-only constructor therefore
-		// correctly charges every retry input against the token budget.
-		oversized := collectOversizedChunks(embeddingBatch, embedded)
-		if len(oversized) > 0 {
-			retryChunks, retryVectors, dropped, retryErr := EmbedChunksSplittingOversize(
-				ctx,
-				oversized,
-				config.ActiveEmbedTokenLimit(service.cfg),
-				NewChunkPacker(
-					service.cfg.EmbeddingBatchSize,
-					service.cfg.EmbeddingBatchTokenBudget,
-				),
-				service.embedBatchWithProgress,
-			)
-			if retryErr != nil {
-				return retryErr
-			}
-
-			keptChunks = append(keptChunks, retryChunks...)
-			keptVectors = append(keptVectors, retryVectors...)
-
-			for range retryChunks {
-				keptModels = append(keptModels, service.cfg.EmbeddingModel)
-			}
-
-			addReuseCatalogVectors(catalogVectors, retryChunks, retryVectors)
-			current.ChunksDropped += safeInt32FromInt(dropped)
 		}
 
 		writeResult, writeErr := service.writeEmbeddedChunkBatch(
 			ctx,
 			collectionName,
-			keptChunks,
-			keptVectors,
-			keptModels,
-			catalogVectors,
+			batch.chunks,
+			batch.vectors,
+			batch.models,
+			batch.catalogVectors,
 			collectionReady,
 			columnSet,
 		)
@@ -446,8 +410,8 @@ func (service *Service) insertChunksBatched(
 			embeddingBatchIndex+1,
 		)/float64(totalEmbeddingBatches))*10
 		if writeResult.writtenRows > 0 {
-			current.ChunksReused += safeInt32FromInt(reused)
-			current.ChunksEmbedded += safeInt32FromInt(len(keptChunks) - reused)
+			current.ChunksReused += safeInt32FromInt(batch.reused)
+			current.ChunksEmbedded += safeInt32FromInt(len(batch.chunks) - batch.reused)
 		}
 
 		if progress != nil {
@@ -456,24 +420,72 @@ func (service *Service) insertChunksBatched(
 	}
 
 	logEmbedRunExceptions(ctx, collectionName, current.ChunksDropped, refusedEmptyInputs)
-	slog.InfoContext(
-		ctx,
-		"semantic.chunks_written",
-		"collection",
-		collectionName,
-		"embedding_batches",
-		totalEmbeddingBatches,
-		"insert_batches",
-		totalInsertBatches,
-		"chunks",
-		current.CollectionRowsWritten,
-		"embedded",
-		current.ChunksEmbedded,
-		"reused",
-		current.ChunksReused,
-	)
+	logWrittenChunks(ctx, collectionName, totalEmbeddingBatches, totalInsertBatches, current)
 
 	return nil
+}
+
+type preparedChunkBatch struct {
+	chunks         []model.StoredChunk
+	vectors        [][]float32
+	models         []string
+	catalogVectors reuseCatalogVectors
+	reused         int
+}
+
+func (service *Service) prepareChunkBatch(
+	ctx context.Context,
+	collectionName string,
+	embeddingBatch []model.StoredChunk,
+	reuse map[string]model.ReuseVector,
+	droppedInputs *int32,
+	refusedEmptyInputs *int32,
+) (preparedChunkBatch, error) {
+	var batch preparedChunkBatch
+	embedded, err := service.embedChunkBatch(ctx, embeddingBatch, reuse)
+	if err != nil {
+		return batch, err
+	}
+
+	batch.reused = embedded.reused
+
+	batch.chunks, batch.vectors = filterEmbeddedChunks(embeddingBatch, embedded.vectors)
+	batch.models = embeddedRowModels(embedded)
+	batch.catalogVectors = newlyEmbeddedReuseCatalog(batch.chunks, batch.vectors, reuse)
+
+	if emptyRefused := collectEmptyRefusedChunks(embeddingBatch, embedded); len(emptyRefused) > 0 {
+		logEmptyContentRefused(ctx, collectionName, emptyRefused)
+		*refusedEmptyInputs += safeInt32FromInt(len(emptyRefused))
+	}
+
+	// A reused chunk never reaches the embedder, so it cannot be refused and
+	// cannot enter this retry queue. The chunks-only constructor therefore
+	// correctly charges every retry input against the token budget.
+	oversized := collectOversizedChunks(embeddingBatch, embedded)
+	if len(oversized) > 0 {
+		retryChunks, retryVectors, dropped, retryErr := EmbedChunksSplittingOversize(
+			ctx,
+			oversized,
+			config.ActiveEmbedTokenLimit(service.cfg),
+			NewChunkPacker(service.cfg.EmbeddingBatchSize, service.cfg.EmbeddingBatchTokenBudget),
+			service.embedBatchWithProgress,
+		)
+		if retryErr != nil {
+			return batch, retryErr
+		}
+
+		batch.chunks = append(batch.chunks, retryChunks...)
+		batch.vectors = append(batch.vectors, retryVectors...)
+
+		for range retryChunks {
+			batch.models = append(batch.models, service.cfg.EmbeddingModel)
+		}
+
+		addReuseCatalogVectors(batch.catalogVectors, retryChunks, retryVectors)
+		*droppedInputs += safeInt32FromInt(dropped)
+	}
+
+	return batch, nil
 }
 
 func initialInsertProgress(phase string, totalBatches int) Progress {
@@ -917,4 +929,29 @@ func stagingCollectionName(collectionName string) string {
 	}
 
 	return collectionName + stagingCollectionSuffix
+}
+
+func logWrittenChunks(
+	ctx context.Context,
+	collectionName string,
+	totalEmbeddingBatches int,
+	totalInsertBatches int,
+	current Progress,
+) {
+	slog.InfoContext(
+		ctx,
+		"semantic.chunks_written",
+		"collection",
+		collectionName,
+		"embedding_batches",
+		totalEmbeddingBatches,
+		"insert_batches",
+		totalInsertBatches,
+		"chunks",
+		current.CollectionRowsWritten,
+		"embedded",
+		current.ChunksEmbedded,
+		"reused",
+		current.ChunksReused,
+	)
 }

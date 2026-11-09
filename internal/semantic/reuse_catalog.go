@@ -585,18 +585,7 @@ func (service *Service) appendReuseCatalog(
 		return err
 	}
 	defer lease.Release()
-	storageKeys := make([]string, 0, len(vectorsByStorageKey))
-
-	rowKeysByStorageKey := make(map[string]string, len(vectorsByStorageKey))
-	for storageKey := range vectorsByStorageKey {
-		storageKeys = append(storageKeys, storageKey)
-		rowKeysByStorageKey[storageKey] = reuseCatalogRowKey(storageKey, service.cfg.EmbeddingModel)
-	}
-
-	rowKeys := make([]string, 0, len(storageKeys))
-	for _, storageKey := range storageKeys {
-		rowKeys = append(rowKeys, rowKeysByStorageKey[storageKey])
-	}
+	storageKeys, rowKeysByStorageKey, rowKeys := service.reuseCatalogKeys(vectorsByStorageKey)
 
 	existing, err := service.loadReuseCatalogRowKeys(ctx, rowKeys, dimension)
 	if err != nil {
@@ -667,6 +656,25 @@ func (service *Service) appendReuseCatalog(
 	slog.DebugContext(ctx, "semantic.reuse_catalog_appended", "count", len(missingKeys))
 
 	return nil
+}
+
+func (service *Service) reuseCatalogKeys(
+	vectorsByStorageKey map[string][]float32,
+) ([]string, map[string]string, []string) {
+	storageKeys := make([]string, 0, len(vectorsByStorageKey))
+
+	rowKeysByStorageKey := make(map[string]string, len(vectorsByStorageKey))
+	for storageKey := range vectorsByStorageKey {
+		storageKeys = append(storageKeys, storageKey)
+		rowKeysByStorageKey[storageKey] = reuseCatalogRowKey(storageKey, service.cfg.EmbeddingModel)
+	}
+
+	rowKeys := make([]string, 0, len(storageKeys))
+	for _, storageKey := range storageKeys {
+		rowKeys = append(rowKeys, rowKeysByStorageKey[storageKey])
+	}
+
+	return storageKeys, rowKeysByStorageKey, rowKeys
 }
 
 func reuseCatalogStorageVectors(

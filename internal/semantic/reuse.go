@@ -216,6 +216,16 @@ func (service *Service) loadReuseVectorsFiltered(
 		return fmt.Errorf("open query iterator for %s: %w", collectionName, err)
 	}
 
+	return readReuseVectors(ctx, collectionName, iterator, reuse, &rowsRead)
+}
+
+func readReuseVectors(
+	ctx context.Context,
+	collectionName string,
+	iterator milvusclient.QueryIterator,
+	reuse map[string]model.ReuseVector,
+	rowsRead *int,
+) error {
 	for {
 		resultSet, nextErr := iterator.Next(ctx)
 		if errors.Is(nextErr, io.EOF) {
@@ -262,7 +272,7 @@ func (service *Service) loadReuseVectorsFiltered(
 				Vector:           vector,
 				SourceModelKnown: embeddingModel != "",
 			}
-			rowsRead++
+			*rowsRead += 1
 		}
 	}
 }

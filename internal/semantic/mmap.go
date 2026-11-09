@@ -222,64 +222,8 @@ func (service *Service) inspectMmapPolicy(
 		sparseIndexPresent: false,
 	}
 
-	indexFields := []string{
-		denseVectorFieldName,
-		contentHashFieldName,
-		sparseVectorFieldName,
-	}
-	for _, fieldName := range indexFields {
-		indexNames, err := service.milvus.ListIndexes(
-			ctx,
-			milvusclient.NewListIndexOption(collectionName).WithFieldName(fieldName),
-		)
-		if err != nil {
-			return mmapInspection{}, wrapStoreError(
-				ctx,
-				err,
-				"list indexes on "+fieldName+" for "+collectionName,
-			)
-		}
-
-		slices.Sort(indexNames)
-
-		for _, indexName := range indexNames {
-			description, describeErr := service.milvus.DescribeIndex(
-				ctx,
-				milvusclient.NewDescribeIndexOption(collectionName, indexName),
-			)
-			if describeErr != nil {
-				return mmapInspection{}, wrapStoreError(
-					ctx,
-					describeErr,
-					"describe index "+indexName+" on "+collectionName,
-				)
-			}
-
-			params := description.Params()
-			if !noteMmapIndexPresence(&inspection, fieldName, params["index_type"]) {
-				continue
-			}
-
-			if params[mmapEnabledKey] != mmapEnabledValue {
-				inspection.missingTargets = append(
-					inspection.missingTargets,
-					mmapTarget{
-						kind: mmapIndexTarget,
-						name: indexName,
-					},
-				)
-			}
-
-			if catalogDenseIndexNeedsWarmupDisabled(collectionName, fieldName, params) {
-				inspection.missingTargets = append(
-					inspection.missingTargets,
-					mmapTarget{
-						kind: indexWarmupTarget,
-						name: indexName,
-					},
-				)
-			}
-		}
+	if err := service.inspectMmapIndexes(ctx, collectionName, &inspection); err != nil {
+		return mmapInspection{}, err
 	}
 
 	loadState, err := service.milvus.GetLoadState(
@@ -834,4 +778,68 @@ func (service *Service) EnsureMmapEnabledAllCollections(ctx context.Context) {
 	}
 
 	slog.LogAttrs(ctx, level, message, attrs...)
+}
+
+func (service *Service) inspectMmapIndexes(
+	ctx context.Context,
+	collectionName string,
+	inspection *mmapInspection,
+) error {
+	indexFields := []string{
+		denseVectorFieldName,
+		contentHashFieldName,
+		sparseVectorFieldName,
+	}
+	for _, fieldName := range indexFields {
+		indexNames, err := service.milvus.ListIndexes(
+			ctx,
+			milvusclient.NewListIndexOption(collectionName).WithFieldName(fieldName),
+		)
+		if err != nil {
+			return wrapStoreError(ctx, err, "list indexes on "+fieldName+" for "+collectionName)
+		}
+
+		slices.Sort(indexNames)
+
+		for _, indexName := range indexNames {
+			description, describeErr := service.milvus.DescribeIndex(
+				ctx,
+				milvusclient.NewDescribeIndexOption(collectionName, indexName),
+			)
+			if describeErr != nil {
+				return wrapStoreError(
+					ctx,
+					describeErr,
+					"describe index "+indexName+" on "+collectionName,
+				)
+			}
+
+			params := description.Params()
+			if !noteMmapIndexPresence(inspection, fieldName, params["index_type"]) {
+				continue
+			}
+
+			if params[mmapEnabledKey] != mmapEnabledValue {
+				inspection.missingTargets = append(
+					inspection.missingTargets,
+					mmapTarget{
+						kind: mmapIndexTarget,
+						name: indexName,
+					},
+				)
+			}
+
+			if catalogDenseIndexNeedsWarmupDisabled(collectionName, fieldName, params) {
+				inspection.missingTargets = append(
+					inspection.missingTargets,
+					mmapTarget{
+						kind: indexWarmupTarget,
+						name: indexName,
+					},
+				)
+			}
+		}
+	}
+
+	return nil
 }
