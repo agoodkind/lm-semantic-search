@@ -53,6 +53,7 @@ func New(dimensions int) (*Index, error) {
 	if dimensions <= 0 {
 		return nil, fmt.Errorf("vector index dimensions must be positive: %d", dimensions)
 	}
+
 	return newIndex(newGraph(), dimensions), nil
 }
 
@@ -73,6 +74,7 @@ func newGraph() *hnsw.Graph[uint64] {
 	graph.EfSearch = searchExpansion
 	graph.Ml = levelFactor
 	graph.Distance = hnsw.CosineDistance
+
 	return graph
 }
 
@@ -81,6 +83,7 @@ func digest(vector []float32) vectorDigest {
 	for position, component := range vector {
 		binary.LittleEndian.PutUint32(encoded[4*position:], math.Float32bits(component))
 	}
+
 	return sha256.Sum256(encoded)
 }
 
@@ -91,9 +94,11 @@ func (index *Index) Add(key uint64, vector []float32) error {
 	if err := index.validateLocked(vector); err != nil {
 		return err
 	}
+
 	if _, found := index.nodeOfKey[key]; found {
 		return fmt.Errorf("vector index already contains key %d", key)
 	}
+
 	vectorKey := digest(vector)
 	node, found := index.nodeOfValue[vectorKey]
 	if !found {
@@ -101,8 +106,10 @@ func (index *Index) Add(key uint64, vector []float32) error {
 		index.graph.Add(hnsw.MakeNode(key, slices.Clone(vector)))
 		index.nodeOfValue[vectorKey] = node
 	}
+
 	index.groups[node] = append(index.groups[node], key)
 	index.nodeOfKey[key] = node
+
 	return nil
 }
 
@@ -114,33 +121,45 @@ func (index *Index) Search(vector []float32, count int) ([]uint64, []float32, er
 	if err := index.validateLocked(vector); err != nil {
 		return nil, nil, err
 	}
+
 	if count <= 0 || index.graph.Len() == 0 {
 		return []uint64{}, []float32{}, nil
 	}
+
 	nodes := index.graph.Search(vector, count)
+
 	distances := make(map[uint64]float32, len(nodes))
 	for _, node := range nodes {
 		distances[node.Key] = hnsw.CosineDistance(vector, node.Value)
 	}
-	sort.Slice(nodes, func(left int, right int) bool {
-		if distances[nodes[left].Key] != distances[nodes[right].Key] {
-			return distances[nodes[left].Key] < distances[nodes[right].Key]
-		}
-		return nodes[left].Key < nodes[right].Key
-	})
+
+	sort.Slice(
+		nodes,
+		func(left int, right int) bool {
+			if distances[nodes[left].Key] != distances[nodes[right].Key] {
+				return distances[nodes[left].Key] < distances[nodes[right].Key]
+			}
+
+			return nodes[left].Key < nodes[right].Key
+		},
+	)
 	keys := make([]uint64, 0, count)
 	keyDistances := make([]float32, 0, count)
+
 	for _, node := range nodes {
 		group := slices.Clone(index.groups[node.Key])
 		slices.Sort(group)
+
 		for _, key := range group {
 			if len(keys) == count {
 				return keys, keyDistances, nil
 			}
+
 			keys = append(keys, key)
 			keyDistances = append(keyDistances, distances[node.Key])
 		}
 	}
+
 	return keys, keyDistances, nil
 }
 
@@ -149,6 +168,7 @@ func (index *Index) Contains(key uint64) bool {
 	index.mutex.Lock()
 	defer index.mutex.Unlock()
 	_, found := index.nodeOfKey[key]
+
 	return found
 }
 
@@ -156,6 +176,7 @@ func (index *Index) Contains(key uint64) bool {
 func (index *Index) Size() int {
 	index.mutex.Lock()
 	defer index.mutex.Unlock()
+
 	return len(index.nodeOfKey)
 }
 
@@ -163,6 +184,7 @@ func (index *Index) Size() int {
 func (index *Index) Dimensions() int {
 	index.mutex.Lock()
 	defer index.mutex.Unlock()
+
 	return index.dimensions
 }
 
@@ -174,31 +196,40 @@ func (index *Index) Save(path string) error {
 	if index.graph == nil {
 		return errors.New("save vector index: index is closed")
 	}
+
 	file, err := os.Create(path)
 	if err != nil {
 		slog.Error("create vector index file failed", "path", path, "err", err)
 		return fmt.Errorf("create vector index file %s: %w", path, err)
 	}
+
 	writer := bufio.NewWriter(file)
 	if err := index.writeLocked(writer); err != nil {
 		_ = file.Close()
 		slog.Error("write vector index file failed", "path", path, "err", err)
+
 		return fmt.Errorf("write vector index file %s: %w", path, err)
 	}
+
 	if err := writer.Flush(); err != nil {
 		_ = file.Close()
 		slog.Error("flush vector index file failed", "path", path, "err", err)
+
 		return fmt.Errorf("flush vector index file %s: %w", path, err)
 	}
+
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
 		slog.Error("sync vector index file failed", "path", path, "err", err)
+
 		return fmt.Errorf("sync vector index file %s: %w", path, err)
 	}
+
 	if err := file.Close(); err != nil {
 		slog.Error("close vector index file failed", "path", path, "err", err)
 		return fmt.Errorf("close vector index file %s: %w", path, err)
 	}
+
 	return nil
 }
 
@@ -211,30 +242,37 @@ func (index *Index) writeLocked(writer io.Writer) error {
 	if _, err := io.WriteString(writer, fileFormat); err != nil {
 		return codecError("write format", err)
 	}
+
 	if err := binary.Write(writer, binary.LittleEndian, int64(index.dimensions)); err != nil {
 		return codecError("write dimensions", err)
 	}
+
 	if err := index.graph.Export(writer); err != nil {
 		return codecError("write graph", err)
 	}
+
 	nodes := make([]uint64, 0, len(index.groups))
 	for node := range index.groups {
 		nodes = append(nodes, node)
 	}
+
 	slices.Sort(nodes)
 	if err := binary.Write(writer, binary.LittleEndian, int64(len(nodes))); err != nil {
 		return codecError("write group count", err)
 	}
+
 	for _, node := range nodes {
 		group := index.groups[node]
 		header := []uint64{node, uint64(len(group))}
 		if err := binary.Write(writer, binary.LittleEndian, header); err != nil {
 			return codecError("write group header", err)
 		}
+
 		if err := binary.Write(writer, binary.LittleEndian, group); err != nil {
 			return codecError("write group keys", err)
 		}
 	}
+
 	return nil
 }
 
@@ -250,6 +288,7 @@ func Load(path string) (*Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read vector index %s: %w: %w", path, ErrFormat, err)
 	}
+
 	return index, nil
 }
 
@@ -258,57 +297,72 @@ func read(reader *bufio.Reader) (*Index, error) {
 	if _, err := io.ReadFull(reader, format); err != nil {
 		return nil, codecError("read format", err)
 	}
+
 	if string(format) != fileFormat {
 		return nil, fmt.Errorf("format %q", format)
 	}
+
 	var dimensions int64
 	if err := binary.Read(reader, binary.LittleEndian, &dimensions); err != nil {
 		return nil, codecError("read dimensions", err)
 	}
+
 	if dimensions <= 0 || dimensions > math.MaxInt32 {
 		return nil, fmt.Errorf("dimensions %d out of range", dimensions)
 	}
+
 	width := int(dimensions)
 	graph := newGraph()
 	if err := graph.Import(reader); err != nil {
 		return nil, codecError("read graph", err)
 	}
+
 	if graph.Len() > 0 && graph.Dims() != width {
 		return nil, fmt.Errorf("header width %d, vector width %d", width, graph.Dims())
 	}
+
 	index := newIndex(graph, width)
 	var nodeCount int64
 	if err := binary.Read(reader, binary.LittleEndian, &nodeCount); err != nil {
 		return nil, codecError("read group count", err)
 	}
+
 	if nodeCount != int64(graph.Len()) {
 		return nil, fmt.Errorf("%d key groups for %d graph nodes", nodeCount, graph.Len())
 	}
+
 	for range nodeCount {
 		header := make([]uint64, 2)
 		if err := binary.Read(reader, binary.LittleEndian, header); err != nil {
 			return nil, codecError("read group header", err)
 		}
+
 		node := header[0]
 		vector, found := graph.Lookup(node)
 		if !found {
 			return nil, fmt.Errorf("key group %d without a graph node", node)
 		}
+
 		// Read group keys individually instead of allocating from the untrusted length.
 		group := make([]uint64, 0)
+
 		for range header[1] {
 			var key uint64
 			if err := binary.Read(reader, binary.LittleEndian, &key); err != nil {
 				return nil, codecError("read group keys", err)
 			}
+
 			group = append(group, key)
 		}
+
 		index.groups[node] = group
 		index.nodeOfValue[digest(vector)] = node
+
 		for _, key := range group {
 			index.nodeOfKey[key] = node
 		}
 	}
+
 	return index, nil
 }
 
@@ -317,6 +371,7 @@ func (index *Index) Close() {
 	if index == nil {
 		return
 	}
+
 	index.mutex.Lock()
 	defer index.mutex.Unlock()
 	index.graph = nil
@@ -329,8 +384,10 @@ func (index *Index) validateLocked(vector []float32) error {
 	if index.graph == nil {
 		return errors.New("vector index is closed")
 	}
+
 	if len(vector) != index.dimensions {
 		return fmt.Errorf("vector has %d dimensions, want %d", len(vector), index.dimensions)
 	}
+
 	return nil
 }

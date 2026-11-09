@@ -69,18 +69,36 @@ var presets = map[string]Preset{
 		Name:         EmbeddingGemma,
 		ModelONNXURL: embeddingGemmaModelURL,
 		ModelSHA256: artifactDigest(
-			"ad1dfee8", "1a70f794", "4b9b9d1c", "c6e48075",
-			"b832881c", "f33fab2f", "2b248be7", "8f3f0043",
+			"ad1dfee8",
+			"1a70f794",
+			"4b9b9d1c",
+			"c6e48075",
+			"b832881c",
+			"f33fab2f",
+			"2b248be7",
+			"8f3f0043",
 		),
 		ModelDataURL: embeddingGemmaModelDataURL,
 		ModelDataSHA256: artifactDigest(
-			"599962c3", "143b040d", "e2dd05e5", "975be3e9",
-			"091dd067", "cacc6a8f", "7186e320", "3bab9e02",
+			"599962c3",
+			"143b040d",
+			"e2dd05e5",
+			"975be3e9",
+			"091dd067",
+			"cacc6a8f",
+			"7186e320",
+			"3bab9e02",
 		),
 		TokenizerURL: embeddingGemmaVocabularyURL,
 		TokenizerSHA256: artifactDigest(
-			"4dda02fa", "af32bc91", "031dc8c8", "8457ac27",
-			"2b00c101", "6cc67975", "7d1c441b", "248b9c47",
+			"4dda02fa",
+			"af32bc91",
+			"031dc8c8",
+			"8457ac27",
+			"2b00c101",
+			"6cc67975",
+			"7d1c441b",
+			"248b9c47",
 		),
 		Dimension:        768,
 		Pooling:          PoolingMean,
@@ -92,15 +110,27 @@ var presets = map[string]Preset{
 		Name:         BGESmall,
 		ModelONNXURL: bgeSmallModelURL,
 		ModelSHA256: artifactDigest(
-			"828e1496", "d7fabb79", "cfa4dcd8", "4fa38625",
-			"c0d3d21d", "a474a00f", "08db0f55", "9940cf35",
+			"828e1496",
+			"d7fabb79",
+			"cfa4dcd8",
+			"4fa38625",
+			"c0d3d21d",
+			"a474a00f",
+			"08db0f55",
+			"9940cf35",
 		),
 		ModelDataURL:    "",
 		ModelDataSHA256: "",
 		TokenizerURL:    bgeSmallVocabularyURL,
 		TokenizerSHA256: artifactDigest(
-			"d241a60d", "5e8f04cc", "1b2b3e9e", "f7a4921b",
-			"27bf526d", "9f6050ab", "90f9267a", "1f9e5c66",
+			"d241a60d",
+			"5e8f04cc",
+			"1b2b3e9e",
+			"f7a4921b",
+			"27bf526d",
+			"9f6050ab",
+			"90f9267a",
+			"1f9e5c66",
 		),
 		Dimension:        384,
 		Pooling:          PoolingCLS,
@@ -122,6 +152,7 @@ func NewRegistry(defaultName string, registered ...Preset) *Registry {
 	for _, preset := range registered {
 		byName[preset.Name] = preset
 	}
+
 	return &Registry{defaultName: defaultName, presets: byName}
 }
 
@@ -137,10 +168,12 @@ func (registry *Registry) Resolve(name string) (Preset, error) {
 	if normalizedName == "" {
 		normalizedName = registry.defaultName
 	}
+
 	preset, found := registry.presets[normalizedName]
 	if !found {
 		return Preset{}, fmt.Errorf("model identifier %q is not registered", name)
 	}
+
 	return preset, nil
 }
 
@@ -155,6 +188,7 @@ func Resolve(name string) (Preset, error) {
 	if normalizedName == "" {
 		normalizedName = DefaultName
 	}
+
 	preset, found := presets[normalizedName]
 	if !found {
 		return Preset{}, fmt.Errorf(
@@ -164,5 +198,6 @@ func Resolve(name string) (Preset, error) {
 			BGESmall,
 		)
 	}
+
 	return preset, nil
 }

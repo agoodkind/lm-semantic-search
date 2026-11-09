@@ -23,6 +23,7 @@ func newTestSyncLock(t *testing.T) (*syncLock, string, string) {
 	t.Helper()
 	root := t.TempDir()
 	lockPath := filepath.Join(root, "mcp-sync.flock")
+
 	return newSyncLock(lockPath, root), lockPath, root
 }
 
@@ -35,6 +36,7 @@ func probeLockHeld(t *testing.T, lockPath string) bool {
 	if err != nil {
 		t.Fatalf("probe sync lock returned error: %v", err)
 	}
+
 	return held
 }
 
@@ -47,6 +49,7 @@ func lockHeldByAnother(lockPath string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("open sync lock probe %s: %w", lockPath, err)
 	}
+
 	defer func() {
 		_ = probe.Close()
 	}()
@@ -55,12 +58,15 @@ func lockHeldByAnother(lockPath string) (bool, error) {
 	if errors.Is(err, syscall.EWOULDBLOCK) {
 		return true, nil
 	}
+
 	if err != nil {
 		return false, fmt.Errorf("lock sync lock probe %s: %w", lockPath, err)
 	}
+
 	if unlockErr := syscall.Flock(int(probe.Fd()), syscall.LOCK_UN); unlockErr != nil {
 		return false, fmt.Errorf("unlock sync lock probe %s: %w", lockPath, unlockErr)
 	}
+
 	return false, nil
 }
 
@@ -71,6 +77,7 @@ func mustAcquire(t *testing.T, lock *syncLock) syncLockLease {
 	if outcome != syncLockAcquired || err != nil {
 		t.Fatalf("acquire returned (%s, %v), want acquired with no error", outcome, err)
 	}
+
 	return lease
 }
 
@@ -84,18 +91,18 @@ func TestSyncLockHolderProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFile holder returned error: %v", err)
 	}
+
 	defer func() {
 		_ = holder.Close()
 	}()
-	if err := syscall.Flock(
-		int(holder.Fd()),
-		syscall.LOCK_EX|syscall.LOCK_NB,
-	); err != nil {
+	if err := syscall.Flock(int(holder.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		t.Fatalf("Flock holder returned error: %v", err)
 	}
+
 	if _, err := fmt.Fprintln(os.Stdout, "locked"); err != nil {
 		t.Fatalf("write readiness returned error: %v", err)
 	}
+
 	if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
 		t.Fatalf("wait for parent returned error: %v", err)
 	}
@@ -106,23 +113,22 @@ func TestSyncLockHolderProcess(t *testing.T) {
 func TestSyncLockReleasedWhenHolderProcessDies(t *testing.T) {
 	lock, lockPath, _ := newTestSyncLock(t)
 	command := exec.Command(os.Args[0], "-test.run=^TestSyncLockHolderProcess$")
-	command.Env = append(
-		os.Environ(),
-		syncLockHolderModeEnv+"=1",
-		syncLockPathEnv+"="+lockPath,
-	)
+	command.Env = append(os.Environ(), syncLockHolderModeEnv+"=1", syncLockPathEnv+"="+lockPath)
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		t.Fatalf("StdinPipe returned error: %v", err)
 	}
+
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		t.Fatalf("StdoutPipe returned error: %v", err)
 	}
+
 	command.Stderr = os.Stderr
 	if err := command.Start(); err != nil {
 		t.Fatalf("Start holder returned error: %v", err)
 	}
+
 	processFinished := false
 	t.Cleanup(func() {
 		_ = stdin.Close()
@@ -136,6 +142,7 @@ func TestSyncLockReleasedWhenHolderProcessDies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read holder readiness returned error: %v", err)
 	}
+
 	if ready != "locked\n" {
 		t.Fatalf("holder readiness = %q, want %q", ready, "locked\n")
 	}
@@ -148,9 +155,11 @@ func TestSyncLockReleasedWhenHolderProcessDies(t *testing.T) {
 	if err := command.Process.Kill(); err != nil {
 		t.Fatalf("Kill holder returned error: %v", err)
 	}
+
 	if err := command.Wait(); err == nil {
 		t.Fatal("Wait returned no error after the holder was killed")
 	}
+
 	processFinished = true
 
 	lease := mustAcquire(t, lock)
@@ -208,6 +217,7 @@ func TestSyncLockStaleReleaseKeepsLaterHolder(t *testing.T) {
 	if !probeLockHeld(t, lockPath) {
 		t.Fatal("a stale duplicate release unlocked the later holder")
 	}
+
 	if lock.refcount != 1 {
 		t.Fatalf("lock refcount = %d, want 1", lock.refcount)
 	}
@@ -224,9 +234,11 @@ func TestBeginConvergeSerializesPerCodebase(t *testing.T) {
 	if !syncer.beginConverge("cb1") {
 		t.Fatal("first beginConverge for cb1 should succeed")
 	}
+
 	if syncer.beginConverge("cb1") {
 		t.Fatal("second beginConverge for cb1 must fail while the first runs")
 	}
+
 	if !syncer.beginConverge("cb2") {
 		t.Fatal("beginConverge for a distinct codebase should succeed concurrently")
 	}

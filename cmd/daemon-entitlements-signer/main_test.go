@@ -19,26 +19,51 @@ func TestRewriteArgumentsScopesEntitlementsToDaemon(t *testing.T) {
 			name:   "codesign engine daemon",
 			signer: signerCodesign,
 			arguments: []string{
-				"--force", "--sign", "identity", "--identifier", "io.goodkind.daemon",
-				"--options", "runtime", "--timestamp=none",
+				"--force",
+				"--sign",
+				"identity",
+				"--identifier",
+				"io.goodkind.daemon",
+				"--options",
+				"runtime",
+				"--timestamp=none",
 				"dist/lm-semantic-search-daemon",
 			},
 			want: []string{
-				"--force", "--sign", "identity", "--identifier", "io.goodkind.daemon",
-				"--options", "runtime", "--timestamp=none",
-				"--entitlements", entitlements, "dist/lm-semantic-search-daemon",
+				"--force",
+				"--sign",
+				"identity",
+				"--identifier",
+				"io.goodkind.daemon",
+				"--options",
+				"runtime",
+				"--timestamp=none",
+				"--entitlements",
+				entitlements,
+				"dist/lm-semantic-search-daemon",
 			},
 		},
 		{
 			name:   "codesign daemon before trailing flags",
 			signer: signerCodesign,
 			arguments: []string{
-				"--force", "-s", "identity", "dist/lm-semantic-search-daemon",
-				"--options", "runtime", "--timestamp=none",
+				"--force",
+				"-s",
+				"identity",
+				"dist/lm-semantic-search-daemon",
+				"--options",
+				"runtime",
+				"--timestamp=none",
 			},
 			want: []string{
-				"--force", "-s", "identity", "--entitlements", entitlements,
-				"dist/lm-semantic-search-daemon", "--options", "runtime",
+				"--force",
+				"-s",
+				"identity",
+				"--entitlements",
+				entitlements,
+				"dist/lm-semantic-search-daemon",
+				"--options",
+				"runtime",
 				"--timestamp=none",
 			},
 		},
@@ -46,25 +71,45 @@ func TestRewriteArgumentsScopesEntitlementsToDaemon(t *testing.T) {
 			name:   "codesign replaces existing entitlement after target",
 			signer: signerCodesign,
 			arguments: []string{
-				"--sign", "identity", "--identifier", "io.goodkind.daemon",
-				"dist/lm-semantic-search-daemon", "--entitlements", "old.plist",
-				"--options", "runtime",
+				"--sign",
+				"identity",
+				"--identifier",
+				"io.goodkind.daemon",
+				"dist/lm-semantic-search-daemon",
+				"--entitlements",
+				"old.plist",
+				"--options",
+				"runtime",
 			},
 			want: []string{
-				"--sign", "identity", "--identifier", "io.goodkind.daemon",
-				"--entitlements", entitlements, "dist/lm-semantic-search-daemon",
-				"--options", "runtime",
+				"--sign",
+				"identity",
+				"--identifier",
+				"io.goodkind.daemon",
+				"--entitlements",
+				entitlements,
+				"dist/lm-semantic-search-daemon",
+				"--options",
+				"runtime",
 			},
 		},
 		{
 			name:   "codesign CLI engine shape",
 			signer: signerCodesign,
 			arguments: []string{
-				"--force", "--sign", "identity", "--options", "runtime",
+				"--force",
+				"--sign",
+				"identity",
+				"--options",
+				"runtime",
 				"dist/lm-semantic-search",
 			},
 			want: []string{
-				"--force", "--sign", "identity", "--options", "runtime",
+				"--force",
+				"--sign",
+				"identity",
+				"--options",
+				"runtime",
 				"dist/lm-semantic-search",
 			},
 		},
@@ -72,11 +117,17 @@ func TestRewriteArgumentsScopesEntitlementsToDaemon(t *testing.T) {
 			name:   "codesign MCP with target before trailing flag",
 			signer: signerCodesign,
 			arguments: []string{
-				"--force", "-s", "identity", "dist/lm-semantic-search-mcp",
+				"--force",
+				"-s",
+				"identity",
+				"dist/lm-semantic-search-mcp",
 				"--timestamp=none",
 			},
 			want: []string{
-				"--force", "-s", "identity", "dist/lm-semantic-search-mcp",
+				"--force",
+				"-s",
+				"identity",
+				"dist/lm-semantic-search-mcp",
 				"--timestamp=none",
 			},
 		},
@@ -91,21 +142,29 @@ func TestRewriteArgumentsScopesEntitlementsToDaemon(t *testing.T) {
 			want: []string{
 				"sign-and-notarize",
 				"dist/lm-semantic-search-daemon_darwin_arm64/lm-semantic-search-daemon",
-				"-vv", "--entitlements", entitlements,
+				"-vv",
+				"--entitlements",
+				entitlements,
 			},
 		},
 		{
 			name:   "quill daemon after flag with value",
 			signer: signerQuill,
 			arguments: []string{
-				"sign-and-notarize", "--notarize-timeout", "10m",
+				"sign-and-notarize",
+				"--notarize-timeout",
+				"10m",
 				"dist/lm-semantic-search-daemon_darwin_arm64/lm-semantic-search-daemon",
 				"-vv",
 			},
 			want: []string{
-				"sign-and-notarize", "--notarize-timeout", "10m",
+				"sign-and-notarize",
+				"--notarize-timeout",
+				"10m",
 				"dist/lm-semantic-search-daemon_darwin_arm64/lm-semantic-search-daemon",
-				"-vv", "--entitlements", entitlements,
+				"-vv",
+				"--entitlements",
+				entitlements,
 			},
 		},
 		{
@@ -140,11 +199,15 @@ func TestRewriteArgumentsScopesEntitlementsToDaemon(t *testing.T) {
 			name:   "codesign daemon prefix is not daemon",
 			signer: signerCodesign,
 			arguments: []string{
-				"--force", "--sign", "identity",
+				"--force",
+				"--sign",
+				"identity",
 				"dist/lm-semantic-search-daemon-x",
 			},
 			want: []string{
-				"--force", "--sign", "identity",
+				"--force",
+				"--sign",
+				"identity",
 				"dist/lm-semantic-search-daemon-x",
 			},
 		},
@@ -165,15 +228,19 @@ func TestRewriteArgumentsScopesEntitlementsToDaemon(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			got, err := rewriteArguments(testCase.signer, testCase.arguments)
-			if err != nil {
-				t.Fatalf("rewriteArguments returned error: %v", err)
-			}
-			if !slices.Equal(got, testCase.want) {
-				t.Fatalf("rewriteArguments = %#v, want %#v", got, testCase.want)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				got, err := rewriteArguments(testCase.signer, testCase.arguments)
+				if err != nil {
+					t.Fatalf("rewriteArguments returned error: %v", err)
+				}
+
+				if !slices.Equal(got, testCase.want) {
+					t.Fatalf("rewriteArguments = %#v, want %#v", got, testCase.want)
+				}
+			},
+		)
 	}
 }
 
@@ -182,12 +249,14 @@ func TestResolveRealSignerRejectsWrapperExecutable(t *testing.T) {
 	if err := os.WriteFile(wrapperExecutable, []byte("wrapper"), 0o755); err != nil {
 		t.Fatalf("WriteFile wrapper returned error: %v", err)
 	}
+
 	t.Setenv(realCodesignEnv, wrapperExecutable)
 
 	_, err := resolveRealSigner(signerCodesign, wrapperExecutable)
 	if err == nil {
 		t.Fatal("resolveRealSigner returned nil error, want recursion rejection")
 	}
+
 	if !strings.Contains(err.Error(), "is the wrapper executable") {
 		t.Fatalf("resolveRealSigner error = %q, want wrapper executable rejection", err)
 	}
@@ -201,9 +270,11 @@ func TestResolveRealSignerBareNameSkipsWrapperDirectory(t *testing.T) {
 	if err := os.WriteFile(wrapperExecutable, []byte("wrapper"), 0o755); err != nil {
 		t.Fatalf("WriteFile wrapper returned error: %v", err)
 	}
+
 	if err := os.WriteFile(realSignerExecutable, []byte("real signer"), 0o755); err != nil {
 		t.Fatalf("WriteFile real signer returned error: %v", err)
 	}
+
 	t.Setenv(realCodesignEnv, "codesign")
 	t.Setenv(
 		"PATH",
@@ -217,6 +288,7 @@ func TestResolveRealSignerBareNameSkipsWrapperDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveRealSigner returned error: %v", err)
 	}
+
 	if resolved != realSignerExecutable {
 		t.Fatalf("resolveRealSigner = %q, want %q", resolved, realSignerExecutable)
 	}
