@@ -285,7 +285,8 @@ func (server *GRPCServer) startIndexMergeNote(
 		coveringRoot := filepath.Clean(codebase.CanonicalPath)
 		if canonical != coveringRoot && pathCovers(coveringRoot, canonical) {
 			return fmt.Sprintf(
-				"🔁 '%s' is covered by the larger index '%s'; syncing that index to include this subtree instead of building a separate one.",
+				"🔁 '%s' is covered by the larger index '%s'; syncing that index to include "+
+					"this subtree instead of building a separate one.",
 				requestedPath,
 				codebase.CanonicalPath,
 			)
@@ -811,52 +812,7 @@ func (server *GRPCServer) SearchCode(
 		return nil, fmt.Errorf("search codebase: %w", adapterr.RespondGRPC(ctx, callErr))
 	}
 
-	server.manager.fillLiveChunkTotal(ctx, outcome.Codebase, outcome.ActiveJob)
-	health := server.manager.DependencyHealth()
-	inFlightStatus, inFlightTemplateName, inFlightBackgroundSync := resolveSearchStatusView(
-		outcome.Codebase,
-		outcome.ActiveJob,
-		health,
-		server.manager.graphIndexing(outcome.Codebase.ID),
-	)
-	searchView := view.SearchView{
-		RequestedPath:          requestedPath,
-		Query:                  request.GetQuery(),
-		CodebaseName:           filepath.Base(outcome.Codebase.CanonicalPath),
-		CodebasePath:           outcome.Codebase.CanonicalPath,
-		Results:                resolveSearchResults(outcome.Results),
-		StateNote:              outcome.StateNote,
-		InFlight:               outcome.ActiveJob != nil,
-		InFlightStatus:         inFlightStatus,
-		InFlightTemplateName:   inFlightTemplateName,
-		InFlightPercent:        0,
-		InFlightBackgroundSync: inFlightBackgroundSync,
-		Degraded:               health.Degraded(),
-		ResolutionLines:        pathResolutionLines(requestedPath),
-	}
-
-	response := &pb.SearchCodeResponse{
-		Results:          make([]*pb.SearchResult, 0, len(outcome.Results)),
-		Codebase:         pbconv.ToCodebase(outcome.Codebase),
-		ActiveJob:        toJobPointerWithTokens(outcome.ActiveJob, health.Degraded(), ""),
-		DependencyHealth: toDependencyHealth(health),
-		DisplayText:      server.envelopeText(health, render.Search(searchView)),
-	}
-	for _, result := range outcome.Results {
-		response.Results = append(
-			response.Results,
-			&pb.SearchResult{
-				RelativePath: result.RelativePath,
-				StartLine:    result.StartLine,
-				EndLine:      result.EndLine,
-				Language:     result.Language,
-				Score:        result.Score,
-				Content:      result.Content,
-			},
-		)
-	}
-
-	return response, nil
+	return server.searchCodeResponse(ctx, request, requestedPath, outcome), nil
 }
 
 // Doctor reports daemon-local diagnostics.
@@ -938,4 +894,58 @@ func codebasePointer(found bool, codebase model.Codebase) *model.Codebase {
 	}
 
 	return &codebase
+}
+
+func (server *GRPCServer) searchCodeResponse(
+	ctx context.Context,
+	request *pb.SearchCodeRequest,
+	requestedPath string,
+	outcome SearchOutcome,
+) *pb.SearchCodeResponse {
+	server.manager.fillLiveChunkTotal(ctx, outcome.Codebase, outcome.ActiveJob)
+	health := server.manager.DependencyHealth()
+	inFlightStatus, inFlightTemplateName, inFlightBackgroundSync := resolveSearchStatusView(
+		outcome.Codebase,
+		outcome.ActiveJob,
+		health,
+		server.manager.graphIndexing(outcome.Codebase.ID),
+	)
+	searchView := view.SearchView{
+		RequestedPath:          requestedPath,
+		Query:                  request.GetQuery(),
+		CodebaseName:           filepath.Base(outcome.Codebase.CanonicalPath),
+		CodebasePath:           outcome.Codebase.CanonicalPath,
+		Results:                resolveSearchResults(outcome.Results),
+		StateNote:              outcome.StateNote,
+		InFlight:               outcome.ActiveJob != nil,
+		InFlightStatus:         inFlightStatus,
+		InFlightTemplateName:   inFlightTemplateName,
+		InFlightPercent:        0,
+		InFlightBackgroundSync: inFlightBackgroundSync,
+		Degraded:               health.Degraded(),
+		ResolutionLines:        pathResolutionLines(requestedPath),
+	}
+
+	response := &pb.SearchCodeResponse{
+		Results:          make([]*pb.SearchResult, 0, len(outcome.Results)),
+		Codebase:         pbconv.ToCodebase(outcome.Codebase),
+		ActiveJob:        toJobPointerWithTokens(outcome.ActiveJob, health.Degraded(), ""),
+		DependencyHealth: toDependencyHealth(health),
+		DisplayText:      server.envelopeText(health, render.Search(searchView)),
+	}
+	for _, result := range outcome.Results {
+		response.Results = append(
+			response.Results,
+			&pb.SearchResult{
+				RelativePath: result.RelativePath,
+				StartLine:    result.StartLine,
+				EndLine:      result.EndLine,
+				Language:     result.Language,
+				Score:        result.Score,
+				Content:      result.Content,
+			},
+		)
+	}
+
+	return response
 }
