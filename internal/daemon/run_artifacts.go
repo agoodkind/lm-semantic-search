@@ -13,7 +13,9 @@ import (
 // errLiveCheckpointLost names an absent live checkpoint on a codebase whose
 // last completed run indexed files, which is the only shape in which a missing
 // file means the index lost state on disk.
-var errLiveCheckpointLost = errors.New("live merkle checkpoint is absent after a completed run that indexed files")
+var errLiveCheckpointLost = errors.New(
+	"live merkle checkpoint is absent after a completed run that indexed files",
+)
 
 // runArtifacts is what a codebase's run record proves about the two artifacts a
 // completed run leaves behind, the live merkle checkpoint and the live semantic
@@ -62,9 +64,11 @@ func runArtifactsFor(run *model.IndexRunSummary) runArtifacts {
 	if run == nil {
 		return runArtifactsUnknown
 	}
+
 	if run.IndexedFiles > 0 {
 		return runArtifactsWritten
 	}
+
 	return runArtifactsNone
 }
 
@@ -108,6 +112,7 @@ func ownsLiveCollection(codebase model.Codebase) bool {
 	if expectsLiveCollection(codebase.LastSuccessfulRun) {
 		return true
 	}
+
 	return codebase.LastSuccessfulRun == nil && codebase.Status == model.CodebaseStatusIndexed
 }
 
@@ -176,9 +181,17 @@ func (checkpoint liveCheckpoint) usable() bool {
 // configDigest is passed rather than read off the codebase because a running
 // job reads its checkpoint under the config the build is writing under, which
 // is not always the record's current one.
-func (manager *Manager) loadLiveCheckpoint(ctx context.Context, codebase model.Codebase, configDigest string) liveCheckpoint {
+func (manager *Manager) loadLiveCheckpoint(
+	ctx context.Context,
+	codebase model.Codebase,
+	configDigest string,
+) liveCheckpoint {
 	snapshotPath := manager.snapshotPathForCodebase(codebase)
-	snapshot, err := merkle.LoadSnapshotForConfig(snapshotPath, configDigest, manager.legacyDigestForCodebase(codebase.ID))
+	snapshot, err := merkle.LoadSnapshotForConfig(
+		snapshotPath,
+		configDigest,
+		manager.legacyDigestForCodebase(codebase.ID),
+	)
 	switch {
 	case err == nil:
 		return liveCheckpoint{snapshot: snapshot, state: liveCheckpointLoaded}
@@ -188,10 +201,14 @@ func (manager *Manager) loadLiveCheckpoint(ctx context.Context, codebase model.C
 		slog.ErrorContext(
 			ctx,
 			"read Merkle snapshot failed",
-			"codebase_id", codebase.ID,
-			"path", snapshotPath,
-			"err", errLiveCheckpointLost,
+			"codebase_id",
+			codebase.ID,
+			"path",
+			snapshotPath,
+			"err",
+			errLiveCheckpointLost,
 		)
+
 		return liveCheckpoint{snapshot: snapshot, state: liveCheckpointLost}
 	default:
 		return liveCheckpoint{snapshot: snapshot, state: liveCheckpointNeverWritten}

@@ -24,28 +24,43 @@ func TestBootstrapAndDeltaSyncSeedReuseThroughResolver(t *testing.T) {
 		"runDeltaSync": {},
 	}
 	var violations []string
+
 	for _, decl := range parsed.Decls {
 		functionDecl, ok := decl.(*ast.FuncDecl)
 		if !ok {
 			continue
 		}
+
 		if _, found := required[functionDecl.Name.Name]; !found {
 			continue
 		}
+
 		delete(required, functionDecl.Name.Name)
 		captures, assignsReuse := functionSeedsReuseFromResolver(functionDecl)
 		if !captures {
-			violations = append(violations, rel+": "+functionDecl.Name.Name+" must capture the result of resolveReuseSeed in an assignment, not ignore it")
+			violations = append(
+				violations,
+				rel+": "+functionDecl.Name.Name+" must capture the result of resolveReuseSeed in an assignment, not ignore it",
+			)
 		}
+
 		if !assignsReuse {
-			violations = append(violations, rel+": "+functionDecl.Name.Name+" must assign state.reuse so the seeded vectors actually feed the build")
+			violations = append(
+				violations,
+				rel+": "+functionDecl.Name.Name+" must assign state.reuse so the seeded vectors actually feed the build",
+			)
 		}
 	}
+
 	for functionName := range required {
 		violations = append(violations, rel+": "+functionName+" was not found")
 	}
+
 	if len(violations) > 0 {
-		t.Fatalf("bootstrap and delta sync must seed reuse through resolveReuseSeed:\n%s", strings.Join(violations, "\n"))
+		t.Fatalf(
+			"bootstrap and delta sync must seed reuse through resolveReuseSeed:\n%s",
+			strings.Join(violations, "\n"),
+		)
 	}
 }
 
@@ -60,33 +75,43 @@ func functionSeedsReuseFromResolver(functionDecl *ast.FuncDecl) (captures bool, 
 	if functionDecl.Body == nil {
 		return false, false
 	}
-	ast.Inspect(functionDecl.Body, func(node ast.Node) bool {
-		assign, ok := node.(*ast.AssignStmt)
-		if !ok {
+
+	ast.Inspect(
+		functionDecl.Body,
+		func(node ast.Node) bool {
+			assign, ok := node.(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+
+			// Count the call only when its result is bound to at least one named
+			// variable. `_, _, _ := resolveReuseSeed(...)` discards every return and
+			// must not satisfy the guard.
+			for _, rhs := range assign.Rhs {
+				call, ok := rhs.(*ast.CallExpr)
+				if ok && calledFunctionName(call.Fun) == "resolveReuseSeed" &&
+					assignBindsAnyValue(assign.Lhs) {
+					captures = true
+				}
+			}
+
+			// Require state.reuse specifically, not any field named reuse, so seeding
+			// some unrelated .reuse field does not pass.
+			for _, lhs := range assign.Lhs {
+				selector, ok := lhs.(*ast.SelectorExpr)
+				if !ok || selector.Sel.Name != "reuse" {
+					continue
+				}
+
+				if receiver, ok := selector.X.(*ast.Ident); ok && receiver.Name == "state" {
+					assignsReuse = true
+				}
+			}
+
 			return true
-		}
-		// Count the call only when its result is bound to at least one named
-		// variable. `_, _, _ := resolveReuseSeed(...)` discards every return and
-		// must not satisfy the guard.
-		for _, rhs := range assign.Rhs {
-			call, ok := rhs.(*ast.CallExpr)
-			if ok && calledFunctionName(call.Fun) == "resolveReuseSeed" && assignBindsAnyValue(assign.Lhs) {
-				captures = true
-			}
-		}
-		// Require state.reuse specifically, not any field named reuse, so seeding
-		// some unrelated .reuse field does not pass.
-		for _, lhs := range assign.Lhs {
-			selector, ok := lhs.(*ast.SelectorExpr)
-			if !ok || selector.Sel.Name != "reuse" {
-				continue
-			}
-			if receiver, ok := selector.X.(*ast.Ident); ok && receiver.Name == "state" {
-				assignsReuse = true
-			}
-		}
-		return true
-	})
+		},
+	)
+
 	return captures, assignsReuse
 }
 
@@ -101,6 +126,7 @@ func assignBindsAnyValue(lhs []ast.Expr) bool {
 			return true
 		}
 	}
+
 	return false
 }
 

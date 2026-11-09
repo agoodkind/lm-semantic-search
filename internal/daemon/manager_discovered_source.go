@@ -51,6 +51,7 @@ func (manager *Manager) selectDiscoveredWorktreeSourceLocked(
 	overlaps map[string]discoveredSourceOverlap,
 ) (discoveredSourceSelection, bool) {
 	candidates := manager.discoveredSourceCandidatesLocked(info, indexConfig)
+
 	liveCandidates := make([]discoveredSourceCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		if ownsLiveCollection(candidate.codebase) {
@@ -62,30 +63,58 @@ func (manager *Manager) selectDiscoveredWorktreeSourceLocked(
 	var noSource model.Codebase
 	if len(liveCandidates) == 0 {
 		for _, candidate := range manager.candidatesWithActiveJobLocked(candidates) {
-			if manager.worktreeSourceCycleLocked(info.WorktreeRoot, candidate.codebase.CanonicalPath) {
+			if manager.worktreeSourceCycleLocked(
+				info.WorktreeRoot,
+				candidate.codebase.CanonicalPath,
+			) {
 				continue
 			}
-			return discoveredSourceSelection{codebase: candidate.codebase, tier: discoveredSourceTierActiveJob, overlap: noOverlap}, true
+
+			return discoveredSourceSelection{
+				codebase: candidate.codebase,
+				tier:     discoveredSourceTierActiveJob,
+				overlap:  noOverlap,
+			}, true
 		}
-		return discoveredSourceSelection{codebase: noSource, tier: discoveredSourceTierNone, overlap: noOverlap}, false
+
+		return discoveredSourceSelection{
+			codebase: noSource,
+			tier:     discoveredSourceTierNone,
+			overlap:  noOverlap,
+		}, false
 	}
 
 	eligible := make([]rankedDiscoveredSource, 0, len(liveCandidates))
 	for _, ranked := range rankDiscoveredSources(info.WorktreeRoot, liveCandidates, overlaps) {
-		if manager.worktreeSourceCycleLocked(info.WorktreeRoot, ranked.candidate.codebase.CanonicalPath) {
+		if manager.worktreeSourceCycleLocked(
+			info.WorktreeRoot,
+			ranked.candidate.codebase.CanonicalPath,
+		) {
 			continue
 		}
+
 		eligible = append(eligible, ranked)
 	}
+
 	if len(eligible) == 0 {
-		return discoveredSourceSelection{codebase: noSource, tier: discoveredSourceTierNone, overlap: noOverlap}, false
+		return discoveredSourceSelection{
+			codebase: noSource,
+			tier:     discoveredSourceTierNone,
+			overlap:  noOverlap,
+		}, false
 	}
+
 	selected := eligible[0]
 	tier := selected.tier
 	if len(eligible) > 1 && selected.overlap.matches > eligible[1].overlap.matches {
 		tier = discoveredSourceTierOverlap
 	}
-	return discoveredSourceSelection{codebase: selected.candidate.codebase, tier: tier, overlap: selected.overlap}, true
+
+	return discoveredSourceSelection{
+		codebase: selected.candidate.codebase,
+		tier:     tier,
+		overlap:  selected.overlap,
+	}, true
 }
 
 func rankDiscoveredSources(
@@ -97,6 +126,7 @@ func rankDiscoveredSources(
 	for _, candidate := range candidatesAtHeadCommit(worktreeRoot, liveCandidates) {
 		atHeadCommit[candidate.codebase.ID] = struct{}{}
 	}
+
 	ranked := make([]rankedDiscoveredSource, 0, len(liveCandidates))
 	for _, candidate := range liveCandidates {
 		tier := discoveredSourceTierLatestCompletedRun
@@ -108,30 +138,44 @@ func rankDiscoveredSources(
 			tier = discoveredSourceTierMainWorktree
 			tierRank = discoveredSourceTierRankMainWorktree
 		}
-		ranked = append(ranked, rankedDiscoveredSource{
-			candidate: candidate,
-			overlap:   overlaps[candidate.codebase.ID],
-			tier:      tier,
-			tierRank:  tierRank,
-		})
+
+		ranked = append(
+			ranked,
+			rankedDiscoveredSource{
+				candidate: candidate,
+				overlap:   overlaps[candidate.codebase.ID],
+				tier:      tier,
+				tierRank:  tierRank,
+			},
+		)
 	}
+
 	slices.SortStableFunc(ranked, compareRankedDiscoveredSources)
+
 	return ranked
 }
 
-func compareRankedDiscoveredSources(first rankedDiscoveredSource, second rankedDiscoveredSource) int {
+func compareRankedDiscoveredSources(
+	first rankedDiscoveredSource,
+	second rankedDiscoveredSource,
+) int {
 	if first.overlap.matches != second.overlap.matches {
 		return cmp.Compare(second.overlap.matches, first.overlap.matches)
 	}
+
 	if first.tierRank != second.tierRank {
 		return cmp.Compare(first.tierRank, second.tierRank)
 	}
+
 	if first.tierRank == discoveredSourceTierRankLatestCompletedRun {
-		byCompletedRun := lastCompletedRunAt(second.candidate.codebase).Compare(lastCompletedRunAt(first.candidate.codebase))
+		byCompletedRun := lastCompletedRunAt(second.candidate.codebase).Compare(
+			lastCompletedRunAt(first.candidate.codebase),
+		)
 		if byCompletedRun != 0 {
 			return byCompletedRun
 		}
 	}
+
 	return compareDiscoveredSourceCandidates(first.candidate, second.candidate)
 }
 
@@ -143,49 +187,73 @@ func (manager *Manager) discoveredSourceCandidatesLocked(
 	if info.CommonDir == "" {
 		return candidates
 	}
+
 	siblingRoots := gitworktree.SiblingWorktreeRoots(info.CommonDir)
+
 	for _, codebase := range manager.codebases {
-		if codebase.CanonicalPath == info.WorktreeRoot || !slices.Contains(siblingRoots, codebase.CanonicalPath) {
+		if codebase.CanonicalPath == info.WorktreeRoot ||
+			!slices.Contains(siblingRoots, codebase.CanonicalPath) {
 			continue
 		}
+
 		if codebase.Kind == model.CodebaseKindDocument || codebase.CollectionName == "" {
 			continue
 		}
+
 		if !reuseModelMatches(codebase.EffectiveConfig, indexConfig) {
 			continue
 		}
+
 		worktree, resolved := gitworktree.Resolve(codebase.CanonicalPath)
-		candidates = append(candidates, discoveredSourceCandidate{
-			codebase:     codebase,
-			mainWorktree: resolved && !worktree.Linked && worktree.WorktreeRoot == codebase.CanonicalPath,
-		})
+		candidates = append(
+			candidates,
+			discoveredSourceCandidate{
+				codebase: codebase,
+				mainWorktree: resolved && !worktree.Linked &&
+					worktree.WorktreeRoot == codebase.CanonicalPath,
+			},
+		)
 	}
+
 	slices.SortFunc(candidates, compareDiscoveredSourceCandidates)
+
 	return candidates
 }
 
-func compareDiscoveredSourceCandidates(first discoveredSourceCandidate, second discoveredSourceCandidate) int {
+func compareDiscoveredSourceCandidates(
+	first discoveredSourceCandidate,
+	second discoveredSourceCandidate,
+) int {
 	if first.mainWorktree != second.mainWorktree {
 		if first.mainWorktree {
 			return -1
 		}
+
 		return 1
 	}
+
 	return strings.Compare(first.codebase.CanonicalPath, second.codebase.CanonicalPath)
 }
 
-func candidatesAtHeadCommit(worktreeRoot string, candidates []discoveredSourceCandidate) []discoveredSourceCandidate {
+func candidatesAtHeadCommit(
+	worktreeRoot string,
+	candidates []discoveredSourceCandidate,
+) []discoveredSourceCandidate {
 	matching := make([]discoveredSourceCandidate, 0, len(candidates))
 	targetCommit, targetResolved := gitworktree.HeadCommit(worktreeRoot)
 	if !targetResolved {
 		return matching
 	}
+
 	for _, candidate := range candidates {
-		candidateCommit, candidateResolved := gitworktree.HeadCommit(candidate.codebase.CanonicalPath)
+		candidateCommit, candidateResolved := gitworktree.HeadCommit(
+			candidate.codebase.CanonicalPath,
+		)
 		if candidateResolved && candidateCommit == targetCommit {
 			matching = append(matching, candidate)
 		}
 	}
+
 	return matching
 }
 
@@ -194,15 +262,19 @@ func lastCompletedRunAt(codebase model.Codebase) time.Time {
 		var never time.Time
 		return never
 	}
+
 	return codebase.LastSuccessfulRun.CompletedAt
 }
 
-func (manager *Manager) candidatesWithActiveJobLocked(candidates []discoveredSourceCandidate) []discoveredSourceCandidate {
+func (manager *Manager) candidatesWithActiveJobLocked(
+	candidates []discoveredSourceCandidate,
+) []discoveredSourceCandidate {
 	active := make([]discoveredSourceCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		if manager.activeJobSnapshotLocked(candidate.codebase) != nil {
 			active = append(active, candidate)
 		}
 	}
+
 	return active
 }

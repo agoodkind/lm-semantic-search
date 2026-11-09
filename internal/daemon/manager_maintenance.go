@@ -17,6 +17,7 @@ import (
 func (manager *Manager) Maintenance() model.MaintenanceState {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+
 	return manager.maintenance
 }
 
@@ -29,6 +30,7 @@ func (manager *Manager) maintenanceRefusal() *adapterr.AdapterError {
 	if !state.Enabled {
 		return nil
 	}
+
 	return adapterr.NewMaintenance(state.Reason)
 }
 
@@ -46,12 +48,20 @@ func (manager *Manager) skipForMaintenance(ctx context.Context, activity string)
 	if !state.Enabled {
 		return false
 	}
-	slog.InfoContext(ctx, "daemon.maintenance.skipped",
-		"component", "daemon",
-		"subcomponent", "maintenance",
-		"activity", activity,
-		"reason", state.Reason,
+
+	slog.InfoContext(
+		ctx,
+		"daemon.maintenance.skipped",
+		"component",
+		"daemon",
+		"subcomponent",
+		"maintenance",
+		"activity",
+		activity,
+		"reason",
+		state.Reason,
 	)
+
 	return true
 }
 
@@ -76,32 +86,53 @@ func (manager *Manager) SetMaintenance(
 		if !previous.Enabled {
 			since = clock.Now()
 		}
+
 		next = model.MaintenanceState{Enabled: true, Reason: reason, Since: since}
 	}
+
 	if err := store.WriteMaintenance(manager.maintenancePath(), next); err != nil {
 		manager.mu.Unlock()
-		slog.ErrorContext(ctx, "persist maintenance mode failed", "path", manager.maintenancePath(), "err", err)
+		slog.ErrorContext(
+			ctx,
+			"persist maintenance mode failed",
+			"path",
+			manager.maintenancePath(),
+			"err",
+			err,
+		)
+
 		return previous, 0, fmt.Errorf("persist maintenance mode: %w", err)
 	}
+
 	manager.maintenance = next
 	activeJobs := 0
+
 	for _, job := range manager.jobs {
 		if !isTerminalJobState(job.State) {
 			activeJobs++
 		}
 	}
+
 	manager.mu.Unlock()
 
 	manager.applyMaintenanceGate(next.Enabled)
 	if next.Enabled != previous.Enabled {
-		slog.WarnContext(ctx, "daemon.maintenance.changed",
-			"component", "daemon",
-			"subcomponent", "maintenance",
-			"enabled", next.Enabled,
-			"reason", next.Reason,
-			"active_jobs", activeJobs,
+		slog.WarnContext(
+			ctx,
+			"daemon.maintenance.changed",
+			"component",
+			"daemon",
+			"subcomponent",
+			"maintenance",
+			"enabled",
+			next.Enabled,
+			"reason",
+			next.Reason,
+			"active_jobs",
+			activeJobs,
 		)
 	}
+
 	return next, activeJobs, nil
 }
 
@@ -111,21 +142,37 @@ func (manager *Manager) SetMaintenance(
 func (manager *Manager) loadMaintenance(ctx context.Context) error {
 	state, err := store.ReadMaintenance(manager.maintenancePath())
 	if err != nil {
-		slog.ErrorContext(ctx, "read maintenance mode failed", "path", manager.maintenancePath(), "err", err)
+		slog.ErrorContext(
+			ctx,
+			"read maintenance mode failed",
+			"path",
+			manager.maintenancePath(),
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("read maintenance mode: %w", err)
 	}
+
 	manager.mu.Lock()
 	manager.maintenance = state
 	manager.mu.Unlock()
 	manager.applyMaintenanceGate(state.Enabled)
 	if state.Enabled {
-		slog.WarnContext(ctx, "daemon.maintenance.restored",
-			"component", "daemon",
-			"subcomponent", "maintenance",
-			"reason", state.Reason,
-			"since", state.Since,
+		slog.WarnContext(
+			ctx,
+			"daemon.maintenance.restored",
+			"component",
+			"daemon",
+			"subcomponent",
+			"maintenance",
+			"reason",
+			state.Reason,
+			"since",
+			state.Since,
 		)
 	}
+
 	return nil
 }
 
@@ -134,6 +181,7 @@ func (manager *Manager) applyMaintenanceGate(enabled bool) {
 	if manager.semantic == nil {
 		return
 	}
+
 	manager.semantic.SetMaintenance(enabled)
 }
 

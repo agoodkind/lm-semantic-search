@@ -21,18 +21,21 @@ func TestCreatedReuseCatalogMmapRequiresDenseAndContentHashWithoutSparse(t *test
 	if !service.mmapInspectionComplete(complete, mmapCreatedReuseCatalog) {
 		t.Fatal("created reuse catalog with dense and contentHash indexes remained incomplete")
 	}
+
 	if service.mmapInspectionComplete(
 		mmapInspection{contentHashPresent: true},
 		mmapCreatedReuseCatalog,
 	) {
 		t.Fatal("created reuse catalog without a dense index reported complete")
 	}
+
 	if service.mmapInspectionComplete(
 		mmapInspection{denseIndexPresent: true},
 		mmapCreatedReuseCatalog,
 	) {
 		t.Fatal("created reuse catalog without a contentHash index reported complete")
 	}
+
 	if service.mmapInspectionComplete(complete, mmapCreatedCollection) {
 		t.Fatal("hybrid code collection without a sparse index reported complete")
 	}
@@ -62,15 +65,21 @@ func TestNoMmapExtraParamOnCreateIndex(t *testing.T) {
 		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
+
 		source, readErr := os.ReadFile(filepath.Clean(name))
 		if readErr != nil {
 			t.Fatalf("read %s: %v", name, readErr)
 		}
+
 		text := string(source)
 		// WithExtraParam carries index build params; on an AutoIndex only the
 		// metric type is allowed, so the mmap key must never appear as one.
-		if strings.Contains(text, "WithExtraParam(mmapEnabledKey") || strings.Contains(text, `WithExtraParam("mmap.enabled"`) {
-			t.Fatalf("%s sets mmap as a create-index extra param; Milvus 2.6 rejects mmap on AutoIndex. Enable mmap after creation via AlterIndexProperties (mmap.go) instead.", name)
+		if strings.Contains(text, "WithExtraParam(mmapEnabledKey") ||
+			strings.Contains(text, `WithExtraParam("mmap.enabled"`) {
+			t.Fatalf(
+				"%s sets mmap as a create-index extra param; Milvus 2.6 rejects mmap on AutoIndex. Enable mmap after creation via AlterIndexProperties (mmap.go) instead.",
+				name,
+			)
 		}
 	}
 }

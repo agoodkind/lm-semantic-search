@@ -14,28 +14,37 @@ import (
 // their stored dense vectors are valid to reuse for a parent build under that
 // model. A child mid-index or built with a different model is skipped. The
 // caller must not hold the manager lock.
-func (manager *Manager) descendantReuseCandidates(canonicalPath string, indexConfig model.IndexConfig) []model.Codebase {
+func (manager *Manager) descendantReuseCandidates(
+	canonicalPath string,
+	indexConfig model.IndexConfig,
+) []model.Codebase {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	candidates := make([]model.Codebase, 0)
+
 	for _, child := range manager.findDescendants(canonicalPath) {
 		if child.CollectionName == "" || child.ActiveJobID != "" {
 			continue
 		}
+
 		if child.Status != model.CodebaseStatusIndexed {
 			continue
 		}
+
 		if !reuseModelMatches(child.EffectiveConfig, indexConfig) {
 			continue
 		}
+
 		// A nested sibling worktree of the same repo is a separate codebase
 		// holding a different branch; the parent's discovery already excludes its
 		// files, so it must be neither reused nor absorbed.
 		if isSameRepoSiblingWorktree(canonicalPath, child.CanonicalPath) {
 			continue
 		}
+
 		candidates = append(candidates, child)
 	}
+
 	return candidates
 }
 
@@ -56,6 +65,7 @@ func collectionNamesOf(codebases []model.Codebase) []string {
 			names = append(names, codebase.CollectionName)
 		}
 	}
+
 	return names
 }
 
@@ -69,36 +79,69 @@ func (manager *Manager) absorbDescendants(ctx context.Context, descendants []mod
 	if len(descendants) == 0 {
 		return
 	}
+
 	manager.policyMutationMutex.Lock()
 	manager.mu.Lock()
+
 	removed := make([]string, 0, len(descendants))
 	for _, child := range descendants {
 		current, ok := manager.codebases[child.ID]
 		if !ok || current.ActiveJobID != "" {
 			continue
 		}
+
 		delete(manager.codebases, child.ID)
 		removed = append(removed, child.ID)
-		if rmErr := os.Remove(manager.merklePath(child.ID)); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-			slog.WarnContext(ctx, "remove absorbed child merkle failed", "child_codebase_id", child.ID, "err", rmErr)
+		if rmErr := os.Remove(manager.merklePath(child.ID)); rmErr != nil &&
+			!errors.Is(rmErr, os.ErrNotExist) {
+			slog.WarnContext(
+				ctx,
+				"remove absorbed child merkle failed",
+				"child_codebase_id",
+				child.ID,
+				"err",
+				rmErr,
+			)
 		}
 	}
+
 	if len(removed) > 0 {
 		if err := manager.saveLocked(); err != nil {
 			slog.ErrorContext(ctx, "persist registry after absorb failed", "err", err)
 		}
 	}
+
 	manager.mu.Unlock()
 	manager.policyMutationMutex.Unlock()
 
 	for _, id := range removed {
 		if err := manager.clearGraphCache(ctx, id); err != nil {
-			slog.WarnContext(ctx, "remove absorbed child graph failed", "child_codebase_id", id, "err", err)
+			slog.WarnContext(
+				ctx,
+				"remove absorbed child graph failed",
+				"child_codebase_id",
+				id,
+				"err",
+				err,
+			)
 		}
+
 		manager.notifyCodebaseRemoved(ctx, id)
 	}
+
 	if len(removed) > 0 {
-		slog.InfoContext(ctx, "merge.absorbed_children", "component", "daemon", "subcomponent", "merge", "count", len(removed), "child_codebase_ids", removed)
+		slog.InfoContext(
+			ctx,
+			"merge.absorbed_children",
+			"component",
+			"daemon",
+			"subcomponent",
+			"merge",
+			"count",
+			len(removed),
+			"child_codebase_ids",
+			removed,
+		)
 	}
 }
 
@@ -115,13 +158,17 @@ func (manager *Manager) mergeUpTarget(canonicalPath string) (model.Codebase, boo
 	if _, exact := manager.findCodebaseByExactRoot(canonicalPath); exact {
 		return empty, false
 	}
+
 	ancestor, found := manager.findStrictAncestor(canonicalPath)
 	if !found {
 		return empty, false
 	}
-	if ancestor.Status != model.CodebaseStatusIndexed && ancestor.Status != model.CodebaseStatusIndexing {
+
+	if ancestor.Status != model.CodebaseStatusIndexed &&
+		ancestor.Status != model.CodebaseStatusIndexing {
 		return empty, false
 	}
+
 	return ancestor, true
 }
 
@@ -146,21 +193,35 @@ func (manager *Manager) redirectIndexToAncestor(
 	if err != nil {
 		var emptyJob model.Job
 		var emptyCodebase model.Codebase
+
 		return emptyJob, emptyCodebase, err
 	}
+
 	if intent.Initialize {
-		initialized, initializeErr := manager.resolveAndPersistIndexPolicy(
-			codebase.ID,
-			intent,
-		)
+		initialized, initializeErr := manager.resolveAndPersistIndexPolicy(codebase.ID, intent)
 		if initializeErr != nil {
 			var emptyJob model.Job
 			var emptyCodebase model.Codebase
+
 			return emptyJob, emptyCodebase, initializeErr
 		}
+
 		codebase = initialized
 	}
-	slog.InfoContext(ctx, "merge.redirect_to_ancestor", "component", "daemon", "subcomponent", "merge", "requested", requestedPath, "ancestor_codebase_id", ancestor.ID)
+
+	slog.InfoContext(
+		ctx,
+		"merge.redirect_to_ancestor",
+		"component",
+		"daemon",
+		"subcomponent",
+		"merge",
+		"requested",
+		requestedPath,
+		"ancestor_codebase_id",
+		ancestor.ID,
+	)
+
 	return job, codebase, nil
 }
 
@@ -173,13 +234,16 @@ func (manager *Manager) IndexedDescendants(requestedPath string) []model.Codebas
 	if err != nil {
 		return nil
 	}
+
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	indexed := make([]model.Codebase, 0)
+
 	for _, child := range manager.findDescendants(canonicalPath) {
 		if child.Status == model.CodebaseStatusIndexed || child.LastSuccessfulRun != nil {
 			indexed = append(indexed, child)
 		}
 	}
+
 	return indexed
 }

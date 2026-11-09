@@ -38,8 +38,15 @@ func headTestGit(t *testing.T, directory string, arguments ...string) string {
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("The git command with arguments %s in directory %s failed with error %v and output %s.", strings.Join(arguments, " "), directory, err, output)
+		t.Fatalf(
+			"The git command with arguments %s in directory %s failed with error %v and output %s.",
+			strings.Join(arguments, " "),
+			directory,
+			err,
+			output,
+		)
 	}
+
 	return strings.TrimSpace(string(output))
 }
 
@@ -50,8 +57,19 @@ func headTestCommit(t *testing.T, directory string, content string) string {
 	if err := os.WriteFile(path, []byte(content), headTestFileMode); err != nil {
 		t.Fatalf("Writing the fixture file at %s failed with error %v.", path, err)
 	}
+
 	headTestGit(t, directory, "add", "--all")
-	headTestGit(t, directory, "-c", "commit.gpgsign=false", "commit", "--quiet", "--message", content)
+	headTestGit(
+		t,
+		directory,
+		"-c",
+		"commit.gpgsign=false",
+		"commit",
+		"--quiet",
+		"--message",
+		content,
+	)
+
 	return headTestGit(t, directory, "rev-parse", "HEAD")
 }
 
@@ -62,14 +80,17 @@ func newHeadTestRepository(t *testing.T) (string, string) {
 	if err != nil {
 		t.Fatalf("Resolving symlinks of the temporary directory failed with error %v.", err)
 	}
+
 	repository := filepath.Join(base, "repository")
 	if err := os.Mkdir(repository, headTestDirectoryMode); err != nil {
 		t.Fatalf("Creating the repository directory %s failed with error %v.", repository, err)
 	}
+
 	headTestGit(t, repository, "init", "--quiet", "--initial-branch", headTestMainBranch)
 	headTestCommit(t, repository, "first")
 	worktree := filepath.Join(base, headTestLinkedBranch)
 	headTestGit(t, repository, "worktree", "add", "--quiet", "-b", headTestLinkedBranch, worktree)
+
 	return repository, worktree
 }
 
@@ -79,7 +100,13 @@ func requireHeadCommit(t *testing.T, worktreeRoot string) {
 	want := headTestGit(t, worktreeRoot, "rev-parse", "HEAD")
 	got, resolved := gitworktree.HeadCommit(worktreeRoot)
 	if !resolved || got != want {
-		t.Fatalf("HeadCommit for worktree %s returned commit %q with resolved flag %t instead of the resolved commit %q from git rev-parse HEAD.", worktreeRoot, got, resolved, want)
+		t.Fatalf(
+			"HeadCommit for worktree %s returned commit %q with resolved flag %t instead of the resolved commit %q from git rev-parse HEAD.",
+			worktreeRoot,
+			got,
+			resolved,
+			want,
+		)
 	}
 }
 
@@ -88,7 +115,11 @@ func requireNoLooseRef(t *testing.T, repository string, branch string) {
 
 	looseRef := filepath.Join(repository, ".git", "refs", "heads", branch)
 	if _, err := os.Stat(looseRef); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("The loose ref file %s exists after git pack-refs --all. The stat error was %v.", looseRef, err)
+		t.Fatalf(
+			"The loose ref file %s exists after git pack-refs --all. The stat error was %v.",
+			looseRef,
+			err,
+		)
 	}
 }
 
@@ -97,7 +128,10 @@ func TestHeadCommitResolvesLooseBranchRef(t *testing.T) {
 	mainCommit := headTestCommit(t, repository, "second on main")
 	linkedCommit := headTestCommit(t, worktree, "second on linked")
 	if mainCommit == linkedCommit {
-		t.Fatalf("The main branch and the linked branch both have commit %q, but the fixture requires different commits.", mainCommit)
+		t.Fatalf(
+			"The main branch and the linked branch both have commit %q, but the fixture requires different commits.",
+			mainCommit,
+		)
 	}
 
 	requireHeadCommit(t, repository)
@@ -129,15 +163,24 @@ func TestHeadCommitResolvesPackedRef(t *testing.T) {
 func TestHeadCommitReportsUnresolvedHead(t *testing.T) {
 	plainDirectory := t.TempDir()
 	if commit, resolved := gitworktree.HeadCommit(plainDirectory); resolved {
-		t.Fatalf("HeadCommit for directory %s outside a Git repository resolved commit %q.", plainDirectory, commit)
+		t.Fatalf(
+			"HeadCommit for directory %s outside a Git repository resolved commit %q.",
+			plainDirectory,
+			commit,
+		)
 	}
 
 	repository := filepath.Join(t.TempDir(), "unborn")
 	if err := os.Mkdir(repository, headTestDirectoryMode); err != nil {
 		t.Fatalf("Creating the repository directory %s failed with error %v.", repository, err)
 	}
+
 	headTestGit(t, repository, "init", "--quiet", "--initial-branch", headTestMainBranch)
 	if commit, resolved := gitworktree.HeadCommit(repository); resolved {
-		t.Fatalf("HeadCommit for repository %s with no commit resolved commit %q.", repository, commit)
+		t.Fatalf(
+			"HeadCommit for repository %s with no commit resolved commit %q.",
+			repository,
+			commit,
+		)
 	}
 }

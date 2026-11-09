@@ -16,9 +16,11 @@ func TestNewMissingArgumentMapsToInvalidArgument(t *testing.T) {
 	if err.Class != ClassInvalidArgument {
 		t.Fatalf("class = %q, want %q", err.Class, ClassInvalidArgument)
 	}
+
 	if !err.SafeForClient {
 		t.Fatal("a missing-argument error should be safe for the client")
 	}
+
 	if CodeFor(err.Class) != codes.InvalidArgument {
 		t.Fatalf("CodeFor(%q) = %v, want %v", err.Class, CodeFor(err.Class), codes.InvalidArgument)
 	}
@@ -40,21 +42,27 @@ func TestNewEmbedderBusyIsDistinctFromUnreachable(t *testing.T) {
 	if err.Class != ClassEmbedderBusy {
 		t.Fatalf("class = %q, want %q", err.Class, ClassEmbedderBusy)
 	}
+
 	if err.Code != "embedder_busy" {
 		t.Fatalf("code = %q, want embedder_busy", err.Code)
 	}
+
 	if !strings.Contains(err.Message, "at capacity") {
 		t.Fatalf("message = %q, want it to mention capacity rather than unreachable", err.Message)
 	}
+
 	if strings.Contains(err.Message, "unreachable") {
 		t.Fatalf("a busy endpoint must not read as unreachable: %q", err.Message)
 	}
+
 	if !err.SafeForClient {
 		t.Fatal("a busy error should be safe for the client")
 	}
+
 	if got := CodeFor(ClassEmbedderBusy); got != codes.ResourceExhausted {
 		t.Fatalf("CodeFor(ClassEmbedderBusy) = %v, want %v", got, codes.ResourceExhausted)
 	}
+
 	if !errors.Is(err, cause) {
 		t.Fatal("NewEmbedderBusy should wrap its cause")
 	}
@@ -67,6 +75,7 @@ func TestEmbedderRejectedAndCancelledClasses(t *testing.T) {
 	if rejected.Class != ClassEmbedderRejected {
 		t.Fatalf("rejected class = %q, want %q", rejected.Class, ClassEmbedderRejected)
 	}
+
 	if got := CodeFor(ClassEmbedderRejected); got != codes.Internal {
 		t.Fatalf("CodeFor(ClassEmbedderRejected) = %v, want %v", got, codes.Internal)
 	}
@@ -75,6 +84,7 @@ func TestEmbedderRejectedAndCancelledClasses(t *testing.T) {
 	if cancelled.Class != ClassEmbedCancelled {
 		t.Fatalf("cancelled class = %q, want %q", cancelled.Class, ClassEmbedCancelled)
 	}
+
 	if got := CodeFor(ClassEmbedCancelled); got != codes.Canceled {
 		t.Fatalf("CodeFor(ClassEmbedCancelled) = %v, want %v", got, codes.Canceled)
 	}
@@ -85,15 +95,19 @@ func TestSafeMessageReturnsCleanMessageNotCause(t *testing.T) {
 
 	cause := errors.New(`POST "http://localhost:5400/v1/embeddings": 429 capacity_exceeded`)
 	msg := SafeMessage(NewEmbedderUnreachable(cause))
-	if strings.Contains(msg, "429") || strings.Contains(msg, "5400") || strings.Contains(msg, "capacity_exceeded") {
+	if strings.Contains(msg, "429") || strings.Contains(msg, "5400") ||
+		strings.Contains(msg, "capacity_exceeded") {
 		t.Fatalf("SafeMessage leaked implementation detail: %q", msg)
 	}
+
 	if !strings.Contains(msg, "unreachable") {
 		t.Fatalf("SafeMessage dropped the class message: %q", msg)
 	}
+
 	if got := SafeMessage(errors.New("raw boom")); got != "internal error" {
 		t.Fatalf("SafeMessage(non-adapter) = %q, want internal error", got)
 	}
+
 	if got := SafeMessage(nil); got != "" {
 		t.Fatalf("SafeMessage(nil) = %q, want empty", got)
 	}
@@ -115,7 +129,11 @@ func TestIsTransient(t *testing.T) {
 		{"milvus unavailable", &AdapterError{Class: ClassMilvusUnavailable}, true},
 		// A deliberate pause ends by itself when low power mode ends or the
 		// operator resumes the service, so it is retryable and the surface says so.
-		{"paused", NewEmbedderPaused("paused to preserve battery", "resume the service", nil), true},
+		{
+			"paused",
+			NewEmbedderPaused("paused to preserve battery", "resume the service", nil),
+			true,
+		},
 		{"rejected", NewEmbedderRejected(nil), false},
 		{"non-adapter", errors.New("boom"), false},
 		{"nil", nil, false},
@@ -146,7 +164,11 @@ func TestIsInfraFailure(t *testing.T) {
 		{"rejected", NewEmbedderRejected(nil), true},
 		// A pause is shared infrastructure too: it stops every codebase the same
 		// way, so it must never become one codebase's terminal state.
-		{"paused", NewEmbedderPaused("paused to preserve battery", "resume the service", nil), true},
+		{
+			"paused",
+			NewEmbedderPaused("paused to preserve battery", "resume the service", nil),
+			true,
+		},
 		{"internal", NewInternal("boom", nil), false},
 		{"not indexed", NewNotIndexed("/x", nil), false},
 		{"non-adapter", errors.New("boom"), false},
@@ -171,24 +193,35 @@ func TestNewEmbedInputRejectedKeepsFreeTextOutOfTheClientEnvelope(t *testing.T) 
 	// The fixture stands in for a credential without being shaped like one, so
 	// the repository's secret scanner does not read the test as a real leak.
 	const leak = "OpenAI at https://api.example.invalid rejected key REDACTED-CREDENTIAL-FIXTURE"
-	err := NewEmbedInputRejected(EmbedInputRejection{
-		Reason:   EmbedRejectionReason(leak),
-		Limit:    EmbedLimitTokens,
-		Measured: ReportedFigure(10000),
-		Maximum:  ReportedFigure(8192),
-	}, errors.New("cause stays in the daemon log"))
+	err := NewEmbedInputRejected(
+		EmbedInputRejection{
+			Reason:   EmbedRejectionReason(leak),
+			Limit:    EmbedLimitTokens,
+			Measured: ReportedFigure(10000),
+			Maximum:  ReportedFigure(8192),
+		},
+		errors.New("cause stays in the daemon log"),
+	)
 
 	if err.Code != string(EmbedRejectionUnspecified) {
 		t.Fatalf("code = %q, want the unspecified reason %q", err.Code, EmbedRejectionUnspecified)
 	}
-	for _, fragment := range []string{leak, "OpenAI", "api.example.invalid", "REDACTED-CREDENTIAL-FIXTURE"} {
+
+	for _, fragment := range []string{
+		leak,
+		"OpenAI",
+		"api.example.invalid",
+		"REDACTED-CREDENTIAL-FIXTURE",
+	} {
 		if strings.Contains(err.Message, fragment) {
 			t.Fatalf("client message %q carries caller-supplied text %q", err.Message, fragment)
 		}
+
 		if strings.Contains(err.Code, fragment) {
 			t.Fatalf("client code %q carries caller-supplied text %q", err.Code, fragment)
 		}
 	}
+
 	if !strings.Contains(SafeMessage(err), string(EmbedRejectionUnspecified)) {
 		t.Fatalf("client message %q does not name the fallback reason", SafeMessage(err))
 	}
@@ -201,12 +234,15 @@ func TestNewEmbedInputRejectedKeepsFreeTextOutOfTheClientEnvelope(t *testing.T) 
 		EmbedRejectionInputContainsNUL,
 		EmbedRejectionUnspecified,
 	} {
-		known := NewEmbedInputRejected(EmbedInputRejection{
-			Reason:   reason,
-			Limit:    EmbedLimitNone,
-			Measured: UnreportedFigure(),
-			Maximum:  UnreportedFigure(),
-		}, nil)
+		known := NewEmbedInputRejected(
+			EmbedInputRejection{
+				Reason:   reason,
+				Limit:    EmbedLimitNone,
+				Measured: UnreportedFigure(),
+				Maximum:  UnreportedFigure(),
+			},
+			nil,
+		)
 		if known.Code != string(reason) {
 			t.Fatalf("declared reason %q came back as %q", reason, known.Code)
 		}
@@ -220,55 +256,82 @@ func TestNewEmbedInputRejectedKeepsFreeTextOutOfTheClientEnvelope(t *testing.T) 
 func TestEmbedInputRejectionNamesTheLimitThatApplied(t *testing.T) {
 	t.Parallel()
 
-	tokens := NewEmbedInputRejected(EmbedInputRejection{
-		Reason:   EmbedRejectionContextLengthExceeded,
-		Limit:    EmbedLimitTokens,
-		Measured: ReportedFigure(10000),
-		Maximum:  ReportedFigure(8192),
-	}, nil)
-	if !strings.Contains(tokens.Message, "10000 tokens") || !strings.Contains(tokens.Message, "8192-token limit") {
+	tokens := NewEmbedInputRejected(
+		EmbedInputRejection{
+			Reason:   EmbedRejectionContextLengthExceeded,
+			Limit:    EmbedLimitTokens,
+			Measured: ReportedFigure(10000),
+			Maximum:  ReportedFigure(8192),
+		},
+		nil,
+	)
+	if !strings.Contains(tokens.Message, "10000 tokens") ||
+		!strings.Contains(tokens.Message, "8192-token limit") {
 		t.Fatalf("token refusal message = %q", tokens.Message)
 	}
 
-	bytesRejection := NewEmbedInputRejected(EmbedInputRejection{
-		Reason:   EmbedRejectionInputBytesExceeded,
-		Limit:    EmbedLimitBytes,
-		Measured: ReportedFigure(32769),
-		Maximum:  ReportedFigure(32768),
-	}, nil)
-	if !strings.Contains(bytesRejection.Message, "32769 bytes") || !strings.Contains(bytesRejection.Message, "32768-byte limit") {
+	bytesRejection := NewEmbedInputRejected(
+		EmbedInputRejection{
+			Reason:   EmbedRejectionInputBytesExceeded,
+			Limit:    EmbedLimitBytes,
+			Measured: ReportedFigure(32769),
+			Maximum:  ReportedFigure(32768),
+		},
+		nil,
+	)
+	if !strings.Contains(bytesRejection.Message, "32769 bytes") ||
+		!strings.Contains(bytesRejection.Message, "32768-byte limit") {
 		t.Fatalf("byte refusal message = %q", bytesRejection.Message)
 	}
+
 	for _, tokenClaim := range []string{" tokens", "-token limit", "model's limit"} {
 		if strings.Contains(bytesRejection.Message, tokenClaim) {
-			t.Fatalf("byte refusal message %q reports %q, a token limit that did not apply", bytesRejection.Message, tokenClaim)
+			t.Fatalf(
+				"byte refusal message %q reports %q, a token limit that did not apply",
+				bytesRejection.Message,
+				tokenClaim,
+			)
 		}
 	}
 
-	unreported := NewEmbedInputRejected(EmbedInputRejection{
-		Reason:   EmbedRejectionContextLengthExceeded,
-		Limit:    EmbedLimitUnreported,
-		Measured: UnreportedFigure(),
-		Maximum:  UnreportedFigure(),
-	}, nil)
+	unreported := NewEmbedInputRejected(
+		EmbedInputRejection{
+			Reason:   EmbedRejectionContextLengthExceeded,
+			Limit:    EmbedLimitUnreported,
+			Measured: UnreportedFigure(),
+			Maximum:  UnreportedFigure(),
+		},
+		nil,
+	)
 	if !strings.Contains(unreported.Message, "no size figures") {
-		t.Fatalf("unreported refusal message = %q, want it to say the figures are missing", unreported.Message)
+		t.Fatalf(
+			"unreported refusal message = %q, want it to say the figures are missing",
+			unreported.Message,
+		)
 	}
+
 	if strings.Contains(unreported.Message, "0") {
 		t.Fatalf("unreported refusal message %q quotes a zero figure", unreported.Message)
 	}
+
 	if unreported.Hint == "" {
 		t.Fatal("a size refusal without figures still needs the shorten-and-retry hint")
 	}
 
-	nul := NewEmbedInputRejected(EmbedInputRejection{
-		Reason:   EmbedRejectionInputContainsNUL,
-		Limit:    EmbedLimitNone,
-		Measured: UnreportedFigure(),
-		Maximum:  UnreportedFigure(),
-	}, nil)
+	nul := NewEmbedInputRejected(
+		EmbedInputRejection{
+			Reason:   EmbedRejectionInputContainsNUL,
+			Limit:    EmbedLimitNone,
+			Measured: UnreportedFigure(),
+			Maximum:  UnreportedFigure(),
+		},
+		nil,
+	)
 	if nul.Message != "embedding input rejected as "+string(EmbedRejectionInputContainsNUL) {
-		t.Fatalf("NUL refusal message = %q, want the reason alone with no limit beside it", nul.Message)
+		t.Fatalf(
+			"NUL refusal message = %q, want the reason alone with no limit beside it",
+			nul.Message,
+		)
 	}
 }
 
@@ -352,28 +415,36 @@ func TestEmbedInputRejectionSeparatesAReportedFigureFromAnAbsentOne(t *testing.T
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				t.Parallel()
 
-			rejection := NewEmbedInputRejected(EmbedInputRejection{
-				Reason:   EmbedRejectionContextLengthExceeded,
-				Limit:    EmbedLimitTokens,
-				Measured: test.measured,
-				Maximum:  test.maximum,
-			}, nil)
-			for _, fragment := range test.want {
-				if !strings.Contains(rejection.Message, fragment) {
-					t.Fatalf("message = %q, want it to carry %q", rejection.Message, fragment)
+				rejection := NewEmbedInputRejected(
+					EmbedInputRejection{
+						Reason:   EmbedRejectionContextLengthExceeded,
+						Limit:    EmbedLimitTokens,
+						Measured: test.measured,
+						Maximum:  test.maximum,
+					},
+					nil,
+				)
+				for _, fragment := range test.want {
+					if !strings.Contains(rejection.Message, fragment) {
+						t.Fatalf("message = %q, want it to carry %q", rejection.Message, fragment)
+					}
 				}
-			}
-			for _, fragment := range test.reject {
-				if strings.Contains(rejection.Message, fragment) {
-					t.Fatalf("message = %q, must not carry %q", rejection.Message, fragment)
+
+				for _, fragment := range test.reject {
+					if strings.Contains(rejection.Message, fragment) {
+						t.Fatalf("message = %q, must not carry %q", rejection.Message, fragment)
+					}
 				}
-			}
-			if rejection.Hint == "" {
-				t.Fatal("a size refusal still needs the shorten-and-retry hint")
-			}
-		})
+
+				if rejection.Hint == "" {
+					t.Fatal("a size refusal still needs the shorten-and-retry hint")
+				}
+			},
+		)
 	}
 }

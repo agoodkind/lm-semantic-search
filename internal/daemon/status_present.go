@@ -52,19 +52,25 @@ var relativeTimeNow = clock.Now
 // status. pipelineDegraded carries only whether a shared dependency is degraded;
 // ResolveDisplay reads it through Degraded(), so the specific mode does not
 // matter here and the banner names the cause separately.
-func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job, dependency dependencyMode, readiness status.CollectionReadiness) displayStatus {
+func computeDisplayStatus(
+	codebase model.Codebase,
+	activeJob *model.Job,
+	dependency dependencyMode,
+	readiness status.CollectionReadiness,
+) displayStatus {
 	return status.Resolve(status.Inputs{
-		Status:                  codebase.Status,
-		HasActiveJob:            activeJob != nil,
-		JobQueued:               activeJob != nil && activeJob.State == model.JobStateQueued,
-		JobPaused:               activeJob != nil && activeJob.State == model.JobStatePaused,
-		JobScopeKnown:           activeJob != nil && jobScopeKnown(activeJob.Progress),
-		BackgroundSyncReconcile: activeJob != nil && isBackgroundSyncReconcile(&codebase, activeJob),
-		Dependency:              dependency,
-		Collection:              readiness,
-		Search:                  status.SearchNone,
-		SearchableEligible:      false,
-		Maintenance:             false,
+		Status:        codebase.Status,
+		HasActiveJob:  activeJob != nil,
+		JobQueued:     activeJob != nil && activeJob.State == model.JobStateQueued,
+		JobPaused:     activeJob != nil && activeJob.State == model.JobStatePaused,
+		JobScopeKnown: activeJob != nil && jobScopeKnown(activeJob.Progress),
+		BackgroundSyncReconcile: activeJob != nil &&
+			isBackgroundSyncReconcile(&codebase, activeJob),
+		Dependency:         dependency,
+		Collection:         readiness,
+		Search:             status.SearchNone,
+		SearchableEligible: false,
+		Maintenance:        false,
 	}).Display
 }
 
@@ -76,7 +82,12 @@ func computeDisplayStatus(codebase model.Codebase, activeJob *model.Job, depende
 // backend is degraded, maintenance carries the operator's maintenance mode, and
 // status.ResolveSearchable owns the fold so the wire `searchable` field and the
 // displayed status cannot diverge.
-func computeSearchable(searchableEligible bool, dependency dependencyMode, readiness status.CollectionReadiness, maintenance bool) bool {
+func computeSearchable(
+	searchableEligible bool,
+	dependency dependencyMode,
+	readiness status.CollectionReadiness,
+	maintenance bool,
+) bool {
 	return status.Resolve(status.Inputs{
 		Status:                  "",
 		HasActiveJob:            false,
@@ -100,17 +111,23 @@ func computeSearchable(searchableEligible bool, dependency dependencyMode, readi
 // re-deriving a state label or error echo. A job stopping on a shared
 // dependency is exactly a retryable error during a degraded pipeline, which
 // ResolveJob folds by suppressing the per-job echo the banner already carries.
-func resolveJobSurface(job model.Job, pipelineDegraded bool, supersededByJobID string) view.JobSurface {
+func resolveJobSurface(
+	job model.Job,
+	pipelineDegraded bool,
+	supersededByJobID string,
+) view.JobSurface {
 	dependency := status.Healthy
 	if pipelineDegraded {
 		dependency = status.EmbedderBusy
 	}
+
 	retryable := false
 	errorMessage := ""
 	if job.Error != nil {
 		retryable = job.Error.Retryable
 		errorMessage = strings.TrimSpace(job.Error.Message)
 	}
+
 	resolved := status.ResolveJob(status.JobInputs{
 		State:             job.State,
 		Retryable:         retryable,
@@ -118,6 +135,7 @@ func resolveJobSurface(job model.Job, pipelineDegraded bool, supersededByJobID s
 		Dependency:        dependency,
 		SupersededByJobID: supersededByJobID,
 	})
+
 	return view.JobSurface{
 		StateLabel:        resolved.StateLabel,
 		ErrorLine:         resolved.ErrorLine,
@@ -149,14 +167,18 @@ func resolveSchedulingView(
 // It is the relocated body of the render-side builder, so the templates keep
 // their exact output. templateName selects among preparing, building,
 // incremental, idle, ready, and waiting.
-func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display displayStatus, dependency dependencyMode) (view.StatusView, string) {
-	statusView := blankStatusView(filepath.Base(codebase.CanonicalPath), formatStampWithRelative(codebase.UpdatedAt))
-	statusView.Path = codebase.CanonicalPath
-	statusView.Scheduling = resolveSchedulingView(
-		codebase.SchedulingPolicy,
-		"",
-		"",
+func resolveStatusView(
+	codebase model.Codebase,
+	activeJob *model.Job,
+	display displayStatus,
+	dependency dependencyMode,
+) (view.StatusView, string) {
+	statusView := blankStatusView(
+		filepath.Base(codebase.CanonicalPath),
+		formatStampWithRelative(codebase.UpdatedAt),
 	)
+	statusView.Path = codebase.CanonicalPath
+	statusView.Scheduling = resolveSchedulingView(codebase.SchedulingPolicy, "", "")
 	switch display {
 	case displayDiscovered:
 		return statusView, "discovered.md.tmpl"
@@ -186,9 +208,11 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 			statusView.SkippedLine = skippedFilesLine(run.SkippedFiles)
 			statusView.UpdatedAt = formatStampWithRelative(run.CompletedAt)
 		}
+
 		return statusView, "ready.md.tmpl"
 	case displayPreparing, displayIndexing, displayStale, displayFailed, displayMissing:
 	}
+
 	statusView.PrepareLabel = prepareLabel(activeJob)
 	embedding := false
 	if activeJob != nil {
@@ -196,6 +220,7 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 		if !progress.LastEventAt.IsZero() {
 			statusView.UpdatedAt = formatStampWithRelative(progress.LastEventAt)
 		}
+
 		changed := progress.FilesAdded + progress.FilesModified + progress.FilesRemoved
 		statusView.FilesInCodebase = progress.FilesInCodebase
 		statusView.FilesChanged = changed
@@ -208,13 +233,18 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 		// tree stays byte-identical to the compact job tree once live chunks
 		// arrive.
 		chunkProgress := progress
-		chunkProgress.ChunksTotal = max(progress.ChunksTotal, progress.ChunksReused+progress.ChunksGenerated)
+		chunkProgress.ChunksTotal = max(
+			progress.ChunksTotal,
+			progress.ChunksReused+progress.ChunksGenerated,
+		)
 		if chunkProgress.ChunksTotal == 0 {
 			chunkProgress.ChunksTotal = codebase.LiveChunkTotal
 		}
+
 		if chunkProgress.ChunksTotal == 0 && codebase.LastSuccessfulRun != nil {
 			chunkProgress.ChunksTotal = codebase.LastSuccessfulRun.TotalChunks
 		}
+
 		statusView.Breakdown = resolveOutcomeBreakdown(chunkProgress)
 		// The headline percent reads over the corpus-floored total so a
 		// superseded-and-restarted run reflects how much of the corpus is
@@ -223,12 +253,15 @@ func resolveStatusView(codebase model.Codebase, activeJob *model.Job, display di
 		statusView.Percent = int32(resolveOverallPercent(chunkProgress) + 0.5)
 		embedding = progress.FilesTotal > 0 || progress.FilesInCodebase > 0
 	}
+
 	if !embedding {
 		return statusView, "preparing.md.tmpl"
 	}
+
 	if activeJob != nil && jobOperation(activeJob.Operation) == jobOperationIndex {
 		return statusView, "building.md.tmpl"
 	}
+
 	return statusView, "incremental.md.tmpl"
 }
 
@@ -246,12 +279,15 @@ func resolveIndexedStatusView(
 		statusView.SkippedLine = skippedFilesLine(run.SkippedFiles)
 		statusView.UpdatedAt = formatStampWithRelative(run.CompletedAt)
 	}
+
 	if activeJob != nil && isBackgroundSyncReconcile(&codebase, activeJob) {
 		if !activeJob.Progress.LastEventAt.IsZero() {
 			statusView.UpdatedAt = formatStampWithRelative(activeJob.Progress.LastEventAt)
 		}
+
 		statusView.SyncNote = backgroundSyncNote(activeJob)
 	}
+
 	return statusView, "ready.md.tmpl"
 }
 
@@ -292,9 +328,11 @@ func blankStatusView(name string, updatedAt string) view.StatusView {
 }
 
 func schedulingWaitLabel(activeJob *model.Job, dependency dependencyMode, fallback string) string {
-	if activeJob == nil || activeJob.State != model.JobStatePaused || dependency != dependencyHealthy {
+	if activeJob == nil || activeJob.State != model.JobStatePaused ||
+		dependency != dependencyHealthy {
 		return fallback
 	}
+
 	reason := resolveSchedulingView(
 		activeJob.EffectiveSchedulingPolicy,
 		activeJob.State,
@@ -303,6 +341,7 @@ func schedulingWaitLabel(activeJob *model.Job, dependency dependencyMode, fallba
 	if reason == "" {
 		return "Paused"
 	}
+
 	return "Waiting: " + string(reason)
 }
 
@@ -313,7 +352,9 @@ func formatBoundaryStatusTime(value time.Time) string {
 	if value.IsZero() {
 		return "unknown"
 	}
+
 	const layout = "3:04 PM MST"
+
 	return render.InLocalZone(value).Format(layout)
 }
 
@@ -325,12 +366,14 @@ func formatStampWithRelative(value time.Time) string {
 	if value.IsZero() {
 		return ""
 	}
+
 	localValue := render.InLocalZone(value)
 	localNow := render.InLocalZone(relativeTimeNow())
 	layout := "3:04 PM MST"
 	if localValue.Year() != localNow.Year() || localValue.YearDay() != localNow.YearDay() {
 		layout = "Jan 2, 3:04 PM MST"
 	}
+
 	return localValue.Format(layout) + " (" + formatRelativeTime(value) + ")"
 }
 
@@ -338,23 +381,29 @@ func formatRelativeTime(value time.Time) string {
 	if value.IsZero() {
 		return ""
 	}
+
 	now := relativeTimeNow()
 	if value.After(now) {
 		return "just now"
 	}
+
 	elapsed := now.Sub(value)
 	if elapsed < time.Minute {
 		return "just now"
 	}
+
 	if elapsed < time.Hour {
 		minutes := int(elapsed / time.Minute)
 		return fmt.Sprintf("%dm ago", minutes)
 	}
+
 	if elapsed < 24*time.Hour {
 		hours := int(elapsed / time.Hour)
 		return fmt.Sprintf("%dh ago", hours)
 	}
+
 	days := int(elapsed / (24 * time.Hour))
+
 	return fmt.Sprintf("%dd ago", days)
 }
 
@@ -364,6 +413,7 @@ func waitingLabel(mode dependencyMode) string {
 	if mode == dependencyStoreUnavailable {
 		return "Waiting for the vector store"
 	}
+
 	return "Waiting for the embedding server"
 }
 
@@ -390,8 +440,15 @@ func backgroundSyncNote(job *model.Job) string {
 		// honestly rather than calling it a sync of an unknown size.
 		return "🔄 Checking for changes in the background"
 	}
+
 	percent := int32(progress.OverallPercent + 0.5)
-	return fmt.Sprintf("🔄 Syncing %d changed %s in the background (%d%%)", changed, plural("file", int(changed)), percent)
+
+	return fmt.Sprintf(
+		"🔄 Syncing %d changed %s in the background (%d%%)",
+		changed,
+		plural("file", int(changed)),
+		percent,
+	)
 }
 
 // headingFor names what started an in-progress run so the building view leads
@@ -403,9 +460,11 @@ func headingFor(codebase model.Codebase, job *model.Job) string {
 	if codebase.LastSuccessfulRun == nil {
 		return "Building initial index"
 	}
+
 	if job != nil && (jobOperation(job.Operation) == jobOperationIndex || job.Forced) {
 		return "Forced reindex"
 	}
+
 	return "Indexing new changes"
 }
 
@@ -416,6 +475,7 @@ func prepareLabel(job *model.Job) string {
 	if job != nil && jobOperation(job.Operation) == jobOperationSync {
 		return "Changes detected, preparing to index"
 	}
+
 	return "Preparing to index"
 }
 
@@ -426,13 +486,20 @@ func skippedFilesLine(skipped []string) string {
 	if len(skipped) == 0 {
 		return ""
 	}
+
 	const maxPreview = 3
 	previewLimit := min(len(skipped), maxPreview)
 	preview := strings.Join(skipped[:previewLimit], ", ")
 	if len(skipped) > maxPreview {
 		preview += fmt.Sprintf(", ... (+%d more)", len(skipped)-maxPreview)
 	}
-	return fmt.Sprintf("⏭️  Skipped: %d non-UTF-8 %s: %s", len(skipped), plural("file", len(skipped)), preview)
+
+	return fmt.Sprintf(
+		"⏭️  Skipped: %d non-UTF-8 %s: %s",
+		len(skipped),
+		plural("file", len(skipped)),
+		preview,
+	)
 }
 
 // jobScopeKnown reports whether the daemon has measured the work scope for a
@@ -471,13 +538,18 @@ func (manager *Manager) resolveGetIndexView(
 	if !tracked || codebase == nil {
 		return getIndex
 	}
+
 	getIndex.CanonicalPath = codebase.CanonicalPath
 	display := computeDisplayStatus(*codebase, activeJob, health.Mode, readiness)
 	getIndex.Display = view.Display(display)
 	getIndex.Raw = resolveRawStatus(*codebase, activeJob, readiness, observedRows)
 	getIndex.Raw.HeldForSiblingBuild = manager.waitsForSourceFirstBuild(codebase.CanonicalPath)
-	getIndex.Raw.WorktreeReuseUnavailableReason = manager.worktreeReuseStatus(*codebase, display == displayDiscovered).unavailable
+	getIndex.Raw.WorktreeReuseUnavailableReason = manager.worktreeReuseStatus(
+		*codebase,
+		display == displayDiscovered,
+	).unavailable
 	getIndex.Status.Scheduling = resolveSchedulingView(codebase.SchedulingPolicy, "", "")
+
 	return getIndex
 }
 
@@ -526,7 +598,12 @@ func blankRawStatus() view.RawStatus {
 // the registry status, the collection probe result, the live job, the last
 // completed run, the last failure, and the graph state. It maps none of them to
 // a display word.
-func resolveRawStatus(codebase model.Codebase, activeJob *model.Job, readiness status.CollectionReadiness, observedRows *int32) view.RawStatus {
+func resolveRawStatus(
+	codebase model.Codebase,
+	activeJob *model.Job,
+	readiness status.CollectionReadiness,
+	observedRows *int32,
+) view.RawStatus {
 	raw := blankRawStatus()
 	raw.CodebaseID = codebase.ID
 	raw.StoredStatus = string(codebase.Status)
@@ -553,18 +630,21 @@ func resolveRawStatus(codebase model.Codebase, activeJob *model.Job, readiness s
 		raw.OverallPercent = progress.OverallPercent
 		raw.LastEventAt = formatStampWithRelative(progress.LastEventAt)
 	}
+
 	if run := codebase.LastSuccessfulRun; run != nil {
 		raw.HasLastRun = true
 		raw.LastRunFiles = run.IndexedFiles
 		raw.LastRunChunks = run.TotalChunks
 		raw.LastRunCompleted = formatStampWithRelative(run.CompletedAt)
 	}
+
 	if failure := codebase.LastFailedRun; failure != nil {
 		raw.HasFailure = true
 		raw.FailureMessage = failure.Message
 		raw.FailureJobID = failure.JobID
 		raw.FailureFailedAt = formatStampWithRelative(failure.FailedAt)
 	}
+
 	return raw
 }
 
@@ -572,33 +652,44 @@ func mcpMissingPathError(clientName string, requestedPath string) string {
 	if clientName != "mcp" {
 		return ""
 	}
+
 	_, err := filepath.EvalSymlinks(requestedPath)
 	if !errors.Is(err, os.ErrNotExist) {
 		return ""
 	}
+
 	return err.Error()
 }
 
-func resolveGraphStatusFields(statusView *view.StatusView, codebase model.Codebase, graphBuilding bool) {
+func resolveGraphStatusFields(
+	statusView *view.StatusView,
+	codebase model.Codebase,
+	graphBuilding bool,
+) {
 	if codebase.Kind == model.CodebaseKindDocument {
 		return
 	}
+
 	if graphBuilding {
 		statusView.GraphBuilding = true
 		return
 	}
+
 	if codebase.GraphState == model.GraphStateStale {
 		statusView.GraphFailed = true
 		return
 	}
+
 	if !codebase.GraphUpdatedAt.IsZero() {
 		statusView.GraphUpdatedAt = formatStampWithRelative(codebase.GraphUpdatedAt)
 		return
 	}
+
 	if codebase.GraphState == model.GraphStateReady {
 		statusView.GraphReadyNoTime = true
 		return
 	}
+
 	statusView.GraphNotBuilt = true
 }
 
@@ -610,7 +701,9 @@ func descendantsHint(requestedPath string, descendants []model.Codebase) string 
 	if len(descendants) == 0 {
 		return ""
 	}
+
 	var totalFiles int32
+
 	names := make([]string, 0, len(descendants))
 	for _, child := range descendants {
 		names = append(names, child.CanonicalPath)
@@ -618,11 +711,18 @@ func descendantsHint(requestedPath string, descendants []model.Codebase) string 
 			totalFiles += child.LastSuccessfulRun.IndexedFiles
 		}
 	}
+
 	fileCount := int(totalFiles)
+
 	return fmt.Sprintf(
 		"🛈 '%s' is not indexed on its own, but %d already-indexed %s live under %s: %s\n"+
 			"Build one merged index that reuses those embeddings by running: index_codebase %s",
-		requestedPath, fileCount, plural("file", fileCount), plural("sub-folder", len(names)), strings.Join(names, ", "), requestedPath,
+		requestedPath,
+		fileCount,
+		plural("file", fileCount),
+		plural("sub-folder", len(names)),
+		strings.Join(names, ", "),
+		requestedPath,
 	)
 }
 
@@ -633,11 +733,17 @@ func coveringResolutionLine(requestedPath string, tracked bool, codebase *model.
 	if !tracked || codebase == nil {
 		return ""
 	}
+
 	prefix := subtreePrefix(requestedPath, codebase.CanonicalPath)
 	if prefix == "" {
 		return ""
 	}
-	return fmt.Sprintf("🔁 Resolved to larger index '%s' (scoped to %s/).", codebase.CanonicalPath, prefix)
+
+	return fmt.Sprintf(
+		"🔁 Resolved to larger index '%s' (scoped to %s/).",
+		codebase.CanonicalPath,
+		prefix,
+	)
 }
 
 // classificationLine renders a one-line summary of the per-path classification
@@ -647,19 +753,26 @@ func classificationLine(classification *model.PathClassification) string {
 	if classification == nil {
 		return ""
 	}
+
 	switch classification.Kind {
 	case model.PathClassificationInScopeExcluded:
 		parts := make([]string, 0, 2)
 		if classification.ExcludedByGitignore != "" {
 			parts = append(parts, "gitignore="+classification.ExcludedByGitignore)
 		}
+
 		if classification.ExcludedByPattern != "" {
 			parts = append(parts, "pattern="+classification.ExcludedByPattern)
 		}
+
 		if len(parts) == 0 {
 			return "🚫 Path is in scope of " + classification.CoveringCodebaseID + " but excluded by an ignore rule."
 		}
-		return "🚫 Path is in scope of " + classification.CoveringCodebaseID + " but excluded: " + strings.Join(parts, " ")
+
+		return "🚫 Path is in scope of " + classification.CoveringCodebaseID + " but excluded: " + strings.Join(
+			parts,
+			" ",
+		)
 	case model.PathClassificationOutOfScope:
 		return "🛈 Path is not under any tracked codebase."
 	case model.PathClassificationInScopeUnindexed:
@@ -681,9 +794,11 @@ func pathResolutionLines(requestedPath string) []string {
 	if symlinkLine := renderSymlinkResolution(requestedPath); symlinkLine != "" {
 		lines = append(lines, symlinkLine)
 	}
+
 	if worktreeLine := renderWorktreeRelation(requestedPath); worktreeLine != "" {
 		lines = append(lines, worktreeLine)
 	}
+
 	return lines
 }
 
@@ -698,11 +813,13 @@ func renderSymlinkResolution(requestedPath string) string {
 	if !filepath.IsAbs(strings.TrimSpace(requestedPath)) {
 		return ""
 	}
+
 	absolutePath := filepath.Clean(requestedPath)
 	resolved, err := filepath.EvalSymlinks(absolutePath)
 	if err != nil || resolved == absolutePath {
 		return ""
 	}
+
 	return "🔗 symlink resolved to: " + resolved
 }
 
@@ -717,15 +834,18 @@ func renderWorktreeRelation(requestedPath string) string {
 	if !filepath.IsAbs(strings.TrimSpace(requestedPath)) {
 		return ""
 	}
+
 	absolutePath := filepath.Clean(requestedPath)
 	info, ok := gitworktree.Resolve(absolutePath)
 	if !ok || !info.Linked {
 		return ""
 	}
+
 	mainCheckout := filepath.Dir(info.CommonDir)
 	if info.Detached {
 		return fmt.Sprintf("🌿 git worktree of %s (detached HEAD %s)", mainCheckout, info.Head)
 	}
+
 	return fmt.Sprintf("🌿 git worktree of %s (branch %s)", mainCheckout, info.Branch)
 }
 
@@ -733,27 +853,43 @@ func renderWorktreeRelation(requestedPath string) string {
 func resolveSearchResults(chunks []model.StoredChunk) []view.SearchResultView {
 	results := make([]view.SearchResultView, 0, len(chunks))
 	for _, chunk := range chunks {
-		results = append(results, view.SearchResultView{
-			RelativePath: chunk.RelativePath,
-			StartLine:    chunk.StartLine,
-			EndLine:      chunk.EndLine,
-			Language:     chunk.Language,
-			Score:        chunk.Score,
-			Content:      chunk.Content,
-		})
+		results = append(
+			results,
+			view.SearchResultView{
+				RelativePath: chunk.RelativePath,
+				StartLine:    chunk.StartLine,
+				EndLine:      chunk.EndLine,
+				Language:     chunk.Language,
+				Score:        chunk.Score,
+				Content:      chunk.Content,
+			},
+		)
 	}
+
 	return results
 }
 
 // resolveSearchStatusView builds the optional in-flight status portion for a
 // search response.
-func resolveSearchStatusView(codebase model.Codebase, activeJob *model.Job, health dependencyHealth, graphBuilding bool) (view.StatusView, string, bool) {
+func resolveSearchStatusView(
+	codebase model.Codebase,
+	activeJob *model.Job,
+	health dependencyHealth,
+	graphBuilding bool,
+) (view.StatusView, string, bool) {
 	if activeJob == nil {
 		return blankStatusView("", ""), "", false
 	}
-	display := computeDisplayStatus(codebase, activeJob, health.Mode, status.CollectionNotApplicable)
+
+	display := computeDisplayStatus(
+		codebase,
+		activeJob,
+		health.Mode,
+		status.CollectionNotApplicable,
+	)
 	statusView, templateName := resolveStatusView(codebase, activeJob, display, health.Mode)
 	resolveGraphStatusFields(&statusView, codebase, graphBuilding)
+
 	return statusView, templateName, isBackgroundSyncReconcile(&codebase, activeJob)
 }
 
@@ -805,7 +941,10 @@ func isTerminalJobState(state model.JobState) bool {
 	switch state {
 	case model.JobStateCompleted, model.JobStateFailed, model.JobStateCancelled:
 		return true
-	case model.JobStateQueued, model.JobStateRunning, model.JobStatePaused, model.JobStateCancelling:
+	case model.JobStateQueued,
+		model.JobStateRunning,
+		model.JobStatePaused,
+		model.JobStateCancelling:
 		return false
 	default:
 		return false
@@ -818,6 +957,7 @@ func jobOrderTime(job model.Job) time.Time {
 	if job.CompletedAt != nil {
 		return *job.CompletedAt
 	}
+
 	return job.StartedAt
 }
 
@@ -828,25 +968,35 @@ func jobOrderTime(job model.Job) time.Time {
 // for the superseded relationship: a failed job with a successor was overtaken.
 func buildJobSuccessors(jobs []model.Job) map[string]string {
 	byCodebase := make(map[string][]model.Job)
+
 	for _, job := range jobs {
 		if !isTerminalJobState(job.State) {
 			continue
 		}
+
 		byCodebase[job.CodebaseID] = append(byCodebase[job.CodebaseID], job)
 	}
+
 	successors := make(map[string]string)
+
 	for _, codebaseJobs := range byCodebase {
-		sort.Slice(codebaseJobs, func(first int, second int) bool {
-			timeFirst := jobOrderTime(codebaseJobs[first])
-			timeSecond := jobOrderTime(codebaseJobs[second])
-			if !timeFirst.Equal(timeSecond) {
-				return timeFirst.Before(timeSecond)
-			}
-			return codebaseJobs[first].ID < codebaseJobs[second].ID
-		})
+		sort.Slice(
+			codebaseJobs,
+			func(first int, second int) bool {
+				timeFirst := jobOrderTime(codebaseJobs[first])
+				timeSecond := jobOrderTime(codebaseJobs[second])
+				if !timeFirst.Equal(timeSecond) {
+					return timeFirst.Before(timeSecond)
+				}
+
+				return codebaseJobs[first].ID < codebaseJobs[second].ID
+			},
+		)
+
 		for index := 0; index+1 < len(codebaseJobs); index++ {
 			successors[codebaseJobs[index].ID] = codebaseJobs[index+1].ID
 		}
 	}
+
 	return successors
 }

@@ -23,13 +23,26 @@ func recordingRunner(mu *sync.Mutex, embedded *[]string) fakeRunner {
 	return fakeRunner{
 		index:      nil,
 		indexFiles: nil,
-		indexOne: func(_ context.Context, _ string, relativePath string, _ model.IndexConfig) (indexer.OneFileResult, error) {
+		indexOne: func(_ context.Context, _ string, relativePath string, _ model.IndexConfig) (
+			indexer.OneFileResult,
+			error,
+		) {
 			mu.Lock()
 			*embedded = append(*embedded, relativePath)
 			mu.Unlock()
 			content := "package main\n// " + relativePath + "\n"
+
 			return indexer.OneFileResult{
-				Chunks:   []model.StoredChunk{{Content: content, RelativePath: relativePath, StartLine: 1, EndLine: 1, Language: "go", FileExtension: ".go"}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       content,
+						RelativePath:  relativePath,
+						StartLine:     1,
+						EndLine:       1,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHash: hashText(content),
 				Skipped:  false,
 				Removed:  false,
@@ -47,26 +60,48 @@ func newMultiFileRepo(t *testing.T, names ...string) string {
 	if err := os.MkdirAll(repoPath, 0o755); err != nil {
 		t.Fatalf("MkdirAll returned error: %v", err)
 	}
+
 	for _, name := range names {
-		if err := os.WriteFile(filepath.Join(repoPath, name), []byte("package main\n// "+name+"\n"), 0o644); err != nil {
+		if err := os.WriteFile(
+			filepath.Join(repoPath, name),
+			[]byte("package main\n// "+name+"\n"),
+			0o644,
+		); err != nil {
 			t.Fatalf("WriteFile returned error: %v", err)
 		}
 	}
+
 	canonical, err := filepath.EvalSymlinks(repoPath)
 	if err != nil {
 		t.Fatalf("EvalSymlinks returned error: %v", err)
 	}
+
 	return canonical
 }
 
 // seedBootstrapCodebase registers a from-scratch build target and returns the
 // job runBootstrap consumes. The codebase starts in the indexing state so the
 // run mirrors a resume after an interrupted first index.
-func seedBootstrapCodebase(t *testing.T, manager *Manager, canonical string, cfg model.IndexConfig) (string, model.Job) {
+func seedBootstrapCodebase(
+	t *testing.T,
+	manager *Manager,
+	canonical string,
+	cfg model.IndexConfig,
+) (string, model.Job) {
 	t.Helper()
 
 	codebaseID := "cb-bootstrap-" + filepath.Base(filepath.Dir(canonical))
-	job := newQueuedJob(codebaseID, canonical, canonical, testClientInfo(), string(jobOperationIndex), false, cfg, emptyAdmissionBudget, clock.Now())
+	job := newQueuedJob(
+		codebaseID,
+		canonical,
+		canonical,
+		testClientInfo(),
+		string(jobOperationIndex),
+		false,
+		cfg,
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
 	manager.mu.Lock()
 	manager.codebases[codebaseID] = model.Codebase{
 		ID:              codebaseID,
@@ -77,6 +112,7 @@ func seedBootstrapCodebase(t *testing.T, manager *Manager, canonical string, cfg
 	}
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()
+
 	return codebaseID, job
 }
 
@@ -99,18 +135,30 @@ func TestRunBootstrapCreatesGraphTaskForLegacyEmptyKindCodebase(t *testing.T) {
 	cfg := defaultIndexConfig()
 	cfg.IgnoreDigest = "sha256:bootstrap-legacy-empty-kind"
 	codebaseID, job := seedBootstrapCodebase(t, manager, canonical, cfg)
-	source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config)
+	source := newCodeItemSource(
+		manager.runner,
+		manager.indexability,
+		job.CodebaseID,
+		job.CanonicalPath,
+		job.Config,
+	)
 
 	graphTask := manager.runBootstrap(context.Background(), job, source)
 	if graphTask == nil {
 		t.Fatal("graphTask is nil, want graph task for legacy empty-kind codebase")
 	}
+
 	if graphTask.codebaseID != codebaseID {
 		t.Fatalf("graphTask codebaseID = %q, want %q", graphTask.codebaseID, codebaseID)
 	}
 }
 
-func setBootstrapCollectionName(t *testing.T, manager *Manager, codebaseID string, collectionName string) {
+func setBootstrapCollectionName(
+	t *testing.T,
+	manager *Manager,
+	codebaseID string,
+	collectionName string,
+) {
 	t.Helper()
 
 	manager.mu.Lock()
@@ -120,13 +168,19 @@ func setBootstrapCollectionName(t *testing.T, manager *Manager, codebaseID strin
 	manager.codebases[codebaseID] = codebase
 }
 
-func emitReuseProgress(progress func(semantic.Progress), chunks []model.StoredChunk, reuse map[string]model.ReuseVector) {
+func emitReuseProgress(
+	progress func(semantic.Progress),
+	chunks []model.StoredChunk,
+	reuse map[string]model.ReuseVector,
+) {
 	if progress == nil {
 		return
 	}
+
 	chunkCount := safeInt32(len(chunks))
 	var reused int32
 	var embedded int32
+
 	for _, chunk := range chunks {
 		if _, present := reuse[hashText(chunk.Content)]; present {
 			reused++
@@ -134,28 +188,53 @@ func emitReuseProgress(progress func(semantic.Progress), chunks []model.StoredCh
 			embedded++
 		}
 	}
-	progress(semantic.Progress{ChunksProcessed: chunkCount, ChunksReused: reused, ChunksEmbedded: embedded})
+
+	progress(semantic.Progress{
+		ChunksProcessed: chunkCount,
+		ChunksReused:    reused,
+		ChunksEmbedded:  embedded,
+	})
 }
 
 func TestRunBootstrapReusesLiveCollectionVectors(t *testing.T) {
 	manager, _ := newTestManagerWithCap(t, 2)
 	liveCollection := "cc_bootstrap_live"
 	fake := &fakeSemantic{
-		inspectCollection: func(_ context.Context, collectionName string) (semantic.CollectionFacts, error) {
+		inspectCollection: func(_ context.Context, collectionName string) (
+			semantic.CollectionFacts,
+			error,
+		) {
 			if collectionName != liveCollection {
 				return semantic.CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
 			}
+
 			return semantic.CollectionFacts{Exists: true, Rows: 2, RowsKnown: true}, nil
 		},
 		hasStaging: func(context.Context, string) (bool, error) { return true, nil },
-		loadReuseForPath: func(_ context.Context, collectionName string, relativePath string) (map[string]model.ReuseVector, error) {
+		loadReuseForPath: func(_ context.Context, collectionName string, relativePath string) (
+			map[string]model.ReuseVector,
+			error,
+		) {
 			if collectionName != liveCollection {
 				return nil, nil
 			}
+
 			content := "package main\n// " + relativePath + "\n"
-			return map[string]model.ReuseVector{hashText(content): {Vector: []float32{1, 2, 3}}}, nil
+
+			return map[string]model.ReuseVector{
+				hashText(content): {Vector: []float32{1, 2, 3}},
+			}, nil
 		},
-		stageReindexWithReuse: func(_ context.Context, _ string, chunks []model.StoredChunk, _ []string, progress func(semantic.Progress), reuse map[string]model.ReuseVector) error {
+		stageReindexWithReuse: func(
+			_ context.Context,
+			_ string,
+			chunks []model.StoredChunk,
+			_ []string,
+			progress func(
+				semantic.Progress,
+			),
+			reuse map[string]model.ReuseVector,
+		) error {
 			emitReuseProgress(progress, chunks, reuse)
 			return nil
 		},
@@ -171,7 +250,15 @@ func TestRunBootstrapReusesLiveCollectionVectors(t *testing.T) {
 	cfg.IgnoreDigest = "sha256:bootstrap-live-reuse"
 	codebaseID, job := seedBootstrapCodebase(t, manager, canonical, cfg)
 	setBootstrapCollectionName(t, manager, codebaseID, liveCollection)
-	source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(liveCollection)
+	source := newCodeItemSource(
+		manager.runner,
+		manager.indexability,
+		job.CodebaseID,
+		job.CanonicalPath,
+		job.Config,
+	).withCollectionName(
+		liveCollection,
+	)
 
 	runBootstrapAndGraph(t, manager, job, source)
 
@@ -179,36 +266,60 @@ func TestRunBootstrapReusesLiveCollectionVectors(t *testing.T) {
 	if !found {
 		t.Fatalf("job %s was not found", job.ID)
 	}
+
 	if completed.State != model.JobStateCompleted {
 		t.Fatalf("job state = %q, want completed", completed.State)
 	}
+
 	if completed.Progress.ChunksEmbedded != 0 {
-		t.Fatalf("ChunksEmbedded = %d, want 0 when live vectors cover every bootstrap chunk", completed.Progress.ChunksEmbedded)
+		t.Fatalf(
+			"ChunksEmbedded = %d, want 0 when live vectors cover every bootstrap chunk",
+			completed.Progress.ChunksEmbedded,
+		)
 	}
+
 	if completed.Progress.ChunksReused <= 0 {
-		t.Fatalf("ChunksReused = %d, want > 0 from live collection vectors", completed.Progress.ChunksReused)
+		t.Fatalf(
+			"ChunksReused = %d, want > 0 from live collection vectors",
+			completed.Progress.ChunksReused,
+		)
 	}
 
 	pathCalls := fake.reusePathCallsSnapshot()
 	if len(pathCalls) != 2 {
-		t.Fatalf("reuse path loads = %d, want 2 live collection reads: %+v", len(pathCalls), pathCalls)
+		t.Fatalf(
+			"reuse path loads = %d, want 2 live collection reads: %+v",
+			len(pathCalls),
+			pathCalls,
+		)
 	}
+
 	seenPaths := map[string]bool{}
+
 	for _, call := range pathCalls {
 		if call.Collection != liveCollection {
-			t.Fatalf("reuse load collection = %q, want live collection %q", call.Collection, liveCollection)
+			t.Fatalf(
+				"reuse load collection = %q, want live collection %q",
+				call.Collection,
+				liveCollection,
+			)
 		}
+
 		seenPaths[call.Path] = true
 	}
+
 	if !seenPaths["a.go"] || !seenPaths["b.go"] {
 		t.Fatalf("reuse load paths = %v, want a.go and b.go", seenPaths)
 	}
+
 	if got := fake.stageCallsSnapshot(); len(got) != 2 {
 		t.Fatalf("StageReindex calls = %d, want 2 staging writes: %+v", len(got), got)
 	}
+
 	if promoted := fake.promotedSnapshot(); !slices.Equal(promoted, []string{canonical}) {
 		t.Fatalf("PromoteStaging calls = %v, want [%s]", promoted, canonical)
 	}
+
 	if _, err := merkle.ReadSnapshot(manager.merklePath(codebaseID)); err != nil {
 		t.Fatalf("ReadSnapshot returned error after promotion: %v", err)
 	}
@@ -219,10 +330,14 @@ func TestRunBootstrapReusesCatalogWithoutLiveCollection(t *testing.T) {
 	const liveCollection = "cc_bootstrap_catalog"
 	candidateCalls := 0
 	fake := &fakeSemantic{
-		inspectCollection: func(_ context.Context, collectionName string) (semantic.CollectionFacts, error) {
+		inspectCollection: func(_ context.Context, collectionName string) (
+			semantic.CollectionFacts,
+			error,
+		) {
 			if collectionName != liveCollection {
 				t.Fatalf("InspectCollection(%q), want %q", collectionName, liveCollection)
 			}
+
 			return semantic.CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
 		},
 		hasStaging: func(context.Context, string) (bool, error) { return true, nil },
@@ -235,7 +350,10 @@ func TestRunBootstrapReusesCatalogWithoutLiveCollection(t *testing.T) {
 			if collectionName != liveCollection {
 				t.Fatalf("candidate collection = %q, want %q", collectionName, liveCollection)
 			}
-			return map[string]model.ReuseVector{hashText(chunks[0].Content): {Vector: []float32{1, 2, 3}}}, nil
+
+			return map[string]model.ReuseVector{
+				hashText(chunks[0].Content): {Vector: []float32{1, 2, 3}},
+			}, nil
 		},
 		stageReindexWithReuse: func(
 			_ context.Context,
@@ -265,7 +383,9 @@ func TestRunBootstrapReusesCatalogWithoutLiveCollection(t *testing.T) {
 		job.CodebaseID,
 		job.CanonicalPath,
 		job.Config,
-	).withCollectionName(liveCollection)
+	).withCollectionName(
+		liveCollection,
+	)
 
 	runBootstrapAndGraph(t, manager, job, source)
 
@@ -273,12 +393,15 @@ func TestRunBootstrapReusesCatalogWithoutLiveCollection(t *testing.T) {
 	if !found {
 		t.Fatalf("job %s was not found", job.ID)
 	}
+
 	if completed.State != model.JobStateCompleted {
 		t.Fatalf("job state = %q, want completed", completed.State)
 	}
+
 	if candidateCalls != 1 {
 		t.Fatalf("candidate calls = %d, want 1", candidateCalls)
 	}
+
 	if completed.Progress.ChunksEmbedded != 0 || completed.Progress.ChunksReused != 1 {
 		t.Fatalf(
 			"embedded/reused = %d/%d, want 0/1",
@@ -292,10 +415,14 @@ func TestRunBootstrapForcedSkipsLiveItemReuse(t *testing.T) {
 	manager, _ := newTestManagerWithCap(t, 2)
 	liveCollection := "cc_bootstrap_forced"
 	fake := &fakeSemantic{
-		inspectCollection: func(_ context.Context, collectionName string) (semantic.CollectionFacts, error) {
+		inspectCollection: func(_ context.Context, collectionName string) (
+			semantic.CollectionFacts,
+			error,
+		) {
 			if collectionName != liveCollection {
 				return semantic.CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
 			}
+
 			return semantic.CollectionFacts{Exists: true, Rows: 1, RowsKnown: true}, nil
 		},
 		hasStaging: func(context.Context, string) (bool, error) { return true, nil },
@@ -307,7 +434,16 @@ func TestRunBootstrapForcedSkipsLiveItemReuse(t *testing.T) {
 			t.Fatal("forced bootstrap loaded catalog reuse")
 			return nil, nil
 		},
-		stageReindexWithReuse: func(_ context.Context, _ string, chunks []model.StoredChunk, _ []string, progress func(semantic.Progress), reuse map[string]model.ReuseVector) error {
+		stageReindexWithReuse: func(
+			_ context.Context,
+			_ string,
+			chunks []model.StoredChunk,
+			_ []string,
+			progress func(
+				semantic.Progress,
+			),
+			reuse map[string]model.ReuseVector,
+		) error {
 			emitReuseProgress(progress, chunks, reuse)
 			return nil
 		},
@@ -327,7 +463,15 @@ func TestRunBootstrapForcedSkipsLiveItemReuse(t *testing.T) {
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()
 	setBootstrapCollectionName(t, manager, codebaseID, liveCollection)
-	source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(liveCollection)
+	source := newCodeItemSource(
+		manager.runner,
+		manager.indexability,
+		job.CodebaseID,
+		job.CanonicalPath,
+		job.Config,
+	).withCollectionName(
+		liveCollection,
+	)
 
 	runBootstrapAndGraph(t, manager, job, source)
 
@@ -335,15 +479,19 @@ func TestRunBootstrapForcedSkipsLiveItemReuse(t *testing.T) {
 	if !found {
 		t.Fatalf("job %s was not found", job.ID)
 	}
+
 	if completed.State != model.JobStateCompleted {
 		t.Fatalf("job state = %q, want completed", completed.State)
 	}
+
 	if calls := fake.reusePathCallsSnapshot(); len(calls) != 0 {
 		t.Fatalf("reuse path loads = %d, want 0 for forced bootstrap: %+v", len(calls), calls)
 	}
+
 	if completed.Progress.ChunksEmbedded != 1 {
 		t.Fatalf("ChunksEmbedded = %d, want 1 forced embed", completed.Progress.ChunksEmbedded)
 	}
+
 	if completed.Progress.ChunksReused != 0 {
 		t.Fatalf("ChunksReused = %d, want 0 for forced bootstrap", completed.Progress.ChunksReused)
 	}
@@ -359,7 +507,13 @@ func TestRunBootstrapResumesSkippingEmbeddedFiles(t *testing.T) {
 	cfg := defaultIndexConfig()
 	cfg.IgnoreDigest = "sha256:bootstrap-resume"
 
-	captured, err := merkle.Capture(context.Background(), manager.indexability, "cb", canonical, cfg)
+	captured, err := merkle.Capture(
+		context.Background(),
+		manager.indexability,
+		"cb",
+		canonical,
+		cfg,
+	)
 	if err != nil {
 		t.Fatalf("Capture returned error: %v", err)
 	}
@@ -377,7 +531,17 @@ func TestRunBootstrapResumesSkippingEmbeddedFiles(t *testing.T) {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
 
-	graphTask := manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config))
+	graphTask := manager.runBootstrap(
+		context.Background(),
+		job,
+		newCodeItemSource(
+			manager.runner,
+			manager.indexability,
+			job.CodebaseID,
+			job.CanonicalPath,
+			job.Config,
+		),
+	)
 	manager.runGraphIndexTask(context.Background(), graphTask)
 
 	mu.Lock()
@@ -392,9 +556,11 @@ func TestRunBootstrapResumesSkippingEmbeddedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadSnapshot returned error: %v", err)
 	}
+
 	if len(finalSnapshot.Files) != 3 {
 		t.Fatalf("final snapshot files = %d, want 3 (a.go, b.go, c.go)", len(finalSnapshot.Files))
 	}
+
 	waitForCodebaseStatus(t, manager, canonical, model.CodebaseStatusIndexed)
 }
 
@@ -410,7 +576,17 @@ func TestRunBootstrapEmbedsEveryFileWithoutCheckpoint(t *testing.T) {
 
 	_, job := seedBootstrapCodebase(t, manager, canonical, cfg)
 
-	graphTask := manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config))
+	graphTask := manager.runBootstrap(
+		context.Background(),
+		job,
+		newCodeItemSource(
+			manager.runner,
+			manager.indexability,
+			job.CodebaseID,
+			job.CanonicalPath,
+			job.Config,
+		),
+	)
 	manager.runGraphIndexTask(context.Background(), graphTask)
 
 	mu.Lock()
@@ -420,6 +596,7 @@ func TestRunBootstrapEmbedsEveryFileWithoutCheckpoint(t *testing.T) {
 	if want := []string{"a.go", "b.go", "c.go"}; !slices.Equal(got, want) {
 		t.Fatalf("embedded files = %v, want %v (a full build embeds every file)", got, want)
 	}
+
 	waitForCodebaseStatus(t, manager, canonical, model.CodebaseStatusIndexed)
 }
 
@@ -444,24 +621,40 @@ func TestRunBootstrapPromotesCollectionBeforeCommittingMerkle(t *testing.T) {
 		t.Fatalf("MkdirAll(%s) returned error: %v", liveMerklePath, err)
 	}
 
-	runBootstrapAndGraph(t, manager, job, newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config))
+	runBootstrapAndGraph(
+		t,
+		manager,
+		job,
+		newCodeItemSource(
+			manager.runner,
+			manager.indexability,
+			job.CodebaseID,
+			job.CanonicalPath,
+			job.Config,
+		),
+	)
 
 	completed, found := manager.GetJob(job.ID)
 	if !found {
 		t.Fatalf("job %s was not found", job.ID)
 	}
+
 	if completed.State != model.JobStateFailed {
 		t.Fatalf("job state = %q, want failed", completed.State)
 	}
+
 	if len(fake.stageCallsSnapshot()) == 0 {
 		t.Fatal("StageReindex was not called before the Merkle rename failure")
 	}
+
 	if promoted := fake.promotedSnapshot(); !slices.Equal(promoted, []string{canonical}) {
 		t.Fatalf("PromoteStaging calls = %v, want [%s] before Merkle rename", promoted, canonical)
 	}
+
 	if dropped := fake.droppedStagingSnapshot(); len(dropped) == 0 {
 		t.Fatal("DropStaging was not called after Merkle rename failure")
 	}
+
 	if _, err := os.Stat(manager.stagingMerklePath(codebaseID)); !os.IsNotExist(err) {
 		t.Fatalf("staging Merkle path still exists after failed promotion: %v", err)
 	}
@@ -495,25 +688,46 @@ func TestRunBootstrapSemanticPromotionFailureLeavesLiveMerkleUnchanged(t *testin
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
 
-	runBootstrapAndGraph(t, manager, job, newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config))
+	runBootstrapAndGraph(
+		t,
+		manager,
+		job,
+		newCodeItemSource(
+			manager.runner,
+			manager.indexability,
+			job.CodebaseID,
+			job.CanonicalPath,
+			job.Config,
+		),
+	)
 
 	completed, found := manager.GetJob(job.ID)
 	if !found {
 		t.Fatalf("job %s was not found", job.ID)
 	}
+
 	if completed.State != model.JobStateFailed {
 		t.Fatalf("job state = %q, want failed", completed.State)
 	}
+
 	after, err := merkle.ReadSnapshot(manager.merklePath(codebaseID))
 	if err != nil {
 		t.Fatalf("ReadSnapshot returned error: %v", err)
 	}
+
 	if !merkle.Equal(after, liveSnapshot) {
-		t.Fatalf("live snapshot changed after semantic promotion failure: got %+v want %+v", after, liveSnapshot)
+		t.Fatalf(
+			"live snapshot changed after semantic promotion failure: got %+v want %+v",
+			after,
+			liveSnapshot,
+		)
 	}
-	if dropped := fake.droppedStagingSnapshot(); len(dropped) == 0 || dropped[len(dropped)-1] != canonical {
+
+	if dropped := fake.droppedStagingSnapshot(); len(dropped) == 0 ||
+		dropped[len(dropped)-1] != canonical {
 		t.Fatalf("DropStaging calls = %v, want final drop for %s", dropped, canonical)
 	}
+
 	if _, err := os.Stat(manager.stagingMerklePath(codebaseID)); !os.IsNotExist(err) {
 		t.Fatalf("staging Merkle path still exists after semantic promotion failure: %v", err)
 	}
@@ -528,6 +742,7 @@ func (semantic *failingPromoteSemantic) PromoteStaging(_ context.Context, path s
 	semantic.fakeSemantic.mu.Lock()
 	semantic.fakeSemantic.promoted = append(semantic.fakeSemantic.promoted, path)
 	semantic.fakeSemantic.mu.Unlock()
+
 	return semantic.err
 }
 
@@ -550,7 +765,10 @@ func TestResumeOrphanedJobsParksNoCheckpointInterruptedForRetry(t *testing.T) {
 	manager.ResumeOrphanedJobs(context.Background())
 
 	if jobs := manager.ListJobs(""); len(jobs) != 0 {
-		t.Fatalf("no-checkpoint resume launched %d jobs, want 0 (the background pass re-queues it)", len(jobs))
+		t.Fatalf(
+			"no-checkpoint resume launched %d jobs, want 0 (the background pass re-queues it)",
+			len(jobs),
+		)
 	}
 
 	manager.mu.Lock()
@@ -562,11 +780,19 @@ func TestResumeOrphanedJobsParksNoCheckpointInterruptedForRetry(t *testing.T) {
 	if codebase.Status != model.CodebaseStatusIndexing {
 		t.Fatalf("status = %q, want Indexing so the background pass re-queues it", codebase.Status)
 	}
+
 	if codebase.ActiveJobID != "" {
-		t.Fatalf("ActiveJobID = %q, want cleared so the pass sees no live job", codebase.ActiveJobID)
+		t.Fatalf(
+			"ActiveJobID = %q, want cleared so the pass sees no live job",
+			codebase.ActiveJobID,
+		)
 	}
+
 	if codebase.LastFailedRun != nil {
-		t.Fatalf("LastFailedRun = %+v, want nil; an interrupted build is not a failure", codebase.LastFailedRun)
+		t.Fatalf(
+			"LastFailedRun = %+v, want nil; an interrupted build is not a failure",
+			codebase.LastFailedRun,
+		)
 	}
 }
 
@@ -586,7 +812,13 @@ func TestResumeOrphanedJobsResumesFromStagingCheckpoint(t *testing.T) {
 	canonical := newMultiFileRepo(t, "a.go", "b.go", "c.go")
 	cfg := manager.enrichIndexConfig(defaultIndexConfig())
 	cfg.IgnoreDigest = digestIndexConfig(cfg)
-	captured, err := merkle.Capture(context.Background(), manager.indexability, "cb-staging-resume", canonical, cfg)
+	captured, err := merkle.Capture(
+		context.Background(),
+		manager.indexability,
+		"cb-staging-resume",
+		canonical,
+		cfg,
+	)
 	if err != nil {
 		t.Fatalf("Capture returned error: %v", err)
 	}
@@ -609,6 +841,7 @@ func TestResumeOrphanedJobsResumesFromStagingCheckpoint(t *testing.T) {
 	if err := merkle.WriteSnapshot(manager.stagingMerklePath(codebaseID), checkpoint); err != nil {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
+
 	staleLive := merkle.Snapshot{
 		ConfigDigest: cfg.IgnoreDigest,
 		Files:        map[string]string{"old.go": hashText("stale live")},
@@ -617,8 +850,13 @@ func TestResumeOrphanedJobsResumesFromStagingCheckpoint(t *testing.T) {
 	if err := merkle.WriteSnapshot(manager.merklePath(codebaseID), staleLive); err != nil {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
+
 	probeCodebase := model.Codebase{ID: codebaseID, CanonicalPath: canonical, EffectiveConfig: cfg}
-	if manager.resumableCheckpointKind(context.Background(), probeCodebase, cfg.IgnoreDigest) != resumeCheckpointStaging {
+	if manager.resumableCheckpointKind(
+		context.Background(),
+		probeCodebase,
+		cfg.IgnoreDigest,
+	) != resumeCheckpointStaging {
 		t.Fatal("resumableCheckpointKind did not report a staging checkpoint")
 	}
 
@@ -630,7 +868,11 @@ func TestResumeOrphanedJobsResumesFromStagingCheckpoint(t *testing.T) {
 	got := slices.Clone(embedded)
 	mu.Unlock()
 	if want := []string{"b.go", "c.go"}; !slices.Equal(got, want) {
-		t.Fatalf("embedded files = %v, want %v (a.go must be skipped via staging checkpoint)", got, want)
+		t.Fatalf(
+			"embedded files = %v, want %v (a.go must be skipped via staging checkpoint)",
+			got,
+			want,
+		)
 	}
 }
 
@@ -654,15 +896,28 @@ func TestRunBootstrapHoldsOneStagingPinThroughPromotion(t *testing.T) {
 			if pinned {
 				t.Fatal("bootstrap acquired more than one staging pin")
 			}
+
 			pinned = true
-			return fakeCollectionLease{release: func() {
-				pinMutex.Lock()
-				defer pinMutex.Unlock()
-				pinned = false
-				releaseCount++
-			}}, nil
+
+			return fakeCollectionLease{
+				release: func() {
+					pinMutex.Lock()
+					defer pinMutex.Unlock()
+					pinned = false
+					releaseCount++
+				},
+			}, nil
 		},
-		stageReindexWithReuse: func(_ context.Context, _ string, _ []model.StoredChunk, _ []string, _ func(semantic.Progress), _ map[string]model.ReuseVector) error {
+		stageReindexWithReuse: func(
+			_ context.Context,
+			_ string,
+			_ []model.StoredChunk,
+			_ []string,
+			_ func(
+				semantic.Progress,
+			),
+			_ map[string]model.ReuseVector,
+		) error {
 			assertPinned("staging write")
 			return nil
 		},
@@ -684,13 +939,7 @@ func TestRunBootstrapHoldsOneStagingPinThroughPromotion(t *testing.T) {
 		t,
 		manager,
 		job,
-		newCodeItemSource(
-			manager.runner,
-			manager.indexability,
-			codebaseID,
-			canonical,
-			cfg,
-		),
+		newCodeItemSource(manager.runner, manager.indexability, codebaseID, canonical, cfg),
 	)
 
 	pinMutex.Lock()
@@ -698,6 +947,7 @@ func TestRunBootstrapHoldsOneStagingPinThroughPromotion(t *testing.T) {
 	if pinned {
 		t.Fatal("bootstrap left the staging pin held after completion")
 	}
+
 	if releaseCount != 1 {
 		t.Fatalf("staging pin release count = %d, want 1", releaseCount)
 	}

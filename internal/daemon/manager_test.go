@@ -25,19 +25,44 @@ import (
 )
 
 type fakeRunner struct {
-	index      func(context.Context, string, model.IndexConfig, func(indexer.Progress)) (indexer.Result, error)
-	indexFiles func(context.Context, string, []string, model.IndexConfig, func(indexer.Progress)) (indexer.Result, error)
-	indexOne   func(context.Context, string, string, model.IndexConfig) (indexer.OneFileResult, error)
+	index func(context.Context, string, model.IndexConfig, func(indexer.Progress)) (
+		indexer.Result,
+		error,
+	)
+	indexFiles func(context.Context, string, []string, model.IndexConfig, func(indexer.Progress)) (
+		indexer.Result,
+		error,
+	)
+	indexOne func(context.Context, string, string, model.IndexConfig) (
+		indexer.OneFileResult,
+		error,
+	)
 }
 
-func (runner fakeRunner) Index(ctx context.Context, _ *indexability.Resolver, _ string, root string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
+func (runner fakeRunner) Index(
+	ctx context.Context,
+	_ *indexability.Resolver,
+	_ string,
+	root string,
+	indexConfig model.IndexConfig,
+	progress func(indexer.Progress),
+) (indexer.Result, error) {
 	return runner.index(ctx, root, indexConfig, progress)
 }
 
-func (runner fakeRunner) IndexFiles(ctx context.Context, _ *indexability.Resolver, _ string, root string, relativePaths []string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
+func (runner fakeRunner) IndexFiles(
+	ctx context.Context,
+	_ *indexability.Resolver,
+	_ string,
+	root string,
+	relativePaths []string,
+	indexConfig model.IndexConfig,
+	progress func(indexer.Progress),
+) (indexer.Result, error) {
 	if runner.indexFiles != nil {
 		return runner.indexFiles(ctx, root, relativePaths, indexConfig, progress)
 	}
+
 	return runner.index(ctx, root, indexConfig, progress)
 }
 
@@ -48,11 +73,26 @@ func (runner fakeRunner) IndexFiles(ctx context.Context, _ *indexability.Resolve
 // snapshot, which keeps a follow-up sync from re-detecting unchanged files.
 var fakeRunnerRealIndexer = indexer.NewRunner()
 
-func (runner fakeRunner) IndexOne(ctx context.Context, resolver *indexability.Resolver, codebaseID string, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
+func (runner fakeRunner) IndexOne(
+	ctx context.Context,
+	resolver *indexability.Resolver,
+	codebaseID string,
+	root string,
+	relativePath string,
+	indexConfig model.IndexConfig,
+) (indexer.OneFileResult, error) {
 	if runner.indexOne != nil {
 		return runner.indexOne(ctx, root, relativePath, indexConfig)
 	}
-	return fakeRunnerRealIndexer.IndexOne(ctx, resolver, codebaseID, root, relativePath, indexConfig)
+
+	return fakeRunnerRealIndexer.IndexOne(
+		ctx,
+		resolver,
+		codebaseID,
+		root,
+		relativePath,
+		indexConfig,
+	)
 }
 
 func TestGetIndexNotTrackedReturnsFriendlyStatus(t *testing.T) {
@@ -65,12 +105,15 @@ func TestGetIndexNotTrackedReturnsFriendlyStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIndex returned error: %v", err)
 	}
+
 	if response.GetTracked() {
 		t.Fatal("GetIndex unexpectedly reported a tracked codebase")
 	}
+
 	if !strings.Contains(response.GetDisplayText(), "is not indexed") {
 		t.Fatalf("GetIndex returned unexpected text: %q", response.GetDisplayText())
 	}
+
 	if strings.Contains(response.GetDisplayText(), "no such file or directory") {
 		t.Fatalf("GetIndex added a path error for an existing path: %q", response.GetDisplayText())
 	}
@@ -85,34 +128,48 @@ func TestGetIndexMissingPathRawErrorIsMCPOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvalSymlinks returned error for repository path: %v", err)
 	}
+
 	missingPath := filepath.Join(canonicalRepoPath, "missing")
 	_, pathErr := filepath.EvalSymlinks(missingPath)
 	if !errors.Is(pathErr, os.ErrNotExist) {
 		t.Fatalf("EvalSymlinks returned error %v, want missing-path error", pathErr)
 	}
+
 	wantMCPStatus := "❌ Codebase '" + missingPath +
 		"' is not indexed. Please use the index_codebase tool to index it first.\n" +
 		pathErr.Error() + "\n" +
 		"🛈 Path is not under any tracked codebase."
 
-	mcpResponse, err := server.GetIndex(context.Background(), &pb.GetIndexRequest{
-		Path:   missingPath,
-		Client: &pb.ClientInfo{Name: "mcp"},
-	})
+	mcpResponse, err := server.GetIndex(
+		context.Background(),
+		&pb.GetIndexRequest{
+			Path:   missingPath,
+			Client: &pb.ClientInfo{Name: "mcp"},
+		},
+	)
 	if err != nil {
 		t.Fatalf("MCP GetIndex returned error: %v", err)
 	}
+
 	if !strings.Contains(mcpResponse.GetDisplayText(), wantMCPStatus) {
-		t.Fatalf("MCP GetIndex returned text %q, want contiguous status %q", mcpResponse.GetDisplayText(), wantMCPStatus)
+		t.Fatalf(
+			"MCP GetIndex returned text %q, want contiguous status %q",
+			mcpResponse.GetDisplayText(),
+			wantMCPStatus,
+		)
 	}
 
-	otherResponse, err := server.GetIndex(context.Background(), &pb.GetIndexRequest{
-		Path:   missingPath,
-		Client: &pb.ClientInfo{Name: "test"},
-	})
+	otherResponse, err := server.GetIndex(
+		context.Background(),
+		&pb.GetIndexRequest{
+			Path:   missingPath,
+			Client: &pb.ClientInfo{Name: "test"},
+		},
+	)
 	if err != nil {
 		t.Fatalf("non-MCP GetIndex returned error: %v", err)
 	}
+
 	if strings.Contains(otherResponse.GetDisplayText(), "lstat "+missingPath) {
 		t.Fatalf("non-MCP GetIndex returned the raw path error: %q", otherResponse.GetDisplayText())
 	}
@@ -123,7 +180,17 @@ func TestStartIndexStoresFullyQualifiedEmbeddingConfig(t *testing.T) {
 
 	manager, _, repoPath := newTestManager(t)
 	manager.runner = fakeRunner{
-		index: func(ctx context.Context, root string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
+		index: func(
+			ctx context.Context,
+			root string,
+			indexConfig model.IndexConfig,
+			progress func(
+				indexer.Progress,
+			),
+		) (
+			indexer.Result,
+			error,
+		) {
 			return indexer.Result{IndexedFiles: 1, TotalChunks: 1}, nil
 		},
 	}
@@ -139,17 +206,21 @@ func TestStartIndexStoresFullyQualifiedEmbeddingConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	if codebase.EffectiveConfig.EmbeddingProvider != "OpenAI" {
 		t.Fatalf("EmbeddingProvider=%q", codebase.EffectiveConfig.EmbeddingProvider)
 	}
+
 	if codebase.EffectiveConfig.EmbeddingModel != "nvidia/NV-EmbedCode-7b-v1" {
 		t.Fatalf("EmbeddingModel=%q", codebase.EffectiveConfig.EmbeddingModel)
 	}
+
 	if codebase.EffectiveConfig.VectorBackend != "milvus" {
 		t.Fatalf("VectorBackend=%q", codebase.EffectiveConfig.VectorBackend)
 	}
+
 	if !codebase.EffectiveConfig.Hybrid {
 		t.Fatal("Hybrid was false")
 	}
@@ -166,26 +237,46 @@ func TestClearIndexRemovesRegistryAndChunkCache(t *testing.T) {
 	}
 	manager.semantic = semanticDouble
 	manager.runner = fakeRunner{
-		index: func(ctx context.Context, root string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
+		index: func(
+			ctx context.Context,
+			root string,
+			indexConfig model.IndexConfig,
+			progress func(
+				indexer.Progress,
+			),
+		) (
+			indexer.Result,
+			error,
+		) {
 			return indexer.Result{
 				IndexedFiles: 1,
 				TotalChunks:  1,
-				Chunks: []model.StoredChunk{{
-					Content:       "func SearchableThing() {}\n",
-					RelativePath:  "main.go",
-					StartLine:     1,
-					EndLine:       1,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       "func SearchableThing() {}\n",
+						RelativePath:  "main.go",
+						StartLine:     1,
+						EndLine:       1,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 			}, nil
 		},
 	}
 
-	_, codebase, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
+	_, codebase, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		false,
+		emptyAdmissionBudget,
+	)
 	if err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	chunkPath := filepath.Join(cfg.ChunksDir, codebase.ID+".json")
@@ -194,9 +285,11 @@ func TestClearIndexRemovesRegistryAndChunkCache(t *testing.T) {
 	if _, err := os.Stat(chunkPath); err != nil {
 		t.Fatalf("chunk file missing before clear: %v", err)
 	}
+
 	if _, err := os.Stat(merklePath); err != nil {
 		t.Fatalf("merkle file missing before clear: %v", err)
 	}
+
 	stagingCheckpoint := merkle.Snapshot{
 		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
 		Files:        map[string]string{"main.go": "stale-checkpoint"},
@@ -204,9 +297,11 @@ func TestClearIndexRemovesRegistryAndChunkCache(t *testing.T) {
 	if err := merkle.WriteSnapshot(stagingMerklePath, stagingCheckpoint); err != nil {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
+
 	if _, err := os.Stat(stagingMerklePath); err != nil {
 		t.Fatalf("staging merkle file missing before clear: %v", err)
 	}
+
 	stagingDropsBeforeClear := len(semanticDouble.droppedStaging)
 
 	if _, err := manager.ClearIndex(context.Background(), repoPath, testClientInfo()); err != nil {
@@ -216,23 +311,39 @@ func TestClearIndexRemovesRegistryAndChunkCache(t *testing.T) {
 	if _, err := os.Stat(chunkPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("chunk file still present after clear: %v", err)
 	}
+
 	if _, err := os.Stat(merklePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("merkle file still present after clear: %v", err)
 	}
+
 	if _, err := os.Stat(stagingMerklePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("staging merkle file still present after clear: %v", err)
 	}
+
 	if len(semanticDouble.dropped) != 1 || semanticDouble.dropped[0] != codebase.CanonicalPath {
-		t.Fatalf("semantic drop calls = %v, want [%s]", semanticDouble.dropped, codebase.CanonicalPath)
+		t.Fatalf(
+			"semantic drop calls = %v, want [%s]",
+			semanticDouble.dropped,
+			codebase.CanonicalPath,
+		)
 	}
-	if len(semanticDouble.droppedStaging) != stagingDropsBeforeClear+1 || semanticDouble.droppedStaging[len(semanticDouble.droppedStaging)-1] != codebase.CanonicalPath {
-		t.Fatalf("semantic staging drop calls = %v, want one additional clear-time drop for %s", semanticDouble.droppedStaging, codebase.CanonicalPath)
+
+	if len(semanticDouble.droppedStaging) != stagingDropsBeforeClear+1 ||
+		semanticDouble.droppedStaging[len(
+			semanticDouble.droppedStaging,
+		)-1] != codebase.CanonicalPath {
+		t.Fatalf(
+			"semantic staging drop calls = %v, want one additional clear-time drop for %s",
+			semanticDouble.droppedStaging,
+			codebase.CanonicalPath,
+		)
 	}
 
 	_, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil {
 		t.Fatalf("GetIndex returned error: %v", err)
 	}
+
 	if found {
 		t.Fatal("GetIndex still found a codebase after clear")
 	}
@@ -241,6 +352,7 @@ func TestClearIndexRemovesRegistryAndChunkCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadRegistry returned error: %v", err)
 	}
+
 	if len(registry.Codebases) != 0 {
 		t.Fatalf("registry still contains %d codebases", len(registry.Codebases))
 	}
@@ -253,16 +365,38 @@ func TestClearIndexCancelsActiveJob(t *testing.T) {
 	started := make(chan struct{})
 	var startOnce sync.Once
 	manager.runner = fakeRunner{
-		indexOne: func(ctx context.Context, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
+		indexOne: func(
+			ctx context.Context,
+			root string,
+			relativePath string,
+			indexConfig model.IndexConfig,
+		) (
+			indexer.OneFileResult,
+			error,
+		) {
 			startOnce.Do(func() { close(started) })
 			<-ctx.Done()
-			return indexer.OneFileResult{Chunks: nil, FileHash: "", Skipped: false, Removed: false}, ctx.Err()
+
+			return indexer.OneFileResult{
+				Chunks:   nil,
+				FileHash: "",
+				Skipped:  false,
+				Removed:  false,
+			}, ctx.Err()
 		},
 	}
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
+	if _, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		false,
+		emptyAdmissionBudget,
+	); err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
+
 	<-started
 
 	if _, err := manager.ClearIndex(context.Background(), repoPath, testClientInfo()); err != nil {
@@ -273,6 +407,7 @@ func TestClearIndexCancelsActiveJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIndex returned error: %v", err)
 	}
+
 	if found {
 		t.Fatal("GetIndex still found a codebase after active clear")
 	}
@@ -286,6 +421,7 @@ func TestCancelActiveJobWithoutHandleFinalizesJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("canonicalizePath: %v", err)
 	}
+
 	codebase := newCodebaseRecord(canonicalPath)
 	job := model.Job{
 		ID:            "job_handleless",
@@ -307,9 +443,11 @@ func TestCancelActiveJobWithoutHandleFinalizesJob(t *testing.T) {
 	if !found {
 		t.Fatal("cancelled handleless job is missing")
 	}
+
 	if cancelled.State != model.JobStateCancelled {
 		t.Fatalf("job state = %q, want cancelled", cancelled.State)
 	}
+
 	manager.mu.Lock()
 	updatedCodebase := manager.codebases[codebase.ID]
 	manager.mu.Unlock()
@@ -331,20 +469,26 @@ func TestForceStartIndexUsesCollectionEvidenceAfterCancellation(t *testing.T) {
 				observedMissingCollection.Store(true)
 				return semantic.CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
 			}
+
 			return semantic.CollectionFacts{Exists: true, Rows: 1, RowsKnown: true}, nil
 		},
 	}
 	manager.runner = fakeRunner{
-		indexOne: func(_ context.Context, _ string, relativePath string, _ model.IndexConfig) (indexer.OneFileResult, error) {
+		indexOne: func(_ context.Context, _ string, relativePath string, _ model.IndexConfig) (
+			indexer.OneFileResult,
+			error,
+		) {
 			return indexer.OneFileResult{
-				Chunks: []model.StoredChunk{{
-					Content:       "package main\n",
-					RelativePath:  relativePath,
-					StartLine:     1,
-					EndLine:       1,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       "package main\n",
+						RelativePath:  relativePath,
+						StartLine:     1,
+						EndLine:       1,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHash: hashText("package main\n"),
 			}, nil
 		},
@@ -353,12 +497,23 @@ func TestForceStartIndexUsesCollectionEvidenceAfterCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath: %v", err)
 	}
+
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	codebase.EffectiveConfig = configuration
 	codebase.CollectionName = "force-reprobe-collection"
-	codebase.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 1, Status: "completed"}
-	active := model.Job{ID: "job-force-reprobe-active", CodebaseID: codebase.ID, CanonicalPath: canonicalPath, State: model.JobStateRunning, Config: configuration}
+	codebase.LastSuccessfulRun = &model.IndexRunSummary{
+		IndexedFiles: 1,
+		TotalChunks:  1,
+		Status:       "completed",
+	}
+	active := model.Job{
+		ID:            "job-force-reprobe-active",
+		CodebaseID:    codebase.ID,
+		CanonicalPath: canonicalPath,
+		State:         model.JobStateRunning,
+		Config:        configuration,
+	}
 	codebase.ActiveJobID = active.ID
 	manager.mu.Lock()
 	manager.codebases[codebase.ID] = codebase
@@ -368,16 +523,26 @@ func TestForceStartIndexUsesCollectionEvidenceAfterCancellation(t *testing.T) {
 		if event.Event == "job_cancelled" {
 			collectionMissing.Store(true)
 		}
+
 		return nil
 	}
 
-	job, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget)
+	job, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		true,
+		emptyAdmissionBudget,
+	)
 	if err != nil {
 		t.Fatalf("StartIndex(force=true): %v", err)
 	}
+
 	if job.ID == "" {
 		t.Fatal("StartIndex(force=true) returned no job")
 	}
+
 	if !observedMissingCollection.Load() {
 		t.Fatal("StartIndex did not re-probe collection state after force cancellation")
 	}
@@ -391,10 +556,23 @@ func TestStartIndexRecordsForceFlagOnJob(t *testing.T) {
 
 	manager, _, repoPath := newTestManager(t)
 	manager.runner = fakeRunner{
-		indexOne: func(_ context.Context, _ string, relativePath string, _ model.IndexConfig) (indexer.OneFileResult, error) {
+		indexOne: func(_ context.Context, _ string, relativePath string, _ model.IndexConfig) (
+			indexer.OneFileResult,
+			error,
+		) {
 			content := "package main\n"
+
 			return indexer.OneFileResult{
-				Chunks:   []model.StoredChunk{{Content: content, RelativePath: relativePath, StartLine: 1, EndLine: 1, Language: "go", FileExtension: ".go"}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       content,
+						RelativePath:  relativePath,
+						StartLine:     1,
+						EndLine:       1,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHash: hashText(content),
 				Skipped:  false,
 				Removed:  false,
@@ -402,22 +580,40 @@ func TestStartIndexRecordsForceFlagOnJob(t *testing.T) {
 		},
 	}
 
-	plainJob, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
+	plainJob, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		false,
+		emptyAdmissionBudget,
+	)
 	if err != nil {
 		t.Fatalf("StartIndex(force=false) returned error: %v", err)
 	}
+
 	if plainJob.Forced {
 		t.Fatalf("StartIndex(force=false) job.Forced = true, want false")
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
-	forcedJob, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget)
+	forcedJob, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		true,
+		emptyAdmissionBudget,
+	)
 	if err != nil {
 		t.Fatalf("StartIndex(force=true) returned error: %v", err)
 	}
+
 	if !forcedJob.Forced {
 		t.Fatalf("StartIndex(force=true) job.Forced = false, want true")
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 }
 
@@ -432,25 +628,47 @@ func TestStartIndexPersistsSkippedFiles(t *testing.T) {
 	// production trigger is non-UTF-8 content). The daemon must persist that
 	// skipped list into LastSuccessfulRun and Doctor must surface the count.
 	for _, name := range []string{"binary.go", "weird.go"} {
-		if err := os.WriteFile(filepath.Join(repoPath, name), []byte("package main\n"), 0o644); err != nil {
+		if err := os.WriteFile(
+			filepath.Join(repoPath, name),
+			[]byte("package main\n"),
+			0o644,
+		); err != nil {
 			t.Fatalf("WriteFile returned error: %v", err)
 		}
 	}
+
 	manager.runner = fakeRunner{
-		indexOne: func(ctx context.Context, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
+		indexOne: func(
+			ctx context.Context,
+			root string,
+			relativePath string,
+			indexConfig model.IndexConfig,
+		) (
+			indexer.OneFileResult,
+			error,
+		) {
 			if relativePath == "binary.go" || relativePath == "weird.go" {
-				return indexer.OneFileResult{Chunks: nil, FileHash: "", Skipped: true, Removed: false}, nil
+				return indexer.OneFileResult{
+					Chunks:   nil,
+					FileHash: "",
+					Skipped:  true,
+					Removed:  false,
+				}, nil
 			}
+
 			content := "package main\n"
+
 			return indexer.OneFileResult{
-				Chunks: []model.StoredChunk{{
-					Content:       content,
-					RelativePath:  relativePath,
-					StartLine:     1,
-					EndLine:       1,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       content,
+						RelativePath:  relativePath,
+						StartLine:     1,
+						EndLine:       1,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHash: hashText(content),
 				Skipped:  false,
 				Removed:  false,
@@ -458,35 +676,52 @@ func TestStartIndexPersistsSkippedFiles(t *testing.T) {
 		},
 	}
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
+	if _, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		false,
+		emptyAdmissionBudget,
+	); err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil {
 		t.Fatalf("GetIndex returned error: %v", err)
 	}
+
 	if !found {
 		t.Fatal("GetIndex did not find the codebase")
 	}
+
 	if codebase.LastSuccessfulRun == nil {
 		t.Fatal("LastSuccessfulRun nil after StartIndex completion")
 	}
+
 	wantSkipped := []string{"binary.go", "weird.go"}
 	if !slices.Equal(codebase.LastSuccessfulRun.SkippedFiles, wantSkipped) {
-		t.Fatalf("LastSuccessfulRun.SkippedFiles = %v, want %v", codebase.LastSuccessfulRun.SkippedFiles, wantSkipped)
+		t.Fatalf(
+			"LastSuccessfulRun.SkippedFiles = %v, want %v",
+			codebase.LastSuccessfulRun.SkippedFiles,
+			wantSkipped,
+		)
 	}
 
 	diagnostics := manager.Doctor(context.Background())
 	wantSuffix := "2 non-UTF-8 files skipped during last indexing run"
 	foundDiagnostic := false
+
 	for _, diagnostic := range diagnostics {
 		if strings.Contains(diagnostic, wantSuffix) {
 			foundDiagnostic = true
 			break
 		}
 	}
+
 	if !foundDiagnostic {
 		t.Fatalf("Doctor diagnostics did not surface skipped-file summary; got %v", diagnostics)
 	}
@@ -499,18 +734,29 @@ func TestStartIndexForceDeduplicatesAgainstInFlightJob(t *testing.T) {
 	release := make(chan struct{})
 	var indexCalls int32
 	manager.runner = fakeRunner{
-		indexOne: func(ctx context.Context, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
+		indexOne: func(
+			ctx context.Context,
+			root string,
+			relativePath string,
+			indexConfig model.IndexConfig,
+		) (
+			indexer.OneFileResult,
+			error,
+		) {
 			atomic.AddInt32(&indexCalls, 1)
 			<-release
+
 			return indexer.OneFileResult{
-				Chunks: []model.StoredChunk{{
-					Content:       "package main\n",
-					RelativePath:  relativePath,
-					StartLine:     1,
-					EndLine:       1,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       "package main\n",
+						RelativePath:  relativePath,
+						StartLine:     1,
+						EndLine:       1,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHash: hashText("package main\n"),
 				Skipped:  false,
 				Removed:  false,
@@ -518,10 +764,18 @@ func TestStartIndexForceDeduplicatesAgainstInFlightJob(t *testing.T) {
 		},
 	}
 
-	firstJob, _, deduplicated, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget)
+	firstJob, _, deduplicated, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		true,
+		emptyAdmissionBudget,
+	)
 	if err != nil {
 		t.Fatalf("first force StartIndex returned error: %v", err)
 	}
+
 	if deduplicated {
 		t.Fatal("first request should not be a dedup hit")
 	}
@@ -535,24 +789,46 @@ func TestStartIndexForceDeduplicatesAgainstInFlightJob(t *testing.T) {
 	results := make([]startResult, concurrentForceCallers)
 	var wg sync.WaitGroup
 	wg.Add(concurrentForceCallers)
+
 	for i := 0; i < concurrentForceCallers; i++ {
 		go func(slot int) {
 			defer wg.Done()
-			job, _, dedup, _, callErr := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget)
+			job, _, dedup, _, callErr := manager.StartIndex(
+				context.Background(),
+				repoPath,
+				testClientInfo(),
+				defaultIndexConfig(),
+				true,
+				emptyAdmissionBudget,
+			)
 			results[slot] = startResult{job: job, deduplicated: dedup, err: callErr}
-		}(i)
+		}(
+			i,
+		)
 	}
+
 	wg.Wait()
 
 	for slot, outcome := range results {
 		if outcome.err != nil {
 			t.Fatalf("concurrent force StartIndex %d returned error: %v", slot, outcome.err)
 		}
+
 		if !outcome.deduplicated {
-			t.Fatalf("concurrent force StartIndex %d should have been deduplicated; got new job %s", slot, outcome.job.ID)
+			t.Fatalf(
+				"concurrent force StartIndex %d should have been deduplicated; got new job %s",
+				slot,
+				outcome.job.ID,
+			)
 		}
+
 		if outcome.job.ID != firstJob.ID {
-			t.Fatalf("concurrent force StartIndex %d returned job %s want %s", slot, outcome.job.ID, firstJob.ID)
+			t.Fatalf(
+				"concurrent force StartIndex %d returned job %s want %s",
+				slot,
+				outcome.job.ID,
+				firstJob.ID,
+			)
 		}
 	}
 
@@ -561,7 +837,11 @@ func TestStartIndexForceDeduplicatesAgainstInFlightJob(t *testing.T) {
 
 	calls := atomic.LoadInt32(&indexCalls)
 	if calls != 1 {
-		t.Fatalf("indexer ran %d times; want exactly 1 (idempotent across %d force callers)", calls, concurrentForceCallers+1)
+		t.Fatalf(
+			"indexer ran %d times; want exactly 1 (idempotent across %d force callers)",
+			calls,
+			concurrentForceCallers+1,
+		)
 	}
 }
 
@@ -580,33 +860,69 @@ func TestStartIndexStreamingReindexUpgradesSplitterInPlace(t *testing.T) {
 	var observedFiles []string
 	var fileMu sync.Mutex
 	manager.runner = fakeRunner{
-		index: func(ctx context.Context, root string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
+		index: func(
+			ctx context.Context,
+			root string,
+			indexConfig model.IndexConfig,
+			progress func(
+				indexer.Progress,
+			),
+		) (
+			indexer.Result,
+			error,
+		) {
 			indexCalls.Add(1)
 			content := "package main\n"
+
 			return indexer.Result{
 				IndexedFiles: 1,
 				TotalChunks:  1,
-				Chunks: []model.StoredChunk{{
-					Content:       content,
-					RelativePath:  "main.go",
-					StartLine:     1,
-					EndLine:       1,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       content,
+						RelativePath:  "main.go",
+						StartLine:     1,
+						EndLine:       1,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHashes: map[string]string{"main.go": hashText(content)},
 			}, nil
 		},
-		indexOne: func(ctx context.Context, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
+		indexOne: func(
+			ctx context.Context,
+			root string,
+			relativePath string,
+			indexConfig model.IndexConfig,
+		) (
+			indexer.OneFileResult,
+			error,
+		) {
 			indexFilesCalls.Add(1)
 			fileMu.Lock()
 			observedFiles = append(observedFiles, relativePath)
 			fileMu.Unlock()
 			content := "package main\nfunc main() {}\n"
+
 			return indexer.OneFileResult{
 				Chunks: []model.StoredChunk{
-					{Content: content, RelativePath: relativePath, StartLine: 1, EndLine: 1, Language: "go", FileExtension: ".go"},
-					{Content: content, RelativePath: relativePath, StartLine: 2, EndLine: 2, Language: "go", FileExtension: ".go"},
+					{
+						Content:       content,
+						RelativePath:  relativePath,
+						StartLine:     1,
+						EndLine:       1,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+					{
+						Content:       content,
+						RelativePath:  relativePath,
+						StartLine:     2,
+						EndLine:       2,
+						Language:      "go",
+						FileExtension: ".go",
+					},
 				},
 				FileHash: hashText(content),
 				Skipped:  false,
@@ -616,28 +932,55 @@ func TestStartIndexStreamingReindexUpgradesSplitterInPlace(t *testing.T) {
 
 	initialConfig := defaultIndexConfig()
 	initialConfig.SplitterType = "langchain"
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), initialConfig, false, emptyAdmissionBudget); err != nil {
+	if _, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		initialConfig,
+		false,
+		emptyAdmissionBudget,
+	); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	upgradedConfig := defaultIndexConfig()
 	upgradedConfig.SplitterType = "ast"
-	upgradeJob, _, deduplicated, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), upgradedConfig, false, emptyAdmissionBudget)
+	upgradeJob, _, deduplicated, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		upgradedConfig,
+		false,
+		emptyAdmissionBudget,
+	)
 	if err != nil {
 		t.Fatalf("upgrade StartIndex returned error: %v", err)
 	}
+
 	if deduplicated {
-		t.Fatal("upgrade call was deduplicated; agent-driven splitter upgrade should queue a new job")
+		t.Fatal(
+			"upgrade call was deduplicated; agent-driven splitter upgrade should queue a new job",
+		)
 	}
+
 	if jobOperation(upgradeJob.Operation) != jobOperationStreamingReindex {
-		t.Fatalf("upgrade job Operation = %q, want %q", upgradeJob.Operation, jobOperationStreamingReindex)
+		t.Fatalf(
+			"upgrade job Operation = %q, want %q",
+			upgradeJob.Operation,
+			jobOperationStreamingReindex,
+		)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	if indexFilesCalls.Load() == 0 {
-		t.Fatal("IndexOne was never called; streaming reindex should walk the codebase file by file")
+		t.Fatal(
+			"IndexOne was never called; streaming reindex should walk the codebase file by file",
+		)
 	}
+
 	fileMu.Lock()
 	finalObservedFiles := append([]string{}, observedFiles...)
 	fileMu.Unlock()
@@ -649,11 +992,17 @@ func TestStartIndexStreamingReindexUpgradesSplitterInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIndex returned error: %v", err)
 	}
+
 	if !found {
 		t.Fatal("GetIndex did not find the upgraded codebase")
 	}
+
 	if codebase.EffectiveConfig.SplitterType != "ast" {
-		t.Fatalf("EffectiveConfig.SplitterType = %q after streaming reindex, want %q", codebase.EffectiveConfig.SplitterType, "ast")
+		t.Fatalf(
+			"EffectiveConfig.SplitterType = %q after streaming reindex, want %q",
+			codebase.EffectiveConfig.SplitterType,
+			"ast",
+		)
 	}
 }
 
@@ -665,6 +1014,7 @@ func TestRunDeltaSyncCheckpointsPerFile(t *testing.T) {
 	t.Parallel()
 
 	manager, cfg, repoPath := newTestManager(t)
+
 	extras := []string{"a.go", "b.go", "c.go", "d.go"}
 	for _, name := range extras {
 		path := filepath.Join(repoPath, name)
@@ -675,33 +1025,56 @@ func TestRunDeltaSyncCheckpointsPerFile(t *testing.T) {
 
 	// The initial index uses the real per-file indexer, establishing a
 	// checkpoint whose hashes match disk.
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
+	if _, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		false,
+		emptyAdmissionBudget,
+	); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	// Change every file so the streaming reindex re-embeds all five and
 	// checkpoints after each.
 	for _, name := range []string{"main.go", "a.go", "b.go", "c.go", "d.go"} {
-		if err := os.WriteFile(filepath.Join(repoPath, name), []byte("package main\n// "+name+" edited\n"), 0o644); err != nil {
+		if err := os.WriteFile(
+			filepath.Join(repoPath, name),
+			[]byte("package main\n// "+name+" edited\n"),
+			0o644,
+		); err != nil {
 			t.Fatalf("WriteFile returned error: %v", err)
 		}
 	}
 
 	embedCalls := atomic.Int32{}
 	manager.runner = fakeRunner{
-		indexOne: func(ctx context.Context, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
+		indexOne: func(
+			ctx context.Context,
+			root string,
+			relativePath string,
+			indexConfig model.IndexConfig,
+		) (
+			indexer.OneFileResult,
+			error,
+		) {
 			embedCalls.Add(1)
 			content := "package main\n// " + relativePath + " edited\n"
+
 			return indexer.OneFileResult{
-				Chunks: []model.StoredChunk{{
-					Content:       content,
-					RelativePath:  relativePath,
-					StartLine:     1,
-					EndLine:       2,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       content,
+						RelativePath:  relativePath,
+						StartLine:     1,
+						EndLine:       2,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHash: hashText(content),
 				Skipped:  false,
 				Removed:  false,
@@ -710,28 +1083,44 @@ func TestRunDeltaSyncCheckpointsPerFile(t *testing.T) {
 	}
 
 	// Force a streaming reindex by passing force=true (matching config).
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget); err != nil {
+	if _, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		true,
+		emptyAdmissionBudget,
+	); err != nil {
 		t.Fatalf("streaming StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil || !found {
 		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
 	}
+
 	snapshotPath := filepath.Join(cfg.MerkleDir, codebase.ID+".json")
 	snapshot, err := merkle.ReadSnapshot(snapshotPath)
 	if err != nil {
 		t.Fatalf("ReadSnapshot returned error: %v", err)
 	}
+
 	if snapshot.ConfigDigest != codebase.EffectiveConfig.IgnoreDigest {
-		t.Fatalf("snapshot ConfigDigest=%q want=%q", snapshot.ConfigDigest, codebase.EffectiveConfig.IgnoreDigest)
+		t.Fatalf(
+			"snapshot ConfigDigest=%q want=%q",
+			snapshot.ConfigDigest,
+			codebase.EffectiveConfig.IgnoreDigest,
+		)
 	}
+
 	for _, name := range []string{"main.go", "a.go", "b.go", "c.go", "d.go"} {
 		if _, present := snapshot.Files[name]; !present {
 			t.Fatalf("snapshot missing %s; have %v", name, snapshot.Files)
 		}
 	}
+
 	if got := embedCalls.Load(); got != 5 {
 		t.Fatalf("indexOne calls = %d, want 5", got)
 	}
@@ -746,6 +1135,7 @@ func TestRunDeltaSyncReportsCodebaseTotalsAfterSync(t *testing.T) {
 	t.Parallel()
 
 	manager, cfg, repoPath := newTestManager(t)
+
 	extras := []string{"a.go", "b.go", "c.go", "d.go"}
 	for _, name := range extras {
 		path := filepath.Join(repoPath, name)
@@ -762,45 +1152,80 @@ func TestRunDeltaSyncReportsCodebaseTotalsAfterSync(t *testing.T) {
 		"d.go":    hashText("package main\n// d.go\n"),
 	}
 	manager.runner = fakeRunner{
-		index: func(ctx context.Context, root string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
+		index: func(
+			ctx context.Context,
+			root string,
+			indexConfig model.IndexConfig,
+			progress func(
+				indexer.Progress,
+			),
+		) (
+			indexer.Result,
+			error,
+		) {
 			return indexer.Result{
 				IndexedFiles: 5,
 				TotalChunks:  5,
-				Chunks: []model.StoredChunk{{
-					Content:       "package main\n",
-					RelativePath:  "main.go",
-					StartLine:     1,
-					EndLine:       1,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       "package main\n",
+						RelativePath:  "main.go",
+						StartLine:     1,
+						EndLine:       1,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHashes: initialHashes,
 			}, nil
 		},
-		indexOne: func(ctx context.Context, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
+		indexOne: func(
+			ctx context.Context,
+			root string,
+			relativePath string,
+			indexConfig model.IndexConfig,
+		) (
+			indexer.OneFileResult,
+			error,
+		) {
 			content := "package main\n// " + relativePath + " edited\n"
+
 			return indexer.OneFileResult{
-				Chunks: []model.StoredChunk{{
-					Content:       content,
-					RelativePath:  relativePath,
-					StartLine:     1,
-					EndLine:       2,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       content,
+						RelativePath:  relativePath,
+						StartLine:     1,
+						EndLine:       2,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHash: hashText(content),
 				Skipped:  false,
 			}, nil
 		},
 	}
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
+	if _, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		false,
+		emptyAdmissionBudget,
+	); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	mainPath := filepath.Join(repoPath, "main.go")
-	if err := os.WriteFile(mainPath, []byte("package main\nfunc Edited() {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(
+		mainPath,
+		[]byte("package main\nfunc Edited() {}\n"),
+		0o644,
+	); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
@@ -812,11 +1237,16 @@ func TestRunDeltaSyncReportsCodebaseTotalsAfterSync(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
 	}
+
 	if codebase.LastSuccessfulRun == nil {
 		t.Fatal("LastSuccessfulRun is nil after sync")
 	}
+
 	if codebase.LastSuccessfulRun.IndexedFiles != 5 {
-		t.Fatalf("LastSuccessfulRun.IndexedFiles = %d, want 5 (codebase total, not delta)", codebase.LastSuccessfulRun.IndexedFiles)
+		t.Fatalf(
+			"LastSuccessfulRun.IndexedFiles = %d, want 5 (codebase total, not delta)",
+			codebase.LastSuccessfulRun.IndexedFiles,
+		)
 	}
 }
 
@@ -824,6 +1254,7 @@ func TestRunDeltaSyncPreservesWholeCodebaseTotalBytesAfterSmallEdit(t *testing.T
 	t.Parallel()
 
 	manager, _, repoPath := newTestManager(t)
+
 	extras := []string{"a.go", "b.go", "c.go", "d.go"}
 	for _, name := range extras {
 		path := filepath.Join(repoPath, name)
@@ -833,26 +1264,38 @@ func TestRunDeltaSyncPreservesWholeCodebaseTotalBytesAfterSmallEdit(t *testing.T
 		}
 	}
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
+	if _, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		false,
+		emptyAdmissionBudget,
+	); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	initialCodebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil || !found {
 		t.Fatalf("initial GetIndex returned err=%v found=%v", err, found)
 	}
+
 	if initialCodebase.LastSuccessfulRun == nil {
 		t.Fatal("initial LastSuccessfulRun is nil")
 	}
+
 	initialTotalBytes := initialCodebase.LastSuccessfulRun.TotalBytes
 	if initialTotalBytes == 0 {
 		t.Fatal("initial LastSuccessfulRun.TotalBytes is 0; test requires a non-zero byte total")
 	}
+
 	initialChunks, err := store.ReadChunks(manager.chunkPath(initialCodebase.ID))
 	if err != nil {
 		t.Fatalf("ReadChunks returned error: %v", err)
 	}
+
 	initialMainBytes := storedChunkBytesForPath(initialChunks, "main.go")
 	if initialMainBytes == 0 {
 		t.Fatal("initial chunk cache has no bytes for main.go")
@@ -860,58 +1303,92 @@ func TestRunDeltaSyncPreservesWholeCodebaseTotalBytesAfterSmallEdit(t *testing.T
 
 	changedContent := "package main\nfunc Edited() {}\n"
 	manager.runner = fakeRunner{
-		indexOne: func(ctx context.Context, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
+		indexOne: func(
+			ctx context.Context,
+			root string,
+			relativePath string,
+			indexConfig model.IndexConfig,
+		) (
+			indexer.OneFileResult,
+			error,
+		) {
 			if relativePath != "main.go" {
 				t.Errorf("IndexOne called for %s, want only main.go", relativePath)
 			}
+
 			return indexer.OneFileResult{
-				Chunks: []model.StoredChunk{{
-					Content:       changedContent,
-					RelativePath:  relativePath,
-					StartLine:     1,
-					EndLine:       2,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       changedContent,
+						RelativePath:  relativePath,
+						StartLine:     1,
+						EndLine:       2,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHash: hashText(changedContent),
 				Skipped:  false,
 				Removed:  false,
 			}, nil
 		},
 	}
-	if err := os.WriteFile(filepath.Join(repoPath, "main.go"), []byte(changedContent), 0o644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(repoPath, "main.go"),
+		[]byte(changedContent),
+		0o644,
+	); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
-	if _, _, _, err := manager.SyncIndex(context.Background(), repoPath, model.ClientInfo{Name: "test-sync"}); err != nil {
+	if _, _, _, err := manager.SyncIndex(
+		context.Background(),
+		repoPath,
+		model.ClientInfo{Name: "test-sync"},
+	); err != nil {
 		t.Fatalf("SyncIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil || !found {
 		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
 	}
+
 	if codebase.LastSuccessfulRun == nil {
 		t.Fatal("LastSuccessfulRun is nil after sync")
 	}
+
 	expectedTotalBytes := initialTotalBytes - initialMainBytes + int64(len(changedContent))
 	if codebase.LastSuccessfulRun.TotalBytes != expectedTotalBytes {
-		t.Fatalf("LastSuccessfulRun.TotalBytes = %d, want %d (whole codebase total after one-file edit)", codebase.LastSuccessfulRun.TotalBytes, expectedTotalBytes)
+		t.Fatalf(
+			"LastSuccessfulRun.TotalBytes = %d, want %d (whole codebase total after one-file edit)",
+			codebase.LastSuccessfulRun.TotalBytes,
+			expectedTotalBytes,
+		)
 	}
+
 	if codebase.LastSuccessfulRun.TotalBytes < initialTotalBytes {
-		t.Fatalf("LastSuccessfulRun.TotalBytes shrank from %d to %d after a small edit", initialTotalBytes, codebase.LastSuccessfulRun.TotalBytes)
+		t.Fatalf(
+			"LastSuccessfulRun.TotalBytes shrank from %d to %d after a small edit",
+			initialTotalBytes,
+			codebase.LastSuccessfulRun.TotalBytes,
+		)
 	}
 }
 
 func storedChunkBytesForPath(chunks []model.StoredChunk, relativePath string) int64 {
 	var total int64
+
 	for _, chunk := range chunks {
 		if chunk.RelativePath != relativePath {
 			continue
 		}
+
 		total += int64(len(chunk.Content))
 	}
+
 	return total
 }
 
@@ -924,6 +1401,7 @@ func TestRunDeltaSyncConvergesDeletedFileToRemoval(t *testing.T) {
 	t.Parallel()
 
 	manager, cfg, repoPath := newTestManager(t)
+
 	extras := []string{"a.go", "b.go", "c.go", "d.go"}
 	for _, name := range extras {
 		path := filepath.Join(repoPath, name)
@@ -934,20 +1412,46 @@ func TestRunDeltaSyncConvergesDeletedFileToRemoval(t *testing.T) {
 
 	// The initial index uses the real per-file indexer so the checkpoint records
 	// all five files with hashes that match disk.
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
+	if _, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		false,
+		emptyAdmissionBudget,
+	); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	// Change a.go on disk so the next sync classifies it as modified and runs
 	// its converge task. The leaf below then reports the changed file absent,
 	// exercising the removal path; the four unchanged files are skipped.
-	if err := os.WriteFile(filepath.Join(repoPath, "a.go"), []byte("package main\n// a.go changed\n"), 0o644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(repoPath, "a.go"),
+		[]byte("package main\n// a.go changed\n"),
+		0o644,
+	); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
+
 	manager.runner = fakeRunner{
-		indexOne: func(ctx context.Context, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
-			return indexer.OneFileResult{Chunks: nil, FileHash: "", Skipped: false, Removed: true}, nil
+		indexOne: func(
+			ctx context.Context,
+			root string,
+			relativePath string,
+			indexConfig model.IndexConfig,
+		) (
+			indexer.OneFileResult,
+			error,
+		) {
+			return indexer.OneFileResult{
+				Chunks:   nil,
+				FileHash: "",
+				Skipped:  false,
+				Removed:  true,
+			}, nil
 		},
 	}
 
@@ -959,20 +1463,31 @@ func TestRunDeltaSyncConvergesDeletedFileToRemoval(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
 	}
+
 	if codebase.LastFailedRun != nil {
-		t.Fatalf("LastFailedRun = %+v, want nil; an absent file must not fail the job", codebase.LastFailedRun)
+		t.Fatalf(
+			"LastFailedRun = %+v, want nil; an absent file must not fail the job",
+			codebase.LastFailedRun,
+		)
 	}
+
 	snapshotPath := filepath.Join(cfg.MerkleDir, codebase.ID+".json")
 	snapshot, err := merkle.ReadSnapshot(snapshotPath)
 	if err != nil {
 		t.Fatalf("ReadSnapshot returned error: %v", err)
 	}
+
 	if _, present := snapshot.Files["a.go"]; present {
 		t.Fatalf("snapshot still lists a.go after removal; have %v", snapshot.Files)
 	}
+
 	for _, name := range []string{"main.go", "b.go", "c.go", "d.go"} {
 		if _, present := snapshot.Files[name]; !present {
-			t.Fatalf("snapshot dropped %s; a removal must not affect other files; have %v", name, snapshot.Files)
+			t.Fatalf(
+				"snapshot dropped %s; a removal must not affect other files; have %v",
+				name,
+				snapshot.Files,
+			)
 		}
 	}
 }
@@ -985,6 +1500,7 @@ func TestRunDeltaSyncEmptyDiffPreservesCodebaseTotals(t *testing.T) {
 	t.Parallel()
 
 	manager, _, repoPath := newTestManager(t)
+
 	extras := []string{"a.go", "b.go", "c.go", "d.go"}
 	for _, name := range extras {
 		path := filepath.Join(repoPath, name)
@@ -995,17 +1511,27 @@ func TestRunDeltaSyncEmptyDiffPreservesCodebaseTotals(t *testing.T) {
 
 	// The initial index uses the real per-file indexer so the checkpoint hashes
 	// match disk; a follow-up sync with no changes then yields an empty diff.
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
+	if _, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		false,
+		emptyAdmissionBudget,
+	); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 	initialCodebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil || !found {
 		t.Fatalf("initial GetIndex returned err=%v found=%v", err, found)
 	}
+
 	if initialCodebase.LastSuccessfulRun == nil {
 		t.Fatal("initial LastSuccessfulRun is nil")
 	}
+
 	initialTotalBytes := initialCodebase.LastSuccessfulRun.TotalBytes
 	if initialTotalBytes == 0 {
 		t.Fatal("initial LastSuccessfulRun.TotalBytes is 0; test requires a non-zero byte total")
@@ -1014,32 +1540,61 @@ func TestRunDeltaSyncEmptyDiffPreservesCodebaseTotals(t *testing.T) {
 	// Any per-file embed on the unchanged codebase is a bug: the empty-diff fast
 	// path must skip every file.
 	manager.runner = fakeRunner{
-		indexOne: func(ctx context.Context, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
+		indexOne: func(
+			ctx context.Context,
+			root string,
+			relativePath string,
+			indexConfig model.IndexConfig,
+		) (
+			indexer.OneFileResult,
+			error,
+		) {
 			t.Errorf("indexOne should not run on empty-diff sync; got %s", relativePath)
-			return indexer.OneFileResult{Chunks: nil, FileHash: "", Skipped: true, Removed: false}, nil
+
+			return indexer.OneFileResult{
+				Chunks:   nil,
+				FileHash: "",
+				Skipped:  true,
+				Removed:  false,
+			}, nil
 		},
 	}
 
 	// Call SyncIndex directly so the planSyncDiff empty-diff fast path
 	// runs even though the background-sync pre-check would have skipped
 	// this unchanged codebase.
-	if _, _, _, err := manager.SyncIndex(context.Background(), repoPath, model.ClientInfo{Name: "test-sync"}); err != nil {
+	if _, _, _, err := manager.SyncIndex(
+		context.Background(),
+		repoPath,
+		model.ClientInfo{Name: "test-sync"},
+	); err != nil {
 		t.Fatalf("SyncIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil || !found {
 		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
 	}
+
 	if codebase.LastSuccessfulRun == nil {
 		t.Fatal("LastSuccessfulRun is nil after no-op sync")
 	}
+
 	if codebase.LastSuccessfulRun.IndexedFiles != 5 {
-		t.Fatalf("LastSuccessfulRun.IndexedFiles = %d, want 5 (empty-diff should preserve totals)", codebase.LastSuccessfulRun.IndexedFiles)
+		t.Fatalf(
+			"LastSuccessfulRun.IndexedFiles = %d, want 5 (empty-diff should preserve totals)",
+			codebase.LastSuccessfulRun.IndexedFiles,
+		)
 	}
+
 	if codebase.LastSuccessfulRun.TotalBytes != initialTotalBytes {
-		t.Fatalf("LastSuccessfulRun.TotalBytes = %d, want %d (empty-diff should preserve totals)", codebase.LastSuccessfulRun.TotalBytes, initialTotalBytes)
+		t.Fatalf(
+			"LastSuccessfulRun.TotalBytes = %d, want %d (empty-diff should preserve totals)",
+			codebase.LastSuccessfulRun.TotalBytes,
+			initialTotalBytes,
+		)
 	}
 }
 
@@ -1052,33 +1607,56 @@ func TestRunDeltaSyncInvalidatesSnapshotOnConfigChange(t *testing.T) {
 	manager, cfg, repoPath := newTestManager(t)
 	indexedCount := atomic.Int32{}
 	manager.runner = fakeRunner{
-		index: func(ctx context.Context, root string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
+		index: func(
+			ctx context.Context,
+			root string,
+			indexConfig model.IndexConfig,
+			progress func(
+				indexer.Progress,
+			),
+		) (
+			indexer.Result,
+			error,
+		) {
 			return indexer.Result{
 				IndexedFiles: 1,
 				TotalChunks:  1,
-				Chunks: []model.StoredChunk{{
-					Content:       "package main\n",
-					RelativePath:  "main.go",
-					StartLine:     1,
-					EndLine:       1,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       "package main\n",
+						RelativePath:  "main.go",
+						StartLine:     1,
+						EndLine:       1,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHashes: map[string]string{"main.go": hashText("main.go")},
 			}, nil
 		},
-		indexOne: func(ctx context.Context, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
+		indexOne: func(
+			ctx context.Context,
+			root string,
+			relativePath string,
+			indexConfig model.IndexConfig,
+		) (
+			indexer.OneFileResult,
+			error,
+		) {
 			indexedCount.Add(1)
 			content := "package main\nfunc Upgraded() {}\n"
+
 			return indexer.OneFileResult{
-				Chunks: []model.StoredChunk{{
-					Content:       content,
-					RelativePath:  relativePath,
-					StartLine:     1,
-					EndLine:       2,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       content,
+						RelativePath:  relativePath,
+						StartLine:     1,
+						EndLine:       2,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHash: hashText(content),
 				Skipped:  false,
 			}, nil
@@ -1087,36 +1665,59 @@ func TestRunDeltaSyncInvalidatesSnapshotOnConfigChange(t *testing.T) {
 
 	initialConfig := defaultIndexConfig()
 	initialConfig.SplitterType = "langchain"
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), initialConfig, false, emptyAdmissionBudget); err != nil {
+	if _, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		initialConfig,
+		false,
+		emptyAdmissionBudget,
+	); err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
 	if err != nil || !found {
 		t.Fatalf("GetIndex returned err=%v found=%v", err, found)
 	}
+
 	snapshotPath := filepath.Join(cfg.MerkleDir, codebase.ID+".json")
 	firstSnapshot, err := merkle.ReadSnapshot(snapshotPath)
 	if err != nil {
 		t.Fatalf("ReadSnapshot returned error: %v", err)
 	}
+
 	firstDigest := firstSnapshot.ConfigDigest
 
 	upgradedConfig := defaultIndexConfig()
 	upgradedConfig.SplitterType = "ast"
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), upgradedConfig, false, emptyAdmissionBudget); err != nil {
+	if _, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		upgradedConfig,
+		false,
+		emptyAdmissionBudget,
+	); err != nil {
 		t.Fatalf("upgrade StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	secondSnapshot, err := merkle.ReadSnapshot(snapshotPath)
 	if err != nil {
 		t.Fatalf("ReadSnapshot returned error: %v", err)
 	}
+
 	if secondSnapshot.ConfigDigest == firstDigest {
-		t.Fatalf("ConfigDigest did not change after splitter switch: %q", secondSnapshot.ConfigDigest)
+		t.Fatalf(
+			"ConfigDigest did not change after splitter switch: %q",
+			secondSnapshot.ConfigDigest,
+		)
 	}
+
 	if got := indexedCount.Load(); got == 0 {
 		t.Fatal("indexOne was never called; expected the digest mismatch to force re-embed")
 	}
@@ -1136,43 +1737,81 @@ func TestStartIndexReRegistrationIsIdempotent(t *testing.T) {
 
 	manager, _, repoPath := newTestManager(t)
 	manager.runner = fakeRunner{
-		index: func(ctx context.Context, root string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
+		index: func(
+			ctx context.Context,
+			root string,
+			indexConfig model.IndexConfig,
+			progress func(
+				indexer.Progress,
+			),
+		) (
+			indexer.Result,
+			error,
+		) {
 			return indexer.Result{
 				IndexedFiles: 1,
 				TotalChunks:  1,
-				Chunks: []model.StoredChunk{{
-					Content:       "package main\n",
-					RelativePath:  "main.go",
-					StartLine:     1,
-					EndLine:       1,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       "package main\n",
+						RelativePath:  "main.go",
+						StartLine:     1,
+						EndLine:       1,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 			}, nil
 		},
 	}
 
-	_, firstCodebase, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
+	_, firstCodebase, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		false,
+		emptyAdmissionBudget,
+	)
 	if err != nil {
 		t.Fatalf("initial StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
-	job, secondCodebase, deduplicated, overlapsCodebaseID, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
+	job, secondCodebase, deduplicated, overlapsCodebaseID, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		false,
+		emptyAdmissionBudget,
+	)
 	if err != nil {
 		t.Fatalf("re-register returned error, want idempotent success: %v", err)
 	}
+
 	if deduplicated {
 		t.Fatal("re-register marked deduplicated, but no in-flight job exists")
 	}
+
 	if job.ID != "" {
 		t.Fatalf("re-register returned a job (%s), but no new job should run", job.ID)
 	}
+
 	if secondCodebase.ID != firstCodebase.ID {
-		t.Fatalf("re-register returned codebase %s, want existing %s", secondCodebase.ID, firstCodebase.ID)
+		t.Fatalf(
+			"re-register returned codebase %s, want existing %s",
+			secondCodebase.ID,
+			firstCodebase.ID,
+		)
 	}
+
 	if overlapsCodebaseID != "" {
-		t.Fatalf("re-register reported overlap %s, but the same canonical path has no overlap", overlapsCodebaseID)
+		t.Fatalf(
+			"re-register reported overlap %s, but the same canonical path has no overlap",
+			overlapsCodebaseID,
+		)
 	}
 }
 
@@ -1182,48 +1821,84 @@ func TestSyncIndexStartsFreshJobForChangedCodebase(t *testing.T) {
 	manager, cfg, repoPath := newTestManager(t)
 	mainPath := filepath.Join(repoPath, "main.go")
 	manager.runner = fakeRunner{
-		index: func(ctx context.Context, root string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
+		index: func(
+			ctx context.Context,
+			root string,
+			indexConfig model.IndexConfig,
+			progress func(
+				indexer.Progress,
+			),
+		) (
+			indexer.Result,
+			error,
+		) {
 			initialContent := "package main\nfunc SearchableThing() {}\n"
+
 			return indexer.Result{
 				IndexedFiles: 1,
 				TotalChunks:  1,
-				Chunks: []model.StoredChunk{{
-					Content:       initialContent,
-					RelativePath:  "main.go",
-					StartLine:     1,
-					EndLine:       2,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       initialContent,
+						RelativePath:  "main.go",
+						StartLine:     1,
+						EndLine:       2,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHashes: map[string]string{"main.go": hashText(initialContent)},
 			}, nil
 		},
 	}
 
-	_, codebase, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
+	_, codebase, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		false,
+		emptyAdmissionBudget,
+	)
 	if err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
-	if err := os.WriteFile(mainPath, []byte("package main\nfunc SearchableThing() { println(\"changed\") }\n"), 0o644); err != nil {
+	if err := os.WriteFile(
+		mainPath,
+		[]byte("package main\nfunc SearchableThing() { println(\"changed\") }\n"),
+		0o644,
+	); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
 	release := make(chan struct{})
 	manager.runner = fakeRunner{
-		indexOne: func(ctx context.Context, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
+		indexOne: func(
+			ctx context.Context,
+			root string,
+			relativePath string,
+			indexConfig model.IndexConfig,
+		) (
+			indexer.OneFileResult,
+			error,
+		) {
 			<-release
 			changedContent := "package main\nfunc SearchableThing() { println(\"changed\") }\n"
+
 			return indexer.OneFileResult{
-				Chunks: []model.StoredChunk{{
-					Content:       changedContent,
-					RelativePath:  relativePath,
-					StartLine:     1,
-					EndLine:       2,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       changedContent,
+						RelativePath:  relativePath,
+						StartLine:     1,
+						EndLine:       2,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHash: hashText(changedContent),
 				Skipped:  false,
 			}, nil
@@ -1238,12 +1913,15 @@ func TestSyncIndexStartsFreshJobForChangedCodebase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIndex returned error: %v", err)
 	}
+
 	if !found || activeJob == nil {
 		t.Fatal("expected active sync job")
 	}
+
 	if activeJob.Operation != "sync" {
 		t.Fatalf("Operation=%q", activeJob.Operation)
 	}
+
 	if codebase.MerkleSnapshotPath == "" {
 		t.Fatal("MerkleSnapshotPath was empty")
 	}
@@ -1257,31 +1935,62 @@ func TestBackgroundSyncSkipsUnchangedCodebase(t *testing.T) {
 
 	manager, cfg, repoPath := newTestManager(t)
 	manager.runner = fakeRunner{
-		index: func(ctx context.Context, root string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
+		index: func(
+			ctx context.Context,
+			root string,
+			indexConfig model.IndexConfig,
+			progress func(
+				indexer.Progress,
+			),
+		) (
+			indexer.Result,
+			error,
+		) {
 			content := "package main\n"
+
 			return indexer.Result{
 				IndexedFiles: 1,
 				TotalChunks:  1,
-				Chunks: []model.StoredChunk{{
-					Content:       content,
-					RelativePath:  "main.go",
-					StartLine:     1,
-					EndLine:       1,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       content,
+						RelativePath:  "main.go",
+						StartLine:     1,
+						EndLine:       1,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHashes: map[string]string{"main.go": hashText(content)},
 			}, nil
 		},
 	}
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
+	if _, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		false,
+		emptyAdmissionBudget,
+	); err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	manager.runner = fakeRunner{
-		index: func(ctx context.Context, root string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
+		index: func(
+			ctx context.Context,
+			root string,
+			indexConfig model.IndexConfig,
+			progress func(
+				indexer.Progress,
+			),
+		) (
+			indexer.Result,
+			error,
+		) {
 			t.Fatal("background sync should not have started a job")
 			return indexer.Result{}, nil
 		},
@@ -1301,25 +2010,45 @@ func TestGetIndexMatchesTrackedParentForSubdirectory(t *testing.T) {
 
 	manager, _, repoPath := newTestManager(t)
 	manager.runner = fakeRunner{
-		index: func(ctx context.Context, root string, indexConfig model.IndexConfig, progress func(indexer.Progress)) (indexer.Result, error) {
+		index: func(
+			ctx context.Context,
+			root string,
+			indexConfig model.IndexConfig,
+			progress func(
+				indexer.Progress,
+			),
+		) (
+			indexer.Result,
+			error,
+		) {
 			return indexer.Result{
 				IndexedFiles: 1,
 				TotalChunks:  1,
-				Chunks: []model.StoredChunk{{
-					Content:       "package main\n",
-					RelativePath:  "main.go",
-					StartLine:     1,
-					EndLine:       1,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       "package main\n",
+						RelativePath:  "main.go",
+						StartLine:     1,
+						EndLine:       1,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 			}, nil
 		},
 	}
 
-	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
+	if _, _, _, _, err := manager.StartIndex(
+		context.Background(),
+		repoPath,
+		testClientInfo(),
+		defaultIndexConfig(),
+		false,
+		emptyAdmissionBudget,
+	); err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
+
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	childDirectory := filepath.Join(repoPath, "internal", "mcpserver")
@@ -1331,13 +2060,16 @@ func TestGetIndexMatchesTrackedParentForSubdirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIndex returned error: %v", err)
 	}
+
 	if !found {
 		t.Fatal("GetIndex did not match the tracked parent codebase")
 	}
+
 	expectedCanonicalPath, err := filepath.EvalSymlinks(repoPath)
 	if err != nil {
 		t.Fatalf("EvalSymlinks returned error: %v", err)
 	}
+
 	if codebase.CanonicalPath != expectedCanonicalPath {
 		t.Fatalf("GetIndex returned canonicalPath=%q", codebase.CanonicalPath)
 	}
@@ -1351,6 +2083,7 @@ func newTestManager(t *testing.T) (*Manager, config.Config, string) {
 	if err != nil {
 		t.Fatalf("NewManager returned error: %v", err)
 	}
+
 	// Stop queued, paused, and running work before the temp directories disappear.
 	// Close cached graph engines afterward so no SQLite handle races RemoveAll.
 	t.Cleanup(func() {
@@ -1359,8 +2092,10 @@ func newTestManager(t *testing.T) (*Manager, config.Config, string) {
 		if err := manager.cancelAndWaitForJobs(ctx); err != nil {
 			t.Errorf("cancelAndWaitForJobs: %v", err)
 		}
+
 		manager.CloseGraphEngines()
 	})
+
 	return manager, cfg, repoPath
 }
 
@@ -1376,7 +2111,12 @@ func newTestManagerConfig(t *testing.T) (config.Config, string) {
 	if err := os.MkdirAll(repoPath, 0o755); err != nil {
 		t.Fatalf("MkdirAll returned error: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoPath, "main.go"), []byte("package main\n"), 0o644); err != nil {
+
+	if err := os.WriteFile(
+		filepath.Join(repoPath, "main.go"),
+		[]byte("package main\n"),
+		0o644,
+	); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
@@ -1399,11 +2139,21 @@ func newTestManagerConfig(t *testing.T) (config.Config, string) {
 		HybridMode:        true,
 		SyncIntervalMS:    300000,
 	}
-	for _, path := range []string{cfg.StateRoot, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.SocketsDir, cfg.ChunksDir, cfg.GraphDir, cfg.ContextRoot} {
+	for _, path := range []string{
+		cfg.StateRoot,
+		cfg.LogsDir,
+		cfg.MerkleDir,
+		cfg.LocksDir,
+		cfg.SocketsDir,
+		cfg.ChunksDir,
+		cfg.GraphDir,
+		cfg.ContextRoot,
+	} {
 		if err := store.EnsureDir(path); err != nil {
 			t.Fatalf("EnsureDir returned error: %v", err)
 		}
 	}
+
 	if err := store.WriteRegistry(cfg.RegistryPath, model.RegistryFile{}); err != nil {
 		t.Fatalf("WriteRegistry returned error: %v", err)
 	}
@@ -1430,28 +2180,41 @@ func hashText(text string) string {
 	return hex.EncodeToString(hashBytes[:])
 }
 
-func waitForCodebaseStatus(t *testing.T, manager *Manager, repoPath string, wantStatus model.CodebaseStatus) {
+func waitForCodebaseStatus(
+	t *testing.T,
+	manager *Manager,
+	repoPath string,
+	wantStatus model.CodebaseStatus,
+) {
 	t.Helper()
 
-	waitForCondition(t, func() bool {
-		codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
-		if err != nil || !found {
-			return false
-		}
-		return codebase.Status == wantStatus
-	})
+	waitForCondition(
+		t,
+		func() bool {
+			codebase, _, found, _, err := manager.GetIndex(context.Background(), repoPath)
+			if err != nil || !found {
+				return false
+			}
+
+			return codebase.Status == wantStatus
+		},
+	)
 }
 
 func waitForProgress(t *testing.T, manager *Manager, repoPath string, minimum float64) {
 	t.Helper()
 
-	waitForCondition(t, func() bool {
-		_, activeJob, found, _, err := manager.GetIndex(context.Background(), repoPath)
-		if err != nil || !found || activeJob == nil {
-			return false
-		}
-		return activeJob.Progress.OverallPercent >= minimum
-	})
+	waitForCondition(
+		t,
+		func() bool {
+			_, activeJob, found, _, err := manager.GetIndex(context.Background(), repoPath)
+			if err != nil || !found || activeJob == nil {
+				return false
+			}
+
+			return activeJob.Progress.OverallPercent >= minimum
+		},
+	)
 }
 
 func waitForCondition(t *testing.T, condition func() bool) {
@@ -1462,7 +2225,9 @@ func waitForCondition(t *testing.T, condition func() bool) {
 		if condition() {
 			return
 		}
+
 		time.Sleep(10 * time.Millisecond)
 	}
+
 	t.Fatal("condition did not become true before timeout")
 }

@@ -40,14 +40,16 @@ type receivedRequest struct {
 func TestAuthenticatedProxyAddsTokenAndPreservesRequest(t *testing.T) {
 	t.Parallel()
 	received := make(chan receivedRequest, 1)
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		received <- receivedRequest{
-			authorization: request.Header.Get("Authorization"),
-			path:          request.URL.Path,
-			rawQuery:      request.URL.RawQuery,
-		}
-		_, _ = io.WriteString(writer, "[]")
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			received <- receivedRequest{
+				authorization: request.Header.Get("Authorization"),
+				path:          request.URL.Path,
+				rawQuery:      request.URL.RawQuery,
+			}
+			_, _ = io.WriteString(writer, "[]")
+		}),
+	)
 	t.Cleanup(upstream.Close)
 	proxy := startProxy(t, upstream.URL)
 
@@ -59,9 +61,11 @@ func TestAuthenticatedProxyAddsTokenAndPreservesRequest(t *testing.T) {
 	default:
 		t.Fatal("proxy did not forward request")
 	}
+
 	if forwarded.authorization != "Bearer "+proxyTestToken {
 		t.Fatalf("Authorization = %q, want bearer token", forwarded.authorization)
 	}
+
 	if forwarded.path != proxyTestReleasePath || forwarded.rawQuery != proxyTestQuery {
 		t.Fatalf("forwarded path = %q, query = %q", forwarded.path, forwarded.rawQuery)
 	}
@@ -74,16 +78,18 @@ func TestAuthenticatedProxyAddsTokenAndPreservesRequest(t *testing.T) {
 // target. The attestation response must pass through unchanged.
 func TestAuthenticatedProxyHidesReleasesPublishedAfterTarget(t *testing.T) {
 	t.Parallel()
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case proxyTestReleasePath:
-			_, _ = io.WriteString(writer, proxyTestReleases)
-		case proxyTestAttestationPath:
-			_, _ = io.WriteString(writer, proxyTestAttestationBody)
-		default:
-			http.NotFound(writer, request)
-		}
-	}))
+	upstream := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			switch request.URL.Path {
+			case proxyTestReleasePath:
+				_, _ = io.WriteString(writer, proxyTestReleases)
+			case proxyTestAttestationPath:
+				_, _ = io.WriteString(writer, proxyTestAttestationBody)
+			default:
+				http.NotFound(writer, request)
+			}
+		}),
+	)
 	t.Cleanup(upstream.Close)
 	proxy := startProxy(t, upstream.URL)
 
@@ -98,13 +104,16 @@ func TestAuthenticatedProxyHidesReleasesPublishedAfterTarget(t *testing.T) {
 	if err := json.Unmarshal([]byte(listBody), &releases); err != nil {
 		t.Fatalf("decode proxied release list %q: %v", listBody, err)
 	}
+
 	tags := make([]string, 0, len(releases))
 	for _, release := range releases {
 		tags = append(tags, release.TagName)
 	}
+
 	if strings.Join(tags, ",") != proxyTestTargetTag+","+proxyTestOlderTag {
 		t.Fatalf("proxied release tags = %v, want the target and the older release", tags)
 	}
+
 	if len(releases[0].Assets) != 1 || releases[0].Assets[0].Digest != "sha256:abc" {
 		t.Fatalf("proxied target assets = %+v, want the target archive digest", releases[0].Assets)
 	}
@@ -120,8 +129,10 @@ func startProxy(t *testing.T, upstreamURL string) *httptest.Server {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
+
 	proxy := httptest.NewServer(releaseproxy.New(target, proxyTestToken, proxyTestCutoff))
 	t.Cleanup(proxy.Close)
+
 	return proxy
 }
 
@@ -131,13 +142,16 @@ func getProxyBody(t *testing.T, requestURL string) string {
 	if err != nil {
 		t.Fatalf("GET %s: %v", requestURL, err)
 	}
+
 	defer func() { _ = response.Body.Close() }()
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
 		t.Fatalf("read %s: %v", requestURL, err)
 	}
+
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("GET %s status = %d, body %q", requestURL, response.StatusCode, body)
 	}
+
 	return string(body)
 }

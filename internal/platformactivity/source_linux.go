@@ -90,11 +90,7 @@ func (source *linuxSource) Sample(ctx context.Context) Snapshot {
 	if !available {
 		return snapshot
 	}
-	idleFor, active, available := selectedSessionIdleFor(
-		sessions,
-		currentUID,
-		monotonicNowUsec,
-	)
+	idleFor, active, available := selectedSessionIdleFor(sessions, currentUID, monotonicNowUsec)
 	if !available {
 		return snapshot
 	}
@@ -123,7 +119,8 @@ func selectedSessionIdleFor(
 	active := false
 	maximumDurationUsec := uint64(math.MaxInt64 / int64(time.Microsecond))
 	for _, session := range sessions {
-		if session.UID != currentUID || session.Remote || !session.Active || session.Class != "user" {
+		if session.UID != currentUID || session.Remote || !session.Active ||
+			session.Class != "user" {
 			continue
 		}
 		selectedCount++

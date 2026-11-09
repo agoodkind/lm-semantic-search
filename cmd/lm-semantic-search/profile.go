@@ -26,40 +26,56 @@ func newProfileCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "profile PROFILE",
 		Short: "Select the daemon capability profile",
-		Long: strings.Join([]string{
-			"Select the daemon capability profile.",
-			"",
-			"Arguments:",
-			"  PROFILE    The profile to persist: standard or offline",
-			"",
-			"The --model flag selects the offline embedding model.",
-			"Valid offline model names: " + validModelNames + ".",
-			"",
-			"The running daemon reads the new profile after it restarts.",
-		}, "\n"),
+		Long: strings.Join(
+			[]string{
+				"Select the daemon capability profile.",
+				"",
+				"Arguments:",
+				"  PROFILE    The profile to persist: standard or offline",
+				"",
+				"The --model flag selects the offline embedding model.",
+				"Valid offline model names: " + validModelNames + ".",
+				"",
+				"The running daemon reads the new profile after it restarts.",
+			},
+			"\n",
+		),
 		Args:      validateProfileArgs,
 		ValidArgs: []string{config.ProfileStandard, config.ProfileOffline},
-		Example: strings.Join([]string{
-			"  lm-semantic-search profile offline",
-			"  lm-semantic-search profile offline --model bge-small",
-			"  lm-semantic-search profile standard",
-		}, "\n"),
+		Example: strings.Join(
+			[]string{
+				"  lm-semantic-search profile offline",
+				"  lm-semantic-search profile offline --model bge-small",
+				"  lm-semantic-search profile standard",
+			},
+			"\n",
+		),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			profile := args[0]
 			if err := validateOfflineModel(profile, offlineModel); err != nil {
 				return err
 			}
+
 			if cmd.Flags().Changed(modelDownloadNetworkPolicyFlag) {
 				if _, err := networkcost.ParsePreference(networkPolicy); err != nil {
-					slog.Error("profile.model_download_network_policy.invalid", "policy", networkPolicy, "err", err)
+					slog.Error(
+						"profile.model_download_network_policy.invalid",
+						"policy",
+						networkPolicy,
+						"err",
+						err,
+					)
+
 					return fmt.Errorf("--%s: %w", modelDownloadNetworkPolicyFlag, err)
 				}
 			}
+
 			daemonConfig, err := config.Default()
 			if err != nil {
 				slog.Error("load daemon config failed", "err", err)
 				return fmt.Errorf("load daemon config: %w", err)
 			}
+
 			if err := config.SetProfile(daemonConfig.ConfigPath, profile); err != nil {
 				slog.Error(
 					"set daemon profile failed",
@@ -70,8 +86,10 @@ func newProfileCmd() *cobra.Command {
 					"err",
 					err,
 				)
+
 				return fmt.Errorf("set daemon profile: %w", err)
 			}
+
 			if err := config.SetOfflineModel(daemonConfig.ConfigPath, offlineModel); err != nil {
 				slog.Error(
 					"set offline embedding model failed",
@@ -82,8 +100,10 @@ func newProfileCmd() *cobra.Command {
 					"err",
 					err,
 				)
+
 				return fmt.Errorf("set offline embedding model: %w", err)
 			}
+
 			if err := persistModelDownloadNetworkFlags(
 				cmd,
 				daemonConfig.ConfigPath,
@@ -92,6 +112,7 @@ func newProfileCmd() *cobra.Command {
 			); err != nil {
 				return err
 			}
+
 			_, err = fmt.Fprintf(
 				cmd.OutOrStdout(),
 				"Profile set to %s in %s. Restart the daemon to apply it.\n",
@@ -102,6 +123,7 @@ func newProfileCmd() *cobra.Command {
 				slog.Error("write profile result failed", "err", err)
 				return fmt.Errorf("write profile result: %w", err)
 			}
+
 			return nil
 		},
 	}
@@ -111,8 +133,19 @@ func newProfileCmd() *cobra.Command {
 		"",
 		"offline embedding model ("+validModelNames+")",
 	)
-	command.Flags().StringVar(&networkPolicy, modelDownloadNetworkPolicyFlag, "", "Set allow, warn, or defer for embedding model downloads on expensive, constrained, or unknown networks. The daemon reads changes without a restart.")
-	command.Flags().BoolVar(&networkOverride, modelDownloadNetworkOverrideFlag, false, "Download the embedding model on every network. Set --model-download-network-override=false to clear the configuration override. The daemon reads changes without a restart.")
+	command.Flags().StringVar(
+		&networkPolicy,
+		modelDownloadNetworkPolicyFlag,
+		"",
+		"Set allow, warn, or defer for embedding model downloads on expensive, constrained, or unknown networks. The daemon reads changes without a restart.",
+	)
+	command.Flags().BoolVar(
+		&networkOverride,
+		modelDownloadNetworkOverrideFlag,
+		false,
+		"Download the embedding model on every network. Set --model-download-network-override=false to clear the configuration override. The daemon reads changes without a restart.",
+	)
+
 	return command
 }
 
@@ -126,38 +159,47 @@ func persistModelDownloadNetworkFlags(
 		if err := config.SetModelDownloadNetworkPolicy(configPath, networkPolicy); err != nil {
 			slog.Error(
 				"profile.model_download_network_policy.set_failed",
-				"path", configPath,
-				"policy", networkPolicy,
-				"err", err,
+				"path",
+				configPath,
+				"policy",
+				networkPolicy,
+				"err",
+				err,
 			)
+
 			return fmt.Errorf("write model download network policy to config file: %w", err)
 		}
 	}
+
 	if cmd.Flags().Changed(modelDownloadNetworkOverrideFlag) {
 		if err := config.SetModelDownloadNetworkOverride(configPath, networkOverride); err != nil {
 			slog.Error(
 				"profile.model_download_network_override.set_failed",
-				"path", configPath,
-				"override", networkOverride,
-				"err", err,
+				"path",
+				configPath,
+				"override",
+				networkOverride,
+				"err",
+				err,
 			)
+
 			return fmt.Errorf("write model download network override to config file: %w", err)
 		}
 	}
+
 	return nil
 }
 
 func validateProfileArgs(_ *cobra.Command, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf(
-			"profile requires a PROFILE argument (%s)",
-			profileArgumentChoices,
-		)
+		return fmt.Errorf("profile requires a PROFILE argument (%s)", profileArgumentChoices)
 	}
+
 	if len(args) > 1 {
 		extraArguments := strings.Join(args[1:], " ")
 		return fmt.Errorf("profile received too many arguments: %s", extraArguments)
 	}
+
 	return nil
 }
 
@@ -165,12 +207,15 @@ func validateOfflineModel(profile string, model string) error {
 	if model == "" {
 		return nil
 	}
+
 	if profile != config.ProfileOffline {
 		return fmt.Errorf("--model only applies to the offline profile")
 	}
+
 	if _, err := offlinemodel.Resolve(model); err != nil {
 		slog.Error("validate offline model failed", "model", model, "err", err)
 		return fmt.Errorf("validate offline model: %w", err)
 	}
+
 	return nil
 }

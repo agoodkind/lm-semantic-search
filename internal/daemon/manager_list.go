@@ -18,9 +18,14 @@ func (manager *Manager) ListIndexes(ctx context.Context) []model.Codebase {
 	for _, codebase := range manager.codebases {
 		codebases = append(codebases, codebase)
 	}
-	sort.Slice(codebases, func(i int, j int) bool {
-		return codebases[i].CanonicalPath < codebases[j].CanonicalPath
-	})
+
+	sort.Slice(
+		codebases,
+		func(i int, j int) bool {
+			return codebases[i].CanonicalPath < codebases[j].CanonicalPath
+		},
+	)
+
 	return codebases
 }
 
@@ -38,6 +43,7 @@ type CodebaseView struct {
 func (manager *Manager) ListIndexesView() []CodebaseView {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+
 	return manager.codebaseViewsLocked()
 }
 
@@ -51,6 +57,7 @@ func (manager *Manager) displayForCollectionReadiness(
 	if found {
 		codebase = current
 	}
+
 	return computeDisplayStatus(
 		codebase,
 		manager.activeJobSnapshotLocked(codebase),
@@ -64,16 +71,30 @@ func (manager *Manager) displayForCollectionReadiness(
 // codebases the rest of that snapshot describes. Caller holds manager.mu.
 func (manager *Manager) codebaseViewsLocked() []CodebaseView {
 	globalMode := manager.health.Mode
+
 	views := make([]CodebaseView, 0, len(manager.codebases))
 	for _, codebase := range manager.codebases {
 		activeJob := manager.activeJobSnapshotLocked(codebase)
-		views = append(views, CodebaseView{
-			Codebase: codebase,
-			Display:  computeDisplayStatus(codebase, activeJob, globalMode, collectionNotApplicable),
-		})
+		views = append(
+			views,
+			CodebaseView{
+				Codebase: codebase,
+				Display: computeDisplayStatus(
+					codebase,
+					activeJob,
+					globalMode,
+					collectionNotApplicable,
+				),
+			},
+		)
 	}
-	sort.Slice(views, func(i int, j int) bool {
-		return views[i].Codebase.CanonicalPath < views[j].Codebase.CanonicalPath
-	})
+
+	sort.Slice(
+		views,
+		func(i int, j int) bool {
+			return views[i].Codebase.CanonicalPath < views[j].Codebase.CanonicalPath
+		},
+	)
+
 	return views
 }

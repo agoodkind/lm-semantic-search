@@ -49,33 +49,46 @@ func (manager *Manager) selectWorktreeReuseSourceLocked(
 	if sourcePath == "" {
 		return selection
 	}
+
 	source, found := manager.findCodebaseByExactRoot(sourcePath)
 	if !found || source.Kind == model.CodebaseKindDocument {
 		selection.unavailable = view.WorktreeReuseSourceNotRegistered
 		return selection
 	}
+
 	selection.sourceCodebaseID = source.ID
 	if source.CollectionName == "" || !ownsLiveCollection(source) {
 		selection.unavailable = view.WorktreeReuseSourceNotIndexed
 		return selection
 	}
+
 	if !reuseModelMatches(source.EffectiveConfig, indexConfig) {
 		selection.unavailable = view.WorktreeReuseSourceEmbeddingConfigurationDiffers
 		return selection
 	}
+
 	selection.sourceCollection = source.CollectionName
 	selection.unavailable = view.WorktreeReuseAvailable
+
 	return selection
 }
 
 func (manager *Manager) selectWorktreeReuseSource(codebase model.Codebase) worktreeReuseSelection {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	return manager.selectWorktreeReuseSourceLocked(codebase.WorktreeSourcePath, codebase.EffectiveConfig)
+
+	return manager.selectWorktreeReuseSourceLocked(
+		codebase.WorktreeSourcePath,
+		codebase.EffectiveConfig,
+	)
 }
 
-func (manager *Manager) worktreeReuseStatus(codebase model.Codebase, discovered bool) worktreeReuseSelection {
-	if codebase.Kind == model.CodebaseKindDocument || (codebase.WorktreeSourcePath == "" && !discovered) {
+func (manager *Manager) worktreeReuseStatus(
+	codebase model.Codebase,
+	discovered bool,
+) worktreeReuseSelection {
+	if codebase.Kind == model.CodebaseKindDocument ||
+		(codebase.WorktreeSourcePath == "" && !discovered) {
 		return worktreeReuseSelection{
 			sourcePath:       "",
 			sourceCodebaseID: "",
@@ -83,33 +96,53 @@ func (manager *Manager) worktreeReuseStatus(codebase model.Codebase, discovered 
 			unavailable:      view.WorktreeReuseAvailable,
 		}
 	}
+
 	return manager.selectWorktreeReuseSource(codebase)
 }
 
-func (manager *Manager) jobContentReusePlan(ctx context.Context, job model.Job) jobContentReusePlan {
+func (manager *Manager) jobContentReusePlan(
+	ctx context.Context,
+	job model.Job,
+) jobContentReusePlan {
 	if _, inRepository := gitworktree.Resolve(job.CanonicalPath); !inRepository {
 		return jobContentReusePlan{lookup: contentReuseLookupStoreWide, source: nil}
 	}
+
 	manager.mu.Lock()
 	target := manager.codebases[job.CodebaseID]
 	selection := manager.selectWorktreeReuseSourceLocked(target.WorktreeSourcePath, job.Config)
 	manager.mu.Unlock()
 
 	if selection.unavailable != view.WorktreeReuseAvailable {
-		slog.InfoContext(ctx, "job reads no source collection",
-			"job_id", job.ID,
-			"codebase_id", job.CodebaseID,
-			"source_path", selection.sourcePath,
-			"reason", string(selection.unavailable),
+		slog.InfoContext(
+			ctx,
+			"job reads no source collection",
+			"job_id",
+			job.ID,
+			"codebase_id",
+			job.CodebaseID,
+			"source_path",
+			selection.sourcePath,
+			"reason",
+			string(selection.unavailable),
 		)
+
 		return jobContentReusePlan{lookup: contentReuseLookupListedCollections, source: nil}
 	}
-	slog.InfoContext(ctx, "job reuses vectors from the recorded source",
-		"job_id", job.ID,
-		"codebase_id", job.CodebaseID,
-		"source_path", selection.sourcePath,
-		"source_codebase_id", selection.sourceCodebaseID,
-		"source_collection", selection.sourceCollection,
+
+	slog.InfoContext(
+		ctx,
+		"job reuses vectors from the recorded source",
+		"job_id",
+		job.ID,
+		"codebase_id",
+		job.CodebaseID,
+		"source_path",
+		selection.sourcePath,
+		"source_codebase_id",
+		selection.sourceCodebaseID,
+		"source_collection",
+		selection.sourceCollection,
 	)
 	source := &jobSourceReuse{
 		jobID:      job.ID,
@@ -117,5 +150,6 @@ func (manager *Manager) jobContentReusePlan(ctx context.Context, job model.Job) 
 		collection: selection.sourceCollection,
 		disabled:   atomic.Bool{},
 	}
+
 	return jobContentReusePlan{lookup: contentReuseLookupListedCollections, source: source}
 }

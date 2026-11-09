@@ -28,13 +28,16 @@ func TestEnsureResumesFromPartialFileAfterDroppedConnection(t *testing.T) {
 	if !slices.Equal(run.sleeps, wantSleeps) {
 		t.Fatalf("sleeps = %v, want %v", run.sleeps, wantSleeps)
 	}
+
 	firstCallRanges := fixture.ranges()
 	if len(firstCallRanges) != maximumAttempts {
 		t.Fatalf("requests = %d, want %d", len(firstCallRanges), maximumAttempts)
 	}
+
 	if firstCallRanges[0] != "" {
 		t.Fatalf("first Range header = %q, want none", firstCallRanges[0])
 	}
+
 	for _, rangeValue := range firstCallRanges[1:] {
 		if !strings.HasPrefix(rangeValue, "bytes=") {
 			t.Fatalf("retry Range header = %q, want a bytes range", rangeValue)
@@ -42,7 +45,10 @@ func TestEnsureResumesFromPartialFileAfterDroppedConnection(t *testing.T) {
 	}
 
 	run.progress = nil
-	if err := modeldownload.Ensure(context.Background(), run.request(fixture, fixture.sha256())); err != nil {
+	if err := modeldownload.Ensure(
+		context.Background(),
+		run.request(fixture, fixture.sha256()),
+	); err != nil {
 		t.Fatalf("Ensure after partial: %v", err)
 	}
 
@@ -68,7 +74,10 @@ func TestEnsureRestartsFromZeroWhenServerIgnoresRange(t *testing.T) {
 	leavePartial(t, run, fixture)
 
 	run.progress = nil
-	if err := modeldownload.Ensure(context.Background(), run.request(fixture, fixture.sha256())); err != nil {
+	if err := modeldownload.Ensure(
+		context.Background(),
+		run.request(fixture, fixture.sha256()),
+	); err != nil {
 		t.Fatalf("Ensure after partial: %v", err)
 	}
 
@@ -86,12 +95,16 @@ func TestEnsureRestartsOnceWhenServerRejectsRange(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(run.partialPath), 0o700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
+
 	oversized := append(slices.Clone(fixture.content), 1, 2, 3)
 	if err := os.WriteFile(run.partialPath, oversized, fixtureFilePermission); err != nil {
 		t.Fatalf("WriteFile %s: %v", run.partialPath, err)
 	}
 
-	if err := modeldownload.Ensure(context.Background(), run.request(fixture, fixture.sha256())); err != nil {
+	if err := modeldownload.Ensure(
+		context.Background(),
+		run.request(fixture, fixture.sha256()),
+	); err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
 
@@ -100,6 +113,7 @@ func TestEnsureRestartsOnceWhenServerRejectsRange(t *testing.T) {
 	if ranges := fixture.ranges(); !slices.Equal(ranges, wantRanges) {
 		t.Fatalf("Range headers = %q, want %q", ranges, wantRanges)
 	}
+
 	if len(run.sleeps) != 0 {
 		t.Fatalf("sleeps = %v, want none", run.sleeps)
 	}

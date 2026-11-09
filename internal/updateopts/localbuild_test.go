@@ -28,12 +28,21 @@ func TestIsLocalBuild(t *testing.T) {
 	}
 
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			got := isLocalBuild(testCase.version, testCase.dirty)
-			if got != testCase.want {
-				t.Fatalf("isLocalBuild(%q, %v) = %v, want %v", testCase.version, testCase.dirty, got, testCase.want)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				t.Parallel()
+				got := isLocalBuild(testCase.version, testCase.dirty)
+				if got != testCase.want {
+					t.Fatalf(
+						"isLocalBuild(%q, %v) = %v, want %v",
+						testCase.version,
+						testCase.dirty,
+						got,
+						testCase.want,
+					)
+				}
+			},
+		)
 	}
 }

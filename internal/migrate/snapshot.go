@@ -41,21 +41,36 @@ func TSMerklePath(contextRoot string, codebasePath string) string {
 // The TS per-file hash is sha256 of the raw file content, the same hash
 // merkle.Capture computes, so a seeded baseline lets the delta sync re-embed
 // only files that changed since the TS index rather than the whole corpus.
-func LoadTSMerkle(ctx context.Context, contextRoot string, codebasePath string) (merkle.Snapshot, bool, error) {
+func LoadTSMerkle(
+	ctx context.Context,
+	contextRoot string,
+	codebasePath string,
+) (merkle.Snapshot, bool, error) {
 	path := TSMerklePath(contextRoot, codebasePath)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return merkle.Snapshot{ConfigDigest: "", Files: nil, Inodes: nil}, false, nil
 		}
+
 		slog.WarnContext(ctx, "read TS merkle failed", "path", path, "err", err)
-		return merkle.Snapshot{ConfigDigest: "", Files: nil, Inodes: nil}, false, fmt.Errorf("read TS merkle %s: %w", path, err)
+
+		return merkle.Snapshot{
+			ConfigDigest: "",
+			Files:        nil,
+			Inodes:       nil,
+		}, false, fmt.Errorf("read TS merkle %s: %w", path, err)
 	}
 
 	var parsed tsMerkleFile
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		slog.WarnContext(ctx, "parse TS merkle failed", "path", path, "err", err)
-		return merkle.Snapshot{ConfigDigest: "", Files: nil, Inodes: nil}, false, fmt.Errorf("parse TS merkle %s: %w", path, err)
+
+		return merkle.Snapshot{
+			ConfigDigest: "",
+			Files:        nil,
+			Inodes:       nil,
+		}, false, fmt.Errorf("parse TS merkle %s: %w", path, err)
 	}
 
 	files := make(map[string]string, len(parsed.FileHashes))
@@ -63,11 +78,13 @@ func LoadTSMerkle(ctx context.Context, contextRoot string, codebasePath string) 
 		if len(pair) != 2 {
 			continue
 		}
+
 		relativePath := pair[0]
 		hash := pair[1]
 		if relativePath == "" || hash == "" {
 			continue
 		}
+
 		files[relativePath] = hash
 	}
 

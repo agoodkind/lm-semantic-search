@@ -23,7 +23,12 @@ func TestListIndexesRowCarriesWaitingTokens(t *testing.T) {
 		Status:          model.CodebaseStatusIndexing,
 		EffectiveConfig: defaultIndexConfig(),
 	}
-	manager.health = dependencyHealth{Mode: dependencyEmbedderUnreachable, Since: clock.Now(), StoreReachableAt: clock.Now(), EmbedderReachableAt: clock.Now()}
+	manager.health = dependencyHealth{
+		Mode:                dependencyEmbedderUnreachable,
+		Since:               clock.Now(),
+		StoreReachableAt:    clock.Now(),
+		EmbedderReachableAt: clock.Now(),
+	}
 	manager.mu.Unlock()
 
 	server := NewGRPCServer(manager, nil)
@@ -33,21 +38,26 @@ func TestListIndexesRowCarriesWaitingTokens(t *testing.T) {
 	}
 
 	var row *pb.Codebase
+
 	for _, codebase := range response.GetIndexes() {
 		if codebase.GetId() == "cb-wait" {
 			row = codebase
 			break
 		}
 	}
+
 	if row == nil {
 		t.Fatalf("ListIndexes did not return the cb-wait row: %+v", response.GetIndexes())
 	}
+
 	if got := row.GetDisplayStatus(); got != "waiting" {
 		t.Fatalf("DisplayStatus = %q, want waiting", got)
 	}
+
 	if got := row.GetGlyphToken(); got != "⋯" {
 		t.Fatalf("GlyphToken = %q, want ⋯", got)
 	}
+
 	if got := row.GetStatusLabel(); got != "waiting" {
 		t.Fatalf("StatusLabel = %q, want waiting", got)
 	}

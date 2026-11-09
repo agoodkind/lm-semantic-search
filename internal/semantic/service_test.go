@@ -30,6 +30,7 @@ func TestStagingCollectionNameStaysWithinCap(t *testing.T) {
 	if len(long) != maxCollectionNameLength {
 		t.Fatalf("staging name length = %d, want %d", len(long), maxCollectionNameLength)
 	}
+
 	if !strings.HasSuffix(long, stagingCollectionSuffix) {
 		t.Fatalf("staging name %q lost its suffix after truncation", long)
 	}
@@ -42,6 +43,7 @@ func TestValidateExtensionFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateExtensionFilter returned error for valid input: %v", err)
 	}
+
 	if len(validExtensions) != 2 || validExtensions[0] != ".go" || validExtensions[1] != ".ts" {
 		t.Fatalf("ValidateExtensionFilter returned %+v", validExtensions)
 	}
@@ -50,6 +52,7 @@ func TestValidateExtensionFilter(t *testing.T) {
 	if err == nil {
 		t.Fatal("ValidateExtensionFilter returned nil error for invalid input")
 	}
+
 	if !strings.Contains(err.Error(), "invalid file extensions") {
 		t.Fatalf("ValidateExtensionFilter returned unexpected error: %v", err)
 	}
@@ -62,10 +65,17 @@ func TestValidateExtensionFilterAcceptsBareExtensions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateExtensionFilter returned error: %v", err)
 	}
+
 	want := []string{".go", ".ts", ".mk", ".sh"}
 	if len(normalized) != len(want) {
-		t.Fatalf("ValidateExtensionFilter returned %d entries, want %d: %+v", len(normalized), len(want), normalized)
+		t.Fatalf(
+			"ValidateExtensionFilter returned %d entries, want %d: %+v",
+			len(normalized),
+			len(want),
+			normalized,
+		)
 	}
+
 	for index, value := range normalized {
 		if value != want[index] {
 			t.Fatalf("ValidateExtensionFilter[%d] = %q, want %q", index, value, want[index])
@@ -87,7 +97,9 @@ func TestDeduplicateChunks(t *testing.T) {
 	if len(dedupedChunks) != 3 {
 		t.Fatalf("DeduplicateChunks returned %d chunks", len(dedupedChunks))
 	}
-	if dedupedChunks[0].Content != "first" || dedupedChunks[1].Content != "separate" || dedupedChunks[2].Content != "other-file" {
+
+	if dedupedChunks[0].Content != "first" || dedupedChunks[1].Content != "separate" ||
+		dedupedChunks[2].Content != "other-file" {
 		t.Fatalf("DeduplicateChunks returned unexpected order/content: %+v", dedupedChunks)
 	}
 }
@@ -128,6 +140,7 @@ func TestNewServiceBootsDegradedWhenMilvusClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
+
 	t.Cleanup(func() {
 		if closeErr := service.Close(context.Background()); closeErr != nil {
 			t.Fatalf("Close returned error: %v", closeErr)
@@ -137,12 +150,15 @@ func TestNewServiceBootsDegradedWhenMilvusClosed(t *testing.T) {
 	if elapsed := time.Since(startedAt); elapsed > 2*time.Second {
 		t.Fatalf("NewService took %s, want a bounded boot dial", elapsed)
 	}
+
 	if service == nil {
 		t.Fatal("NewService returned nil service")
 	}
+
 	if service.Available() {
 		t.Fatal("Available() = true, want false while Milvus is unreachable")
 	}
+
 	if !service.Degraded() {
 		t.Fatal("Degraded() = false, want true for configured but disconnected Milvus")
 	}
@@ -160,6 +176,7 @@ func TestReconnectBackoffDoublesAndCaps(t *testing.T) {
 		case <-ctx.Done():
 			return false
 		}
+
 		return true
 	}
 	reconnectJitter = func(limit time.Duration) time.Duration {
@@ -175,6 +192,7 @@ func TestReconnectBackoffDoublesAndCaps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
+
 	t.Cleanup(func() {
 		if closeErr := service.Close(context.Background()); closeErr != nil {
 			t.Fatalf("Close returned error: %v", closeErr)
@@ -216,6 +234,7 @@ func TestCloseCancelsReconnectDuringBackoff(t *testing.T) {
 		close(sleepStarted)
 		<-ctx.Done()
 		close(sleepDone)
+
 		return false
 	}
 	reconnectJitter = func(limit time.Duration) time.Duration {
@@ -231,6 +250,7 @@ func TestCloseCancelsReconnectDuringBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
+
 	<-sleepStarted
 
 	if err := service.Close(context.Background()); err != nil {
@@ -251,10 +271,12 @@ func closedLoopbackAddress(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("Listen returned error: %v", err)
 	}
+
 	address := listener.Addr().String()
 	if err := listener.Close(); err != nil {
 		t.Fatalf("Close listener returned error: %v", err)
 	}
+
 	return address
 }
 
@@ -276,8 +298,10 @@ func waitForSemanticCondition(t *testing.T, condition func() bool) {
 		if condition() {
 			return
 		}
+
 		time.Sleep(10 * time.Millisecond)
 	}
+
 	t.Fatal("condition did not become true before timeout")
 }
 
@@ -304,6 +328,7 @@ func TestCallTimeoutsUsesConfiguredMutationBound(t *testing.T) {
 			milvusgrpc.DefaultCallTimeouts().Mutation,
 		)
 	}
+
 	if got := configured.callTimeouts().Metadata; got != milvusgrpc.DefaultCallTimeouts().Metadata {
 		t.Fatalf(
 			"metadata bound = %s, want the transport default %s left alone",
@@ -322,6 +347,7 @@ func TestCallTimeoutsUsesConfiguredMetadataBound(t *testing.T) {
 	if got := configured.callTimeouts().Metadata; got != wantMetadata {
 		t.Fatalf("configured metadata bound = %s, want %s", got, wantMetadata)
 	}
+
 	if got := configured.callTimeouts().Mutation; got != milvusgrpc.DefaultCallTimeouts().Mutation {
 		t.Fatalf("configured metadata changed mutation bound to %s", got)
 	}

@@ -51,6 +51,7 @@ func TestPrepareCollectionClassifiesMilvusTransportOutage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen for fake Milvus: %v", err)
 	}
+
 	grpcServer := grpc.NewServer()
 	milvuspb.RegisterMilvusServiceServer(grpcServer, prepareCollectionOutageServer{})
 	t.Cleanup(grpcServer.Stop)
@@ -60,15 +61,19 @@ func TestPrepareCollectionClassifiesMilvusTransportOutage(t *testing.T) {
 		}
 	}()
 
-	service, err := semantic.NewService(context.Background(), config.Config{
-		EmbeddingProvider: "OpenAI",
-		EmbeddingModel:    "test-model",
-		OpenAIAPIKey:      "test-key",
-		MilvusAddress:     listener.Addr().String(),
-	})
+	service, err := semantic.NewService(
+		context.Background(),
+		config.Config{
+			EmbeddingProvider: "OpenAI",
+			EmbeddingModel:    "test-model",
+			OpenAIAPIKey:      "test-key",
+			MilvusAddress:     listener.Addr().String(),
+		},
+	)
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
+
 	t.Cleanup(func() {
 		if closeErr := service.Close(context.Background()); closeErr != nil {
 			t.Errorf("Close returned error: %v", closeErr)
@@ -80,9 +85,15 @@ func TestPrepareCollectionClassifiesMilvusTransportOutage(t *testing.T) {
 	if !errors.As(err, &adapterErr) {
 		t.Fatalf("PrepareCollection error type = %T, want AdapterError: %v", err, err)
 	}
+
 	if adapterErr.Class != adapterr.ClassMilvusUnavailable {
-		t.Fatalf("PrepareCollection class = %q, want %q", adapterErr.Class, adapterr.ClassMilvusUnavailable)
+		t.Fatalf(
+			"PrepareCollection class = %q, want %q",
+			adapterErr.Class,
+			adapterr.ClassMilvusUnavailable,
+		)
 	}
+
 	if got := status.Code(err); got != codes.DeadlineExceeded {
 		t.Fatalf("PrepareCollection cause code = %s, want %s", got, codes.DeadlineExceeded)
 	}

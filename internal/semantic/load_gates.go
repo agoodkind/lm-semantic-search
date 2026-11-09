@@ -41,17 +41,28 @@ func (service *Service) SetMaintenance(enabled bool) {
 
 // refuseLoadDuringMaintenance returns the maintenance refusal for
 // collectionName while the gate is on, and nil otherwise.
-func (service *Service) refuseLoadDuringMaintenance(ctx context.Context, collectionName string) error {
+func (service *Service) refuseLoadDuringMaintenance(
+	ctx context.Context,
+	collectionName string,
+) error {
 	if !service.loadGates.maintenance.Load() {
 		return nil
 	}
+
 	err := fmt.Errorf("load of collection %s refused: %w", collectionName, ErrMaintenance)
-	slog.WarnContext(ctx, "semantic.collection_load_refused_maintenance",
-		"component", "semantic",
-		"subcomponent", "load",
-		"collection", collectionName,
-		"err", err,
+	slog.WarnContext(
+		ctx,
+		"semantic.collection_load_refused_maintenance",
+		"component",
+		"semantic",
+		"subcomponent",
+		"load",
+		"collection",
+		collectionName,
+		"err",
+		err,
 	)
+
 	return err
 }
 
@@ -63,6 +74,7 @@ func (service *Service) collectionLoadSlots() *collectionLoadLimiter {
 			service.cfg.MilvusMaxConcurrentCollectionLoads,
 		)
 	})
+
 	return service.loadGates.limit
 }
 
@@ -71,5 +83,6 @@ func (service *Service) loadBackoff() *collectionLoadBackoff {
 	service.loadGates.backoffOnce.Do(func() {
 		service.loadGates.backoff = newCollectionLoadBackoff()
 	})
+
 	return service.loadGates.backoff
 }

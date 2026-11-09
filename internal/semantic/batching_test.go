@@ -27,12 +27,14 @@ func chunkOfBytes(n int) model.StoredChunk {
 // content hash, so identical chunks could not be selectively marked reused.
 func conversationSizedChunks(count int) []model.StoredChunk {
 	const conversationChunkBytes = 1500
+
 	chunks := make([]model.StoredChunk, count)
 	for index := range chunks {
 		chunks[index] = model.StoredChunk{
 			Content: strconv.Itoa(index) + ":" + strings.Repeat("a", conversationChunkBytes),
 		}
 	}
+
 	return chunks
 }
 
@@ -45,20 +47,25 @@ func reuseCoveringAllBut(chunks []model.StoredChunk, embedEvery int) map[string]
 		if index%embedEvery == 0 {
 			continue
 		}
+
 		reuse[contentVectorKey(chunk.Content)] = []float32{float32(index)}
 	}
+
 	return reuse
 }
 
 func assertGroupRowCounts(t *testing.T, groups [][]model.StoredChunk, want []int) {
 	t.Helper()
+
 	got := make([]int, 0, len(groups))
 	for _, group := range groups {
 		got = append(got, len(group))
 	}
+
 	if len(got) != len(want) {
 		t.Fatalf("group row counts = %v, want %v", got, want)
 	}
+
 	for index := range want {
 		if got[index] != want[index] {
 			t.Fatalf("group row counts = %v, want %v", got, want)
@@ -79,6 +86,7 @@ func TestPackChunksSingleOversizeChunkShipsAlone(t *testing.T) {
 	if len(groups) != 2 {
 		t.Fatalf("groups = %d, want 2", len(groups))
 	}
+
 	if len(groups[0]) != 1 {
 		t.Fatalf("first group rows = %d, want 1 (oversize ships alone)", len(groups[0]))
 	}
@@ -90,6 +98,7 @@ func TestPackChunksClosesOnTokenBudget(t *testing.T) {
 	for i := range chunks {
 		chunks[i] = chunkOfBytes(400)
 	}
+
 	groups := packChunksByEstimatedTokens(chunks, 32, 250, nil)
 	if len(groups) != 5 {
 		t.Fatalf("groups = %d, want 5", len(groups))
@@ -101,11 +110,13 @@ func TestPackChunksClosesOnRowCap(t *testing.T) {
 	for i := range chunks {
 		chunks[i] = chunkOfBytes(4)
 	}
+
 	groups := packChunksByEstimatedTokens(chunks, 4, 6000, nil)
 	want := []int{4, 4, 2}
 	if len(groups) != len(want) {
 		t.Fatalf("groups = %d, want %d", len(groups), len(want))
 	}
+
 	for i, group := range groups {
 		if len(group) != want[i] {
 			t.Fatalf("group %d rows = %d, want %d", i, len(group), want[i])
@@ -118,14 +129,18 @@ func TestPackChunksPreservesOrderAndCoverage(t *testing.T) {
 	for i := range chunks {
 		chunks[i] = chunkOfBytes((i*53)%900 + 1)
 	}
+
 	groups := packChunksByEstimatedTokens(chunks, 8, 300, nil)
 	var flattened []model.StoredChunk
+
 	for _, group := range groups {
 		flattened = append(flattened, group...)
 	}
+
 	if len(flattened) != len(chunks) {
 		t.Fatalf("flattened = %d chunks, want %d", len(flattened), len(chunks))
 	}
+
 	for i := range chunks {
 		if flattened[i].Content != chunks[i].Content {
 			t.Fatalf("chunk %d out of order", i)
@@ -134,10 +149,12 @@ func TestPackChunksPreservesOrderAndCoverage(t *testing.T) {
 }
 
 func TestPackForEmbeddingClosesOnConfiguredTokenBudget(t *testing.T) {
-	service := &Service{cfg: config.Config{
-		EmbeddingBatchSize:        32,
-		EmbeddingBatchTokenBudget: 250,
-	}}
+	service := &Service{
+		cfg: config.Config{
+			EmbeddingBatchSize:        32,
+			EmbeddingBatchTokenBudget: 250,
+		},
+	}
 	chunks := []model.StoredChunk{
 		chunkOfBytes(400),
 		chunkOfBytes(400),
@@ -149,6 +166,7 @@ func TestPackForEmbeddingClosesOnConfiguredTokenBudget(t *testing.T) {
 	if len(groups) != len(want) {
 		t.Fatalf("groups = %d, want %d", len(groups), len(want))
 	}
+
 	for i, group := range groups {
 		if len(group) != want[i] {
 			t.Fatalf("group %d rows = %d, want %d", i, len(group), want[i])
@@ -164,10 +182,12 @@ func TestPackForEmbeddingClosesOnConfiguredTokenBudget(t *testing.T) {
 // eight of them actually reach the embedder here, which is 3,008 estimated
 // tokens, so the whole stream belongs in one request.
 func TestPackForEmbeddingFillsRowCapWhenReuseCoversMostChunks(t *testing.T) {
-	service := &Service{cfg: config.Config{
-		EmbeddingBatchSize:        64,
-		EmbeddingBatchTokenBudget: 6000,
-	}}
+	service := &Service{
+		cfg: config.Config{
+			EmbeddingBatchSize:        64,
+			EmbeddingBatchTokenBudget: 6000,
+		},
+	}
 	chunks := conversationSizedChunks(64)
 	reuse := knownModelReuse(reuseCoveringAllBut(chunks, 8))
 
@@ -191,6 +211,7 @@ func TestReuseAwareEmbeddingAndInsertPackingUseIndependentBudgets(t *testing.T) 
 		insertByteCeiling = 192 << 20
 	)
 	sharedContent := strings.Repeat("a", contentBytes)
+
 	chunks := make([]model.StoredChunk, rowCount)
 	for index := range chunks {
 		chunks[index] = model.StoredChunk{
@@ -198,12 +219,15 @@ func TestReuseAwareEmbeddingAndInsertPackingUseIndependentBudgets(t *testing.T) 
 			RelativePath: strconv.Itoa(index),
 		}
 	}
+
 	vector := make([]float32, vectorDimension)
 	reuse := knownModelReuse(map[string][]float32{contentVectorKey(sharedContent): vector})
-	service := &Service{cfg: config.Config{
-		EmbeddingBatchSize:        rowCount,
-		EmbeddingBatchTokenBudget: 6000,
-	}}
+	service := &Service{
+		cfg: config.Config{
+			EmbeddingBatchSize:        rowCount,
+			EmbeddingBatchTokenBudget: 6000,
+		},
+	}
 
 	embeddingGroups := service.packForEmbedding(chunks, reuse)
 	assertGroupRowCounts(t, embeddingGroups, []int{rowCount})
@@ -219,16 +243,14 @@ func TestReuseAwareEmbeddingAndInsertPackingUseIndependentBudgets(t *testing.T) 
 	if len(insertGroups) < 2 {
 		t.Fatalf("insert groups = %d, want more than one", len(insertGroups))
 	}
+
 	for groupIndex, group := range insertGroups {
 		estimatedBytes := 0
+
 		for _, chunk := range group {
-			estimatedBytes += estimatedInsertRowBytes(
-				chunk,
-				len(vector),
-				CodeColumns(),
-				"model-a",
-			)
+			estimatedBytes += estimatedInsertRowBytes(chunk, len(vector), CodeColumns(), "model-a")
 		}
+
 		if estimatedBytes > insertByteCeiling {
 			t.Fatalf(
 				"insert group %d estimated bytes = %d, want at most %d",
@@ -250,6 +272,7 @@ func TestInsertPackingKeepsReviewerShapedRequestUnderTransportLimit(t *testing.T
 		scaledInsertBudget   = 192 << 10
 		scaledTransportLimit = 256 << 10
 	)
+
 	chunks := make([]model.StoredChunk, rowCount)
 	for index := range chunks {
 		chunks[index] = model.StoredChunk{
@@ -273,31 +296,30 @@ func TestInsertPackingKeepsReviewerShapedRequestUnderTransportLimit(t *testing.T
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			groups := packChunksByEstimatedInsertBytes(
-				test.chunks,
-				vectorDimension,
-				scaledInsertBudget,
-				test.columnSet,
-				"model-a",
-			)
-
-			for groupIndex, group := range groups {
-				requestBytes := actualInsertRequestBytes(
-					group,
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				groups := packChunksByEstimatedInsertBytes(
+					test.chunks,
 					vectorDimension,
+					scaledInsertBudget,
+					test.columnSet,
 					"model-a",
 				)
-				if requestBytes > scaledTransportLimit {
-					t.Fatalf(
-						"insert group %d request bytes = %d, want at most %d",
-						groupIndex,
-						requestBytes,
-						scaledTransportLimit,
-					)
+
+				for groupIndex, group := range groups {
+					requestBytes := actualInsertRequestBytes(group, vectorDimension, "model-a")
+					if requestBytes > scaledTransportLimit {
+						t.Fatalf(
+							"insert group %d request bytes = %d, want at most %d",
+							groupIndex,
+							requestBytes,
+							scaledTransportLimit,
+						)
+					}
 				}
-			}
-		})
+			},
+		)
 	}
 }
 
@@ -315,6 +337,7 @@ func actualInsertRequestBytes(
 	endLines := make([]int64, 0, len(chunks))
 	fileExtensions := make([]string, 0, len(chunks))
 	metadataValues := make([]string, 0, len(chunks))
+
 	vectors := make([][]float32, 0, len(chunks))
 	for index, chunk := range chunks {
 		content, _ := milvusstore.SanitizeUTF8(chunk.Content)
@@ -343,11 +366,7 @@ func actualInsertRequestBytes(
 		column.NewColumnInt64(endLineFieldName, endLines).FieldData(),
 		column.NewColumnVarChar(fileExtensionFieldName, fileExtensions).FieldData(),
 		column.NewColumnVarChar(metadataFieldName, metadataValues).FieldData(),
-		column.NewColumnFloatVector(
-			denseVectorFieldName,
-			vectorDimension,
-			vectors,
-		).FieldData(),
+		column.NewColumnFloatVector(denseVectorFieldName, vectorDimension, vectors).FieldData(),
 	}
 
 	request := &milvuspb.InsertRequest{
@@ -355,6 +374,7 @@ func actualInsertRequestBytes(
 		NumRows:        uint32(len(chunks)),
 		FieldsData:     fieldsData,
 	}
+
 	return proto.Size(request)
 }
 
@@ -363,10 +383,12 @@ func actualInsertRequestBytes(
 // budget cannot close a group at all, so the row ceiling is the only bound and
 // the groups are whole multiples of it.
 func TestPackForEmbeddingAllReusedGroupsOnlyOnRowCap(t *testing.T) {
-	service := &Service{cfg: config.Config{
-		EmbeddingBatchSize:        16,
-		EmbeddingBatchTokenBudget: 6000,
-	}}
+	service := &Service{
+		cfg: config.Config{
+			EmbeddingBatchSize:        16,
+			EmbeddingBatchTokenBudget: 6000,
+		},
+	}
 	chunks := conversationSizedChunks(40)
 	reuse := knownModelReuse(reuseCoveringAllBut(chunks, 40))
 
@@ -381,10 +403,12 @@ func TestPackForEmbeddingAllReusedGroupsOnlyOnRowCap(t *testing.T) {
 // share of a group grow past the configured budget, so a mixed stream under a
 // row ceiling far above what the budget allows still closes on tokens.
 func TestPackForEmbeddingNeverExceedsTokenBudgetWithPartialReuse(t *testing.T) {
-	service := &Service{cfg: config.Config{
-		EmbeddingBatchSize:        256,
-		EmbeddingBatchTokenBudget: 6000,
-	}}
+	service := &Service{
+		cfg: config.Config{
+			EmbeddingBatchSize:        256,
+			EmbeddingBatchTokenBudget: 6000,
+		},
+	}
 	chunks := conversationSizedChunks(120)
 	reuse := knownModelReuse(reuseCoveringAllBut(chunks, 2))
 
@@ -393,7 +417,10 @@ func TestPackForEmbeddingNeverExceedsTokenBudgetWithPartialReuse(t *testing.T) {
 	assertGroupsWithinTokenBudget(t, groups, reuse, 6000)
 	assertGroupsCoverChunksInOrder(t, groups, chunks)
 	if len(groups) < 2 {
-		t.Fatalf("groups = %d, want more than one: 60 embedded chunks at 376 tokens exceed the 6000-token budget", len(groups))
+		t.Fatalf(
+			"groups = %d, want more than one: 60 embedded chunks at 376 tokens exceed the 6000-token budget",
+			len(groups),
+		)
 	}
 }
 
@@ -405,33 +432,54 @@ func knownModelReuse(vectors map[string][]float32) map[string]model.ReuseVector 
 	for key, vector := range vectors {
 		reuse[key] = model.ReuseVector{Vector: vector, SourceModelKnown: true}
 	}
+
 	return reuse
 }
 
-func assertGroupsWithinTokenBudget(t *testing.T, groups [][]model.StoredChunk, reuse map[string]model.ReuseVector, tokenBudget int) {
+func assertGroupsWithinTokenBudget(
+	t *testing.T,
+	groups [][]model.StoredChunk,
+	reuse map[string]model.ReuseVector,
+	tokenBudget int,
+) {
 	t.Helper()
+
 	for index, group := range groups {
 		total := 0
+
 		for _, chunk := range group {
 			total += embeddedTokenCount(chunk, reuse)
 		}
+
 		if len(group) > 1 && total > tokenBudget {
-			t.Fatalf("group %d carries %d embedded tokens, want at most %d", index, total, tokenBudget)
+			t.Fatalf(
+				"group %d carries %d embedded tokens, want at most %d",
+				index,
+				total,
+				tokenBudget,
+			)
 		}
 	}
 }
 
 // assertGroupsCoverChunksInOrder fails unless every chunk lands in exactly one
 // group, in the original order.
-func assertGroupsCoverChunksInOrder(t *testing.T, groups [][]model.StoredChunk, chunks []model.StoredChunk) {
+func assertGroupsCoverChunksInOrder(
+	t *testing.T,
+	groups [][]model.StoredChunk,
+	chunks []model.StoredChunk,
+) {
 	t.Helper()
 	flattened := make([]model.StoredChunk, 0, len(chunks))
+
 	for _, group := range groups {
 		flattened = append(flattened, group...)
 	}
+
 	if len(flattened) != len(chunks) {
 		t.Fatalf("groups hold %d chunks, want %d", len(flattened), len(chunks))
 	}
+
 	for index := range chunks {
 		if !reflect.DeepEqual(flattened[index], chunks[index]) {
 			t.Fatalf("chunk %d is out of order", index)
@@ -440,10 +488,12 @@ func assertGroupsCoverChunksInOrder(t *testing.T, groups [][]model.StoredChunk, 
 }
 
 func TestPackForEmbeddingClosesOnConfiguredRowCap(t *testing.T) {
-	service := &Service{cfg: config.Config{
-		EmbeddingBatchSize:        2,
-		EmbeddingBatchTokenBudget: 6000,
-	}}
+	service := &Service{
+		cfg: config.Config{
+			EmbeddingBatchSize:        2,
+			EmbeddingBatchTokenBudget: 6000,
+		},
+	}
 	chunks := []model.StoredChunk{
 		chunkOfBytes(4),
 		chunkOfBytes(4),
@@ -457,6 +507,7 @@ func TestPackForEmbeddingClosesOnConfiguredRowCap(t *testing.T) {
 	if len(groups) != len(want) {
 		t.Fatalf("groups = %d, want %d", len(groups), len(want))
 	}
+
 	for i, group := range groups {
 		if len(group) != want[i] {
 			t.Fatalf("group %d rows = %d, want %d", i, len(group), want[i])
@@ -473,32 +524,48 @@ func TestPackChunksLargeInputKeepsEveryChunkInOrder(t *testing.T) {
 		chunkBytes  = 1500
 		tokenBudget = 6000
 	)
+
 	chunks := make([]model.StoredChunk, 0, chunkCount)
 	for index := range chunkCount {
-		chunks = append(chunks, model.StoredChunk{
-			Content: strconv.Itoa(index) + strings.Repeat("x", chunkBytes),
-		})
+		chunks = append(
+			chunks,
+			model.StoredChunk{
+				Content: strconv.Itoa(index) + strings.Repeat("x", chunkBytes),
+			},
+		)
 	}
 
 	groups := packChunksByEstimatedTokens(chunks, math.MaxInt, tokenBudget, nil)
 
 	flattened := make([]model.StoredChunk, 0, chunkCount)
+
 	for _, group := range groups {
 		if len(group) == 0 {
 			t.Fatal("packer emitted an empty group")
 		}
+
 		groupTokens := 0
+
 		for _, chunk := range group {
 			groupTokens += estimatedTokenCount(chunk.Content)
 		}
+
 		if len(group) > 1 && groupTokens > tokenBudget {
-			t.Fatalf("group of %d rows estimated %d tokens, over the %d budget", len(group), groupTokens, tokenBudget)
+			t.Fatalf(
+				"group of %d rows estimated %d tokens, over the %d budget",
+				len(group),
+				groupTokens,
+				tokenBudget,
+			)
 		}
+
 		flattened = append(flattened, group...)
 	}
+
 	if len(flattened) != chunkCount {
 		t.Fatalf("packed %d chunks, want %d", len(flattened), chunkCount)
 	}
+
 	for index := range flattened {
 		if flattened[index].Content != chunks[index].Content {
 			t.Fatalf("chunk %d out of order or altered", index)

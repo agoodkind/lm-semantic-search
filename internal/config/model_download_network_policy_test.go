@@ -23,6 +23,7 @@ func isolatedConfigPath(t *testing.T, environmentPolicy string) string {
 	t.Setenv(networkPolicyEnvironmentVariable, environmentPolicy)
 	configRoot := t.TempDir()
 	t.Setenv("CLAUDE_CONTEXTD_CONFIG_ROOT", configRoot)
+
 	return filepath.Join(configRoot, "config.json")
 }
 
@@ -87,22 +88,26 @@ func TestDefaultResolvesModelDownloadNetworkPolicy(t *testing.T) {
 		},
 	}
 	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			configPath := isolatedConfigPath(t, testCase.environment)
-			writeConfigFile(t, configPath, testCase.fileData)
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				configPath := isolatedConfigPath(t, testCase.environment)
+				writeConfigFile(t, configPath, testCase.fileData)
 
-			cfg, err := config.Default()
-			if err != nil {
-				t.Fatalf("Default returned error: %v", err)
-			}
-			if cfg.ModelDownloadNetworkPolicy != testCase.want {
-				t.Errorf(
-					"ModelDownloadNetworkPolicy = %q want %q",
-					cfg.ModelDownloadNetworkPolicy,
-					testCase.want,
-				)
-			}
-		})
+				cfg, err := config.Default()
+				if err != nil {
+					t.Fatalf("Default returned error: %v", err)
+				}
+
+				if cfg.ModelDownloadNetworkPolicy != testCase.want {
+					t.Errorf(
+						"ModelDownloadNetworkPolicy = %q want %q",
+						cfg.ModelDownloadNetworkPolicy,
+						testCase.want,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -120,18 +125,21 @@ func TestDefaultRejectsUnknownModelDownloadNetworkPolicy(t *testing.T) {
 		},
 	}
 	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			configPath := isolatedConfigPath(t, testCase.environment)
-			writeConfigFile(t, configPath, testCase.fileData)
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				configPath := isolatedConfigPath(t, testCase.environment)
+				writeConfigFile(t, configPath, testCase.fileData)
 
-			cfg, err := config.Default()
-			if err == nil {
-				t.Fatalf(
-					"Default returned no error, ModelDownloadNetworkPolicy = %q",
-					cfg.ModelDownloadNetworkPolicy,
-				)
-			}
-		})
+				cfg, err := config.Default()
+				if err == nil {
+					t.Fatalf(
+						"Default returned no error, ModelDownloadNetworkPolicy = %q",
+						cfg.ModelDownloadNetworkPolicy,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -147,6 +155,7 @@ func TestSetModelDownloadNetworkPolicyPersistsValueDefaultReads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Default returned error: %v", err)
 	}
+
 	if cfg.ModelDownloadNetworkPolicy != networkcost.PreferenceDefer {
 		t.Errorf(
 			"ModelDownloadNetworkPolicy = %q want %q",
@@ -154,10 +163,12 @@ func TestSetModelDownloadNetworkPolicyPersistsValueDefaultReads(t *testing.T) {
 			networkcost.PreferenceDefer,
 		)
 	}
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("ReadFile returned error: %v", err)
 	}
+
 	wantData := "{\n  \"futureField\": {\n    \"enabled\": true\n  },\n" +
 		"  \"modelDownloadNetworkPolicy\": \"defer\"\n}\n"
 	if string(data) != wantData {
@@ -183,23 +194,27 @@ func TestDefaultResolvesModelDownloadNetworkOverride(t *testing.T) {
 		},
 	}
 	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			configPath := isolatedConfigPath(t, "")
-			t.Setenv("CLAUDE_CONTEXT_MODEL_DOWNLOAD_NETWORK_OVERRIDE", testCase.environment)
-			writeConfigFile(t, configPath, testCase.fileData)
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				configPath := isolatedConfigPath(t, "")
+				t.Setenv("CLAUDE_CONTEXT_MODEL_DOWNLOAD_NETWORK_OVERRIDE", testCase.environment)
+				writeConfigFile(t, configPath, testCase.fileData)
 
-			cfg, err := config.Default()
-			if err != nil {
-				t.Fatalf("Default returned error: %v", err)
-			}
-			if cfg.ModelDownloadNetworkOverride != testCase.want {
-				t.Errorf(
-					"ModelDownloadNetworkOverride = %t want %t",
-					cfg.ModelDownloadNetworkOverride,
-					testCase.want,
-				)
-			}
-		})
+				cfg, err := config.Default()
+				if err != nil {
+					t.Fatalf("Default returned error: %v", err)
+				}
+
+				if cfg.ModelDownloadNetworkOverride != testCase.want {
+					t.Errorf(
+						"ModelDownloadNetworkOverride = %t want %t",
+						cfg.ModelDownloadNetworkOverride,
+						testCase.want,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -216,8 +231,13 @@ func TestSetModelDownloadNetworkOverridePersistsValueSettingsRead(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ReadModelDownloadNetworkSettings returned error: %v", err)
 	}
+
 	if !settings.Override || settings.Policy != networkcost.PreferenceDefer {
-		t.Errorf("settings = %+v want override with policy %q", settings, networkcost.PreferenceDefer)
+		t.Errorf(
+			"settings = %+v want override with policy %q",
+			settings,
+			networkcost.PreferenceDefer,
+		)
 	}
 }
 
@@ -229,8 +249,13 @@ func TestReadModelDownloadNetworkSettingsDefaultsWithoutConfigFile(t *testing.T)
 	if err != nil {
 		t.Fatalf("ReadModelDownloadNetworkSettings returned error: %v", err)
 	}
+
 	if settings.Override || settings.Policy != networkcost.DefaultPreference {
-		t.Errorf("ReadModelDownloadNetworkSettings returned %+v instead of override off with the default policy %q when no config file exists.", settings, networkcost.DefaultPreference)
+		t.Errorf(
+			"ReadModelDownloadNetworkSettings returned %+v instead of override off with the default policy %q when no config file exists.",
+			settings,
+			networkcost.DefaultPreference,
+		)
 	}
 }
 
@@ -241,7 +266,10 @@ func TestReadModelDownloadNetworkSettingsRejectsInvalidJSON(t *testing.T) {
 
 	settings, err := config.ReadModelDownloadNetworkSettings(configPath)
 	if err == nil {
-		t.Fatalf("ReadModelDownloadNetworkSettings returned %+v without an error for a config file with invalid JSON.", settings)
+		t.Fatalf(
+			"ReadModelDownloadNetworkSettings returned %+v without an error for a config file with invalid JSON.",
+			settings,
+		)
 	}
 }
 
@@ -258,6 +286,7 @@ func TestSetModelDownloadNetworkPolicyRejectsUnknownWithoutWriting(t *testing.T)
 	if err != nil {
 		t.Fatalf("ReadFile returned error: %v", err)
 	}
+
 	if string(data) != initialData {
 		t.Fatalf("config changed after invalid policy: %q", data)
 	}

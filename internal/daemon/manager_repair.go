@@ -31,6 +31,7 @@ func (manager *Manager) RepairMissingCollections(ctx context.Context) {
 	if manager.skipForMaintenance(ctx, "repair-missing-collections") {
 		return
 	}
+
 	plans, cleanups, err := manager.planMissingCollectionRepairs(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "repair missing collections failed", "err", err)
@@ -47,7 +48,11 @@ func (manager *Manager) RepairMissingCollections(ctx context.Context) {
 			model.ClientInfo{Name: "daemon-repair", PID: 0},
 			plan.config,
 			indexPolicyIntent{
-				Patch:      model.SchedulingPolicyPatch{Priority: nil, Quiet: nil, IdleAfterSeconds: nil},
+				Patch: model.SchedulingPolicyPatch{
+					Priority:         nil,
+					Quiet:            nil,
+					IdleAfterSeconds: nil,
+				},
 				Initialize: true,
 			},
 		)
@@ -65,11 +70,14 @@ func (manager *Manager) RepairMissingCollections(ctx context.Context) {
 			)
 			continue
 		}
+
 		if started.held || started.paused {
 			continue
 		}
+
 		queuedPaths = append(queuedPaths, plan.canonicalPath)
 	}
+
 	if len(queuedPaths) > 0 {
 		slog.InfoContext(
 			ctx,
@@ -91,12 +99,25 @@ func (manager *Manager) RepairMissingCollections(ctx context.Context) {
 func (manager *Manager) cleanRemovedWorktrees(ctx context.Context, cleanups []string) {
 	cleaned := make([]string, 0, len(cleanups))
 	for _, canonicalPath := range cleanups {
-		if _, clearErr := manager.ClearIndex(ctx, canonicalPath, model.ClientInfo{Name: "daemon-worktree-cleanup", PID: 0}); clearErr != nil {
-			slog.WarnContext(ctx, "auto-clean of removed worktree failed", "path", canonicalPath, "err", clearErr)
+		if _, clearErr := manager.ClearIndex(
+			ctx,
+			canonicalPath,
+			model.ClientInfo{Name: "daemon-worktree-cleanup", PID: 0},
+		); clearErr != nil {
+			slog.WarnContext(
+				ctx,
+				"auto-clean of removed worktree failed",
+				"path",
+				canonicalPath,
+				"err",
+				clearErr,
+			)
 			continue
 		}
+
 		cleaned = append(cleaned, canonicalPath)
 	}
+
 	if len(cleaned) > 0 {
 		slog.InfoContext(
 			ctx,
@@ -113,7 +134,9 @@ func (manager *Manager) cleanRemovedWorktrees(ctx context.Context, cleanups []st
 	}
 }
 
-func (manager *Manager) planMissingCollectionRepairs(ctx context.Context) ([]missingCollectionRepair, []string, error) {
+func (manager *Manager) planMissingCollectionRepairs(
+	ctx context.Context,
+) ([]missingCollectionRepair, []string, error) {
 	if manager.semantic == nil || !manager.semantic.Available() {
 		return nil, nil, nil
 	}
@@ -136,14 +159,17 @@ func (manager *Manager) planMissingCollectionRepairs(ctx context.Context) ([]mis
 	plans := make([]missingCollectionRepair, 0)
 	cleanups := make([]string, 0)
 	changed := false
+
 	for codebaseID, codebase := range manager.codebases {
 		outcome := manager.classifyCodebaseRepair(codebaseID, codebase, collectionSet)
 		if outcome.persist {
 			changed = true
 		}
+
 		if outcome.cleanup {
 			cleanups = append(cleanups, codebase.CanonicalPath)
 		}
+
 		if outcome.plan != nil {
 			plans = append(plans, *outcome.plan)
 		}
@@ -151,10 +177,17 @@ func (manager *Manager) planMissingCollectionRepairs(ctx context.Context) ([]mis
 
 	if changed {
 		if err := manager.saveLocked(); err != nil {
-			slog.ErrorContext(ctx, "persist stale codebases before automatic rebuild failed", "err", err)
+			slog.ErrorContext(
+				ctx,
+				"persist stale codebases before automatic rebuild failed",
+				"err",
+				err,
+			)
+
 			return nil, nil, fmt.Errorf("persist stale codebases before automatic rebuild: %w", err)
 		}
 	}
+
 	return plans, cleanups, nil
 }
 
@@ -187,13 +220,16 @@ func (manager *Manager) classifyCodebaseRepair(
 			!gitworktree.WorktreeTracked(codebase.WorktreeCommonDir, codebase.CanonicalPath) {
 			return repairOutcome{persist: false, cleanup: true, plan: nil}
 		}
+
 		if codebase.Status != model.CodebaseStatusMissing || codebase.ActiveJobID != "" {
 			codebase.Status = model.CodebaseStatusMissing
 			codebase.ActiveJobID = ""
 			codebase.UpdatedAt = clock.Now()
 			manager.codebases[codebaseID] = codebase
+
 			return repairOutcome{persist: true, cleanup: false, plan: nil}
 		}
+
 		return repairOutcome{persist: false, cleanup: false, plan: nil}
 	}
 
@@ -209,6 +245,7 @@ func (manager *Manager) classifyCodebaseRepair(
 		if manager.activeJobSnapshotLocked(codebase) != nil {
 			return repairOutcome{persist: false, cleanup: false, plan: nil}
 		}
+
 		if _, coalesced := manager.pendingCodeJobs[codebaseID]; coalesced {
 			return repairOutcome{persist: false, cleanup: false, plan: nil}
 		}
@@ -247,6 +284,7 @@ func (manager *Manager) reconcileCodebaseCollection(
 			persist = true
 		}
 	}
+
 	// Backfill the worktree common dir for a codebase indexed before that field
 	// existed, while its directory is still present. Recording it now is what
 	// lets the auto-clean recognize this worktree as removed once git deletes it
@@ -259,9 +297,11 @@ func (manager *Manager) reconcileCodebaseCollection(
 			persist = true
 		}
 	}
+
 	if expectedCollectionName == "" {
 		return repairOutcome{persist: persist, cleanup: false, plan: nil}
 	}
+
 	presence := presenceFromCollectionSet(expectedCollectionName, collectionSet)
 	hasActiveJob := manager.activeJobSnapshotLocked(codebase) != nil
 	if shouldSkipForActiveFirstBuildStaging(codebase, hasActiveJob) {
@@ -277,6 +317,7 @@ func (manager *Manager) reconcileCodebaseCollection(
 		codebase.LastFailedRun = nil
 		codebase.UpdatedAt = clock.Now()
 		manager.codebases[codebaseID] = codebase
+
 		return repairOutcome{persist: true, cleanup: false, plan: nil}
 	}
 
@@ -305,10 +346,15 @@ func (manager *Manager) reconcileCodebaseCollection(
 		manager.codebases[codebaseID] = codebase
 		persist = true
 	}
+
 	return repairOutcome{persist: persist, cleanup: false, plan: plan}
 }
 
-func (manager *Manager) noteAutomaticRepairStartFailure(ctx context.Context, codebaseID string, startErr error) {
+func (manager *Manager) noteAutomaticRepairStartFailure(
+	ctx context.Context,
+	codebaseID string,
+	startErr error,
+) {
 	manager.policyMutationMutex.Lock()
 	defer manager.policyMutationMutex.Unlock()
 
@@ -323,7 +369,14 @@ func (manager *Manager) noteAutomaticRepairStartFailure(ctx context.Context, cod
 	now := clock.Now()
 	// Keep the raw enqueue error in the log; the persisted message stays a clean
 	// summary so the status surface carries no implementation detail.
-	slog.ErrorContext(ctx, "automatic rebuild could not start for missing collection", "codebase_id", codebaseID, "err", startErr)
+	slog.ErrorContext(
+		ctx,
+		"automatic rebuild could not start for missing collection",
+		"codebase_id",
+		codebaseID,
+		"err",
+		startErr,
+	)
 	codebase.Status = model.CodebaseStatusStale
 	codebase.ActiveJobID = ""
 	codebase.LastFailedRun = &model.IndexRunFailure{
@@ -337,6 +390,13 @@ func (manager *Manager) noteAutomaticRepairStartFailure(ctx context.Context, cod
 	codebase.UpdatedAt = now
 	manager.codebases[codebaseID] = codebase
 	if err := manager.saveLocked(); err != nil {
-		slog.ErrorContext(ctx, "write registry after automatic rebuild enqueue failure failed", "codebase_id", codebaseID, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"write registry after automatic rebuild enqueue failure failed",
+			"codebase_id",
+			codebaseID,
+			"err",
+			err,
+		)
 	}
 }

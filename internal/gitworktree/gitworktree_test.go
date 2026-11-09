@@ -21,6 +21,7 @@ func writeFile(t *testing.T, path string, content string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir for %s: %v", path, err)
 	}
+
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
@@ -32,12 +33,17 @@ func resolved(t *testing.T, path string) string {
 	if err != nil {
 		t.Fatalf("eval symlinks %s: %v", path, err)
 	}
+
 	return out
 }
 
 // buildRepo lays out a main worktree with a .git directory and zero or more
 // linked worktrees registered under .git/worktrees/<name>.
-func buildRepo(t *testing.T, mainHead string, linked []linkedSpec) (mainRoot string, commonDir string) {
+func buildRepo(
+	t *testing.T,
+	mainHead string,
+	linked []linkedSpec,
+) (mainRoot string, commonDir string) {
 	t.Helper()
 	base := t.TempDir()
 	mainRoot = filepath.Join(base, "repo")
@@ -54,6 +60,7 @@ func buildRepo(t *testing.T, mainHead string, linked []linkedSpec) (mainRoot str
 		// the linked worktree's .git file points at the per-worktree dir.
 		writeFile(t, gitFilePath, "gitdir: "+perWorktree+"\n")
 	}
+
 	return mainRoot, resolved(t, gitDir)
 }
 
@@ -64,18 +71,23 @@ func TestResolveMainWorktree(t *testing.T) {
 	if !ok {
 		t.Fatalf("Resolve(%s) returned not-a-worktree", mainRoot)
 	}
+
 	if info.WorktreeRoot != resolved(t, mainRoot) {
 		t.Errorf("WorktreeRoot = %q, want %q", info.WorktreeRoot, resolved(t, mainRoot))
 	}
+
 	if info.CommonDir != commonDir {
 		t.Errorf("CommonDir = %q, want %q", info.CommonDir, commonDir)
 	}
+
 	if info.Linked {
 		t.Errorf("Linked = true, want false for main worktree")
 	}
+
 	if info.Branch != "main" {
 		t.Errorf("Branch = %q, want %q", info.Branch, "main")
 	}
+
 	if info.Detached {
 		t.Errorf("Detached = true, want false")
 	}
@@ -84,9 +96,13 @@ func TestResolveMainWorktree(t *testing.T) {
 func TestResolveLinkedWorktreeFromSubdir(t *testing.T) {
 	base := t.TempDir()
 	linkedDir := filepath.Join(base, "feature")
-	mainRoot, commonDir := buildRepo(t, "ref: refs/heads/main\n", []linkedSpec{
-		{name: "feature", dir: linkedDir, head: "ref: refs/heads/feature\n"},
-	})
+	mainRoot, commonDir := buildRepo(
+		t,
+		"ref: refs/heads/main\n",
+		[]linkedSpec{
+			{name: "feature", dir: linkedDir, head: "ref: refs/heads/feature\n"},
+		},
+	)
 	_ = mainRoot
 	// a nested subdirectory inside the linked worktree must resolve up to it.
 	sub := filepath.Join(linkedDir, "src", "pkg")
@@ -98,15 +114,19 @@ func TestResolveLinkedWorktreeFromSubdir(t *testing.T) {
 	if !ok {
 		t.Fatalf("Resolve(%s) returned not-a-worktree", sub)
 	}
+
 	if info.WorktreeRoot != resolved(t, linkedDir) {
 		t.Errorf("WorktreeRoot = %q, want %q", info.WorktreeRoot, resolved(t, linkedDir))
 	}
+
 	if info.CommonDir != commonDir {
 		t.Errorf("CommonDir = %q, want %q", info.CommonDir, commonDir)
 	}
+
 	if !info.Linked {
 		t.Errorf("Linked = false, want true for linked worktree")
 	}
+
 	if info.Branch != "feature" {
 		t.Errorf("Branch = %q, want %q", info.Branch, "feature")
 	}
@@ -116,20 +136,27 @@ func TestResolveDetachedHead(t *testing.T) {
 	base := t.TempDir()
 	linkedDir := filepath.Join(base, "detached")
 	sha := "0123456789abcdef0123456789abcdef01234567"
-	buildRepo(t, "ref: refs/heads/main\n", []linkedSpec{
-		{name: "detached", dir: linkedDir, head: sha + "\n"},
-	})
+	buildRepo(
+		t,
+		"ref: refs/heads/main\n",
+		[]linkedSpec{
+			{name: "detached", dir: linkedDir, head: sha + "\n"},
+		},
+	)
 
 	info, ok := Resolve(linkedDir)
 	if !ok {
 		t.Fatalf("Resolve(%s) returned not-a-worktree", linkedDir)
 	}
+
 	if !info.Detached {
 		t.Errorf("Detached = false, want true")
 	}
+
 	if info.Branch != "" {
 		t.Errorf("Branch = %q, want empty for detached HEAD", info.Branch)
 	}
+
 	if info.Head != sha {
 		t.Errorf("Head = %q, want %q", info.Head, sha)
 	}
@@ -145,24 +172,32 @@ func TestResolveNonGitDirectory(t *testing.T) {
 func TestCommonDirAtMainAndLinkedMatch(t *testing.T) {
 	base := t.TempDir()
 	linkedDir := filepath.Join(base, "feature")
-	mainRoot, commonDir := buildRepo(t, "ref: refs/heads/main\n", []linkedSpec{
-		{name: "feature", dir: linkedDir, head: "ref: refs/heads/feature\n"},
-	})
+	mainRoot, commonDir := buildRepo(
+		t,
+		"ref: refs/heads/main\n",
+		[]linkedSpec{
+			{name: "feature", dir: linkedDir, head: "ref: refs/heads/feature\n"},
+		},
+	)
 
 	mainCommon, ok := CommonDirAt(mainRoot)
 	if !ok {
 		t.Fatalf("CommonDirAt(main) not ok")
 	}
+
 	linkedCommon, ok := CommonDirAt(linkedDir)
 	if !ok {
 		t.Fatalf("CommonDirAt(linked) not ok")
 	}
+
 	if mainCommon != commonDir {
 		t.Errorf("main CommonDirAt = %q, want %q", mainCommon, commonDir)
 	}
+
 	if linkedCommon != commonDir {
 		t.Errorf("linked CommonDirAt = %q, want %q", linkedCommon, commonDir)
 	}
+
 	if mainCommon != linkedCommon {
 		t.Errorf("main and linked common dirs differ: %q vs %q", mainCommon, linkedCommon)
 	}
@@ -192,6 +227,7 @@ func TestCommonDirAtSubmoduleDiffersFromSuperproject(t *testing.T) {
 	if !ok {
 		t.Fatalf("CommonDirAt(submodule) not ok")
 	}
+
 	if subCommon == superCommon {
 		t.Errorf("submodule common dir %q must differ from superproject %q", subCommon, superCommon)
 	}
@@ -201,10 +237,14 @@ func TestSiblingWorktreeRootsIncludesMainAndLinked(t *testing.T) {
 	base := t.TempDir()
 	featureDir := filepath.Join(base, "feature")
 	hotfixDir := filepath.Join(base, "hotfix")
-	mainRoot, commonDir := buildRepo(t, "ref: refs/heads/main\n", []linkedSpec{
-		{name: "feature", dir: featureDir, head: "ref: refs/heads/feature\n"},
-		{name: "hotfix", dir: hotfixDir, head: "ref: refs/heads/hotfix\n"},
-	})
+	mainRoot, commonDir := buildRepo(
+		t,
+		"ref: refs/heads/main\n",
+		[]linkedSpec{
+			{name: "feature", dir: featureDir, head: "ref: refs/heads/feature\n"},
+			{name: "hotfix", dir: hotfixDir, head: "ref: refs/heads/hotfix\n"},
+		},
+	)
 
 	got := SiblingWorktreeRoots(commonDir)
 	want := []string{resolved(t, mainRoot), resolved(t, featureDir), resolved(t, hotfixDir)}
@@ -218,10 +258,14 @@ func TestSiblingWorktreeRootsOmitsMissingDir(t *testing.T) {
 	base := t.TempDir()
 	featureDir := filepath.Join(base, "feature")
 	goneDir := filepath.Join(base, "gone")
-	mainRoot, commonDir := buildRepo(t, "ref: refs/heads/main\n", []linkedSpec{
-		{name: "feature", dir: featureDir, head: "ref: refs/heads/feature\n"},
-		{name: "gone", dir: goneDir, head: "ref: refs/heads/gone\n"},
-	})
+	mainRoot, commonDir := buildRepo(
+		t,
+		"ref: refs/heads/main\n",
+		[]linkedSpec{
+			{name: "feature", dir: featureDir, head: "ref: refs/heads/feature\n"},
+			{name: "gone", dir: goneDir, head: "ref: refs/heads/gone\n"},
+		},
+	)
 	// simulate a worktree moved away without `git worktree repair`: the pointer
 	// remains under .git/worktrees but the working directory is gone.
 	if err := os.RemoveAll(goneDir); err != nil {
@@ -239,19 +283,26 @@ func TestSiblingWorktreeRootsOmitsMissingDir(t *testing.T) {
 func TestWorktreeOfRepo(t *testing.T) {
 	base := t.TempDir()
 	linkedDir := filepath.Join(base, "feature")
-	mainRoot, commonDir := buildRepo(t, "ref: refs/heads/main\n", []linkedSpec{
-		{name: "feature", dir: linkedDir, head: "ref: refs/heads/feature\n"},
-	})
+	mainRoot, commonDir := buildRepo(
+		t,
+		"ref: refs/heads/main\n",
+		[]linkedSpec{
+			{name: "feature", dir: linkedDir, head: "ref: refs/heads/feature\n"},
+		},
+	)
 
 	if !WorktreeOfRepo(linkedDir, commonDir) {
 		t.Errorf("WorktreeOfRepo(linked, commonDir) = false, want true")
 	}
+
 	if !WorktreeOfRepo(mainRoot, commonDir) {
 		t.Errorf("WorktreeOfRepo(main, commonDir) = false, want true")
 	}
+
 	if WorktreeOfRepo(base, commonDir) {
 		t.Errorf("WorktreeOfRepo(non-git dir, commonDir) = true, want false")
 	}
+
 	if WorktreeOfRepo(linkedDir, "") {
 		t.Errorf("WorktreeOfRepo(linked, empty commonDir) = true, want false")
 	}
@@ -312,7 +363,12 @@ func TestPathInsideNestedWorktree(t *testing.T) {
 	for _, testCase := range cases {
 		got := PathInsideNestedWorktree(mainRoot, commonDir, testCase.path)
 		if got != testCase.want {
-			t.Errorf("PathInsideNestedWorktree(%q) = %v, want %v", testCase.name, got, testCase.want)
+			t.Errorf(
+				"PathInsideNestedWorktree(%q) = %v, want %v",
+				testCase.name,
+				got,
+				testCase.want,
+			)
 		}
 	}
 
@@ -333,20 +389,32 @@ func TestPathInsideSubmodule(t *testing.T) {
 	writeFile(t, filepath.Join(moduleGitDir, "HEAD"), "ref: refs/heads/main\n")
 	writeFile(t, filepath.Join(subModuleDir, ".git"), "gitdir: "+moduleGitDir+"\n")
 
-	relRoot, ok := PathInsideSubmodule(mainRoot, commonDir, filepath.Join(subModuleDir, "internal", "lib.go"))
+	relRoot, ok := PathInsideSubmodule(
+		mainRoot,
+		commonDir,
+		filepath.Join(subModuleDir, "internal", "lib.go"),
+	)
 	if !ok {
 		t.Fatal("PathInsideSubmodule returned ok=false for a file inside a submodule")
 	}
+
 	if relRoot != "vendor/lib" {
 		t.Fatalf("relRoot = %q, want vendor/lib", relRoot)
 	}
+
 	if _, ok := PathInsideSubmodule(mainRoot, commonDir, mainRoot); ok {
 		t.Fatal("PathInsideSubmodule reported the root itself as a submodule")
 	}
+
 	if _, ok := PathInsideSubmodule(mainRoot, commonDir, filepath.Join(mainRoot, "main.go")); ok {
 		t.Fatal("PathInsideSubmodule reported a parent repo file as a submodule")
 	}
-	if _, ok := PathInsideSubmodule(mainRoot, "", filepath.Join(subModuleDir, "internal", "lib.go")); ok {
+
+	if _, ok := PathInsideSubmodule(
+		mainRoot,
+		"",
+		filepath.Join(subModuleDir, "internal", "lib.go"),
+	); ok {
 		t.Fatal("PathInsideSubmodule with empty commonDir = ok, want false")
 	}
 }
@@ -354,9 +422,13 @@ func TestPathInsideSubmodule(t *testing.T) {
 func TestWorktreeTrackedTrueThenFalseAfterRemoval(t *testing.T) {
 	base := t.TempDir()
 	wtDir := filepath.Join(base, "feat")
-	_, commonDir := buildRepo(t, "ref: refs/heads/main\n", []linkedSpec{
-		{name: "feat", dir: wtDir, head: "ref: refs/heads/feat\n"},
-	})
+	_, commonDir := buildRepo(
+		t,
+		"ref: refs/heads/main\n",
+		[]linkedSpec{
+			{name: "feat", dir: wtDir, head: "ref: refs/heads/feat\n"},
+		},
+	)
 
 	if !WorktreeTracked(commonDir, wtDir) {
 		t.Fatalf("WorktreeTracked = false for a live linked worktree, want true")
@@ -366,9 +438,11 @@ func TestWorktreeTrackedTrueThenFalseAfterRemoval(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(commonDir, "worktrees", "feat")); err != nil {
 		t.Fatalf("remove admin entry: %v", err)
 	}
+
 	if WorktreeTracked(commonDir, wtDir) {
 		t.Fatalf("WorktreeTracked = true after the admin entry was removed, want false")
 	}
+
 	if WorktreeTracked("", wtDir) {
 		t.Fatalf("WorktreeTracked = true for an empty common dir, want false")
 	}

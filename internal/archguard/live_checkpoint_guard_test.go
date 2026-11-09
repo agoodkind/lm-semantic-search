@@ -44,17 +44,26 @@ func TestLiveCheckpointReadsGoThroughOneChokepoint(t *testing.T) {
 		if slashed == liveCheckpointReader || strings.HasPrefix(slashed, merkleHome) {
 			continue
 		}
+
 		parsed, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
+
 		for _, name := range merkleSnapshotReadCalls(parsed) {
-			violations = append(violations, slashed+": calls merkle."+name+" directly; read the live checkpoint through Manager.loadLiveCheckpoint so the absent-file verdict stays in one place")
+			violations = append(
+				violations,
+				slashed+": calls merkle."+name+" directly; read the live checkpoint through Manager.loadLiveCheckpoint so the absent-file verdict stays in one place",
+			)
 		}
 	}
 
 	if len(violations) > 0 {
-		t.Fatalf("live merkle checkpoint reads must go through %s:\n%s", liveCheckpointReader, strings.Join(violations, "\n"))
+		t.Fatalf(
+			"live merkle checkpoint reads must go through %s:\n%s",
+			liveCheckpointReader,
+			strings.Join(violations, "\n"),
+		)
 	}
 }
 
@@ -63,20 +72,27 @@ func TestLiveCheckpointReadsGoThroughOneChokepoint(t *testing.T) {
 // same-named method on another type does not register.
 func merkleSnapshotReadCalls(file *ast.File) []string {
 	var called []string
-	ast.Inspect(file, func(node ast.Node) bool {
-		call, ok := node.(*ast.CallExpr)
-		if !ok {
+	ast.Inspect(
+		file,
+		func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || !liveCheckpointReadFunctions[selector.Sel.Name] {
+				return true
+			}
+
+			pkg, ok := selector.X.(*ast.Ident)
+			if ok && pkg.Name == "merkle" {
+				called = append(called, selector.Sel.Name)
+			}
+
 			return true
-		}
-		selector, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || !liveCheckpointReadFunctions[selector.Sel.Name] {
-			return true
-		}
-		pkg, ok := selector.X.(*ast.Ident)
-		if ok && pkg.Name == "merkle" {
-			called = append(called, selector.Sel.Name)
-		}
-		return true
-	})
+		},
+	)
+
 	return called
 }

@@ -16,8 +16,14 @@ func TestClassifyManagerErrorMapsPathGuardRefusals(t *testing.T) {
 	t.Parallel()
 
 	cases := []error{
-		fmt.Errorf("canonicalize path x: %w", errors.New(`path "chat:///x" looks like a URI; pass a filesystem directory instead`)),
-		fmt.Errorf("canonicalize path x: %w", errors.New(`path "sub/dir" is relative; pass an absolute path or send caller_cwd`)),
+		fmt.Errorf(
+			"canonicalize path x: %w",
+			errors.New(`path "chat:///x" looks like a URI; pass a filesystem directory instead`),
+		),
+		fmt.Errorf(
+			"canonicalize path x: %w",
+			errors.New(`path "sub/dir" is relative; pass an absolute path or send caller_cwd`),
+		),
 		errors.New("refusing to index filesystem root /"),
 		errors.New("codebase root /etc/hosts is not a directory"),
 		errors.New("refusing to index /x because it covers daemon state root /y"),
@@ -29,8 +35,14 @@ func TestClassifyManagerErrorMapsPathGuardRefusals(t *testing.T) {
 			t.Errorf("classifyManagerError(%q) stayed untyped; want invalid-path", cause)
 			continue
 		}
+
 		if adapterErr.Class != adapterr.ClassInvalidPath {
-			t.Errorf("classifyManagerError(%q) class = %q, want %q", cause, adapterErr.Class, adapterr.ClassInvalidPath)
+			t.Errorf(
+				"classifyManagerError(%q) class = %q, want %q",
+				cause,
+				adapterErr.Class,
+				adapterr.ClassInvalidPath,
+			)
 		}
 	}
 }

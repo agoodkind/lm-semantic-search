@@ -16,8 +16,28 @@ func TestDeltaProgressAccumulatesReuseSplit(t *testing.T) {
 	manager, _, _ := newTestManager(t)
 
 	emissions := []semantic.Progress{
-		{Phase: "", OverallPercent: 0, EmbeddingBatchesTotal: 0, EmbeddingBatchesCompleted: 0, CollectionRowsWritten: 4200, ChunksProcessed: 4200, ChunksReused: 4000, ChunksEmbedded: 200, ChunksDropped: 3},
-		{Phase: "", OverallPercent: 0, EmbeddingBatchesTotal: 0, EmbeddingBatchesCompleted: 0, CollectionRowsWritten: 3261, ChunksProcessed: 3261, ChunksReused: 2989, ChunksEmbedded: 272, ChunksDropped: 2},
+		{
+			Phase:                     "",
+			OverallPercent:            0,
+			EmbeddingBatchesTotal:     0,
+			EmbeddingBatchesCompleted: 0,
+			CollectionRowsWritten:     4200,
+			ChunksProcessed:           4200,
+			ChunksReused:              4000,
+			ChunksEmbedded:            200,
+			ChunksDropped:             3,
+		},
+		{
+			Phase:                     "",
+			OverallPercent:            0,
+			EmbeddingBatchesTotal:     0,
+			EmbeddingBatchesCompleted: 0,
+			CollectionRowsWritten:     3261,
+			ChunksProcessed:           3261,
+			ChunksReused:              2989,
+			ChunksEmbedded:            272,
+			ChunksDropped:             2,
+		},
 	}
 	call := 0
 	manager.semantic = &fakeSemantic{
@@ -39,7 +59,17 @@ func TestDeltaProgressAccumulatesReuseSplit(t *testing.T) {
 	}
 	manager.mu.Unlock()
 
-	job := newQueuedJob(codebaseID, canonical, canonical, testClientInfo(), string(jobOperationIndex), false, cfg, emptyAdmissionBudget, clock.Now())
+	job := newQueuedJob(
+		codebaseID,
+		canonical,
+		canonical,
+		testClientInfo(),
+		string(jobOperationIndex),
+		false,
+		cfg,
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
 	manager.mu.Lock()
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()
@@ -54,30 +84,55 @@ func TestDeltaProgressAccumulatesReuseSplit(t *testing.T) {
 
 	for _, relativePath := range []string{"a.go", "b.go"} {
 		chunks := []model.StoredChunk{{Content: "x", RelativePath: relativePath}}
-		if outcome := manager.applyReindexForState(context.Background(), job, state, chunks, semantic.RemovePaths([]string{relativePath}), "test reindex"); outcome.fallback || outcome.handled {
+		if outcome := manager.applyReindexForState(
+			context.Background(),
+			job,
+			state,
+			chunks,
+			semantic.RemovePaths([]string{relativePath}),
+			"test reindex",
+		); outcome.fallback ||
+			outcome.handled {
 			t.Fatalf("applyReindexForState returned terminal outcome %+v", outcome)
 		}
 	}
 
 	processed, reused, embedded, dropped, loaded := state.chunkSplit()
-	manager.reportDeltaProgress(job.ID, 2, 2, 2, indexer.Result{IndexedFiles: 2, TotalChunks: 7461}, processed, reused, embedded, dropped, loaded, "file")
+	manager.reportDeltaProgress(
+		job.ID,
+		2,
+		2,
+		2,
+		indexer.Result{IndexedFiles: 2, TotalChunks: 7461},
+		processed,
+		reused,
+		embedded,
+		dropped,
+		loaded,
+		"file",
+	)
 
 	got, found := manager.GetJob(job.ID)
 	if !found {
 		t.Fatalf("GetJob(%s) not found", job.ID)
 	}
+
 	if got.Progress.ChunksReused != 6989 {
 		t.Fatalf("Progress.ChunksReused = %d, want 6989", got.Progress.ChunksReused)
 	}
+
 	if got.Progress.ChunksProcessed != 7461 {
 		t.Fatalf("Progress.ChunksProcessed = %d, want 7461", got.Progress.ChunksProcessed)
 	}
+
 	if got.Progress.ChunksEmbedded != 472 {
 		t.Fatalf("Progress.ChunksEmbedded = %d, want 472", got.Progress.ChunksEmbedded)
 	}
+
 	if got.Progress.ChunksGenerated != 472 {
 		t.Fatalf("Progress.ChunksGenerated = %d, want 472", got.Progress.ChunksGenerated)
 	}
+
 	if got.Progress.ChunksDropped != 5 {
 		t.Fatalf("Progress.ChunksDropped = %d, want 5", got.Progress.ChunksDropped)
 	}
@@ -88,23 +143,39 @@ func TestCodeItemReuseLoadsExactPath(t *testing.T) {
 
 	manager, _, _ := newTestManager(t)
 	fake := &fakeSemantic{
-		loadReuseForPath: func(_ context.Context, collectionName string, relativePath string) (map[string]model.ReuseVector, error) {
+		loadReuseForPath: func(_ context.Context, collectionName string, relativePath string) (
+			map[string]model.ReuseVector,
+			error,
+		) {
 			if collectionName != "code_chunks_live" {
 				t.Fatalf("collectionName = %q, want code_chunks_live", collectionName)
 			}
+
 			if relativePath != "src/file.go" {
 				t.Fatalf("relativePath = %q, want src/file.go", relativePath)
 			}
+
 			return map[string]model.ReuseVector{"target-hash": {Vector: []float32{1, 2, 3}}}, nil
 		},
-		loadReuseForPrefix: func(_ context.Context, _ string, prefix string) (map[string]model.ReuseVector, error) {
+		loadReuseForPrefix: func(_ context.Context, _ string, prefix string) (
+			map[string]model.ReuseVector,
+			error,
+		) {
 			t.Fatalf("code reuse called prefix loader with %q; want exact path loader", prefix)
 			return nil, nil
 		},
 	}
 	manager.semantic = fake
 
-	source := newCodeItemSource(manager.runner, manager.indexability, "cb", "/tmp/code", defaultIndexConfig()).withCollectionName("code_chunks_live")
+	source := newCodeItemSource(
+		manager.runner,
+		manager.indexability,
+		"cb",
+		"/tmp/code",
+		defaultIndexConfig(),
+	).withCollectionName(
+		"code_chunks_live",
+	)
 	state := deltaState{
 		source:           source,
 		semantic:         true,
@@ -117,19 +188,24 @@ func TestCodeItemReuseLoadsExactPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("itemReuse returned error: %v", err)
 	}
+
 	if loaded != 1 {
 		t.Fatalf("loaded = %d, want 1 exact-path reuse candidate", loaded)
 	}
+
 	if _, ok := reuse["target-hash"]; !ok {
 		t.Fatalf("reuse map missing exact-path candidate: %v", reuse)
 	}
+
 	if _, ok := reuse["base-hash"]; !ok {
 		t.Fatalf("reuse map lost base candidate: %v", reuse)
 	}
+
 	pathCalls := fake.reusePathCallsSnapshot()
 	if len(pathCalls) != 1 || pathCalls[0].Path != "src/file.go" {
 		t.Fatalf("path reuse calls = %+v, want one call for src/file.go", pathCalls)
 	}
+
 	prefixCalls := fake.reusePrefixCallsSnapshot()
 	if len(prefixCalls) != 0 {
 		t.Fatalf("prefix reuse calls = %+v, want none for code reuse", prefixCalls)
@@ -141,18 +217,32 @@ func TestItemReuseSkipsPerFileLoadsDuringBootstrap(t *testing.T) {
 
 	manager, _, _ := newTestManager(t)
 	fake := &fakeSemantic{
-		loadReuseForPath: func(_ context.Context, _ string, _ string) (map[string]model.ReuseVector, error) {
+		loadReuseForPath: func(_ context.Context, _ string, _ string) (
+			map[string]model.ReuseVector,
+			error,
+		) {
 			t.Fatal("bootstrap item reuse should not probe the live collection by exact path")
 			return nil, nil
 		},
-		loadReuseForPrefix: func(_ context.Context, _ string, _ string) (map[string]model.ReuseVector, error) {
+		loadReuseForPrefix: func(_ context.Context, _ string, _ string) (
+			map[string]model.ReuseVector,
+			error,
+		) {
 			t.Fatal("bootstrap item reuse should not probe the live collection by prefix")
 			return nil, nil
 		},
 	}
 	manager.semantic = fake
 
-	source := newCodeItemSource(manager.runner, manager.indexability, "cb", "/tmp/code", defaultIndexConfig()).withCollectionName("code_chunks_live")
+	source := newCodeItemSource(
+		manager.runner,
+		manager.indexability,
+		"cb",
+		"/tmp/code",
+		defaultIndexConfig(),
+	).withCollectionName(
+		"code_chunks_live",
+	)
 	state := deltaState{
 		source:      source,
 		semantic:    true,
@@ -165,15 +255,19 @@ func TestItemReuseSkipsPerFileLoadsDuringBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("itemReuse returned error: %v", err)
 	}
+
 	if loaded != 0 {
 		t.Fatalf("loaded = %d, want 0 during bootstrap", loaded)
 	}
+
 	if len(reuse) != 1 || reuse["base-hash"].Vector[0] != 9 {
 		t.Fatalf("reuse = %v, want the unchanged build-wide reuse map", reuse)
 	}
+
 	if pathCalls := fake.reusePathCallsSnapshot(); len(pathCalls) != 0 {
 		t.Fatalf("path reuse calls = %+v, want none during bootstrap", pathCalls)
 	}
+
 	if prefixCalls := fake.reusePrefixCallsSnapshot(); len(prefixCalls) != 0 {
 		t.Fatalf("prefix reuse calls = %+v, want none during bootstrap", prefixCalls)
 	}

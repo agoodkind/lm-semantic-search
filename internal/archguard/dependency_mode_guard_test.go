@@ -34,27 +34,39 @@ func TestDependencyModeNotAssignedOutsideHealth(t *testing.T) {
 		if rel == dependencyModeHome {
 			continue
 		}
+
 		parsed, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
-		ast.Inspect(parsed, func(node ast.Node) bool {
-			assign, ok := node.(*ast.AssignStmt)
-			if !ok {
-				return true
-			}
-			for _, lhs := range assign.Lhs {
-				selector, ok := lhs.(*ast.SelectorExpr)
-				if ok && selector.Sel.Name == "Mode" {
-					violations = append(violations, rel+": assigns to a .Mode field; the dependency mode is global-only and must not carry a per-path collection fact")
+
+		ast.Inspect(
+			parsed,
+			func(node ast.Node) bool {
+				assign, ok := node.(*ast.AssignStmt)
+				if !ok {
+					return true
 				}
-			}
-			return true
-		})
+
+				for _, lhs := range assign.Lhs {
+					selector, ok := lhs.(*ast.SelectorExpr)
+					if ok && selector.Sel.Name == "Mode" {
+						violations = append(
+							violations,
+							rel+": assigns to a .Mode field; the dependency mode is global-only and must not carry a per-path collection fact",
+						)
+					}
+				}
+
+				return true
+			},
+		)
 	}
 
 	if len(violations) > 0 {
-		t.Fatalf("dependency Mode assigned outside health.go; keep per-path readiness out of the global dependency channel:\n%s",
-			strings.Join(violations, "\n"))
+		t.Fatalf(
+			"dependency Mode assigned outside health.go; keep per-path readiness out of the global dependency channel:\n%s",
+			strings.Join(violations, "\n"),
+		)
 	}
 }

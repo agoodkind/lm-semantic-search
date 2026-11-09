@@ -40,7 +40,11 @@ func TestEngineRoundTripIndexesAndQueriesGraph(t *testing.T) {
 	}
 	defer engine.Close()
 
-	if errorMessage = engine.Index(context.Background(), repositoryPath, "fast"); errorMessage != nil {
+	if errorMessage = engine.Index(
+		context.Background(),
+		repositoryPath,
+		"fast",
+	); errorMessage != nil {
 		t.Fatalf("Index returned error: %v", errorMessage)
 	}
 
@@ -48,6 +52,7 @@ func TestEngineRoundTripIndexesAndQueriesGraph(t *testing.T) {
 	if queryResponse.IsError {
 		t.Fatalf("query_graph returned error: %s", queryResponse.RawJSON)
 	}
+
 	if len(queryResponse.StructuredContent.Rows) == 0 {
 		t.Fatalf("query_graph returned no rows: %s", queryResponse.RawJSON)
 	}
@@ -61,6 +66,7 @@ func TestEngineSerializesConcurrentIndexesAndSingleHandleQueries(t *testing.T) {
 	const engineCount = 4
 
 	engines := make([]*Engine, 0, engineCount)
+
 	repositoryPaths := make([]string, 0, engineCount)
 	for i := 0; i < engineCount; i++ {
 		projectName := fmt.Sprintf("concurrent_%d", i)
@@ -78,16 +84,25 @@ func TestEngineSerializesConcurrentIndexesAndSingleHandleQueries(t *testing.T) {
 
 	indexErrors := make(chan error, engineCount)
 	var waitGroup sync.WaitGroup
+
 	for i, engine := range engines {
 		waitGroup.Add(1)
 		go func(i int, engine *Engine) {
 			defer waitGroup.Done()
 
-			if errorMessage := engine.Index(context.Background(), repositoryPaths[i], "fast"); errorMessage != nil {
+			if errorMessage := engine.Index(
+				context.Background(),
+				repositoryPaths[i],
+				"fast",
+			); errorMessage != nil {
 				indexErrors <- fmt.Errorf("engine %d index: %w", i, errorMessage)
 			}
-		}(i, engine)
+		}(
+			i,
+			engine,
+		)
 	}
+
 	waitGroup.Wait()
 	close(indexErrors)
 
@@ -102,6 +117,7 @@ func TestEngineSerializesConcurrentIndexesAndSingleHandleQueries(t *testing.T) {
 
 	queryErrors := make(chan error, queryCount)
 	waitGroup = sync.WaitGroup{}
+
 	for i := 0; i < queryCount; i++ {
 		waitGroup.Add(1)
 		go func(i int) {
@@ -118,15 +134,20 @@ func TestEngineSerializesConcurrentIndexesAndSingleHandleQueries(t *testing.T) {
 				queryErrors <- fmt.Errorf("query %d invalid JSON: %w", i, errorMessage)
 				return
 			}
+
 			if envelope.IsError {
 				queryErrors <- fmt.Errorf("query %d returned error: %s", i, rawJSON)
 				return
 			}
+
 			if len(envelope.StructuredContent.Rows) == 0 {
 				queryErrors <- fmt.Errorf("query %d returned no rows: %s", i, rawJSON)
 			}
-		}(i)
+		}(
+			i,
+		)
 	}
+
 	waitGroup.Wait()
 	close(queryErrors)
 
@@ -149,7 +170,11 @@ func TestEngineIndexesIntoItsCacheDirDespiteEnvChange(t *testing.T) {
 	}
 	defer engine.Close()
 
-	if errorMessage = engine.Index(context.Background(), repositoryPath, "fast"); errorMessage != nil {
+	if errorMessage = engine.Index(
+		context.Background(),
+		repositoryPath,
+		"fast",
+	); errorMessage != nil {
 		t.Fatalf("Index returned error: %v", errorMessage)
 	}
 
@@ -160,7 +185,11 @@ func TestEngineIndexesIntoItsCacheDirDespiteEnvChange(t *testing.T) {
 
 	processEnvEntries := readDirectoryEntries(t, processEnvDir)
 	if len(processEnvEntries) != 0 {
-		t.Fatalf("expected process-env cache directory %s to stay empty; found %d entries", processEnvDir, len(processEnvEntries))
+		t.Fatalf(
+			"expected process-env cache directory %s to stay empty; found %d entries",
+			processEnvDir,
+			len(processEnvEntries),
+		)
 	}
 }
 
@@ -178,11 +207,13 @@ func TestEngineCloseSerializesWithToolAndIndex(t *testing.T) {
 	const workerCount = 8
 	errs := make(chan error, workerCount*3)
 	var waitGroup sync.WaitGroup
+
 	for i := 0; i < workerCount; i++ {
 		waitGroup.Add(3)
 		go func() {
 			defer waitGroup.Done()
-			if err := engine.Index(context.Background(), repositoryPath, "fast"); err != nil && !strings.Contains(err.Error(), "cbm engine is closed") {
+			if err := engine.Index(context.Background(), repositoryPath, "fast"); err != nil &&
+				!strings.Contains(err.Error(), "cbm engine is closed") {
 				errs <- err
 			}
 		}()
@@ -198,12 +229,14 @@ func TestEngineCloseSerializesWithToolAndIndex(t *testing.T) {
 			engine.Close()
 		}()
 	}
+
 	waitGroup.Wait()
 	close(errs)
 
 	for err := range errs {
 		t.Error(err)
 	}
+
 	engine.Close()
 }
 
@@ -245,6 +278,7 @@ func readDirectoryEntries(t *testing.T, path string) []os.DirEntry {
 	if errorMessage != nil {
 		t.Fatalf("read directory %s: %v", path, errorMessage)
 	}
+
 	return entries
 }
 
@@ -252,7 +286,8 @@ func writeTestRepository(t *testing.T, repositoryPath string, packageName string
 	t.Helper()
 
 	sourcePath := filepath.Join(repositoryPath, "main.go")
-	source := fmt.Sprintf(`package %s
+	source := fmt.Sprintf(
+		`package %s
 
 func First() string {
 	return Second("test")
@@ -261,7 +296,9 @@ func First() string {
 func Second(name string) string {
 	return "hello " + name
 }
-`, packageName)
+`,
+		packageName,
+	)
 
 	if errorMessage := os.WriteFile(sourcePath, []byte(source), 0o644); errorMessage != nil {
 		t.Fatalf("write test repository: %v", errorMessage)
