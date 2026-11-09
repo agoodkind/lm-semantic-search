@@ -65,23 +65,8 @@ func (store *SharedStore) UpdateRowScalars(
 		return 0, err
 	}
 
-	missing := make([]string, 0)
-
-	for _, id := range ids {
-		if _, found := keyByID[id]; !found {
-			missing = append(missing, id)
-		}
-	}
-
-	if len(missing) > 0 {
-		missingErr := fmt.Errorf(
-			"occurrence collection %s does not contain rows for %d requested ids; first missing id: %s",
-			occurrences,
-			len(missing),
-			missing[0],
-		)
-
-		return 0, missingErr
+	if err := requireOccurrenceRows(occurrences, ids, keyByID); err != nil {
+		return 0, err
 	}
 
 	declaration, err := store.storedDeclaration(ctx, occurrences, "")
@@ -93,15 +78,9 @@ func (store *SharedStore) UpdateRowScalars(
 		return 0, err
 	}
 
-	options := make([]rowScalarWrite, 0, (len(rows)+sharedWriteBatchSize-1)/sharedWriteBatchSize)
-	for start := 0; start < len(rows); start += sharedWriteBatchSize {
-		batch := rows[start:min(start+sharedWriteBatchSize, len(rows))]
-		option, err := rowScalarOption(occurrences, columns, batch)
-		if err != nil {
-			return 0, err
-		}
-
-		options = append(options, rowScalarWrite{option: option, rows: batch})
+	options, err := prepareRowScalarWrites(occurrences, columns, rows)
+	if err != nil {
+		return 0, err
 	}
 
 	if err := store.widenSupersets(
@@ -153,6 +132,29 @@ func (store *SharedStore) UpdateRowScalars(
 	)
 
 	return len(rows), nil
+}
+
+func requireOccurrenceRows(occurrences string, ids []string, keyByID map[string]string) error {
+	missing := make([]string, 0)
+
+	for _, id := range ids {
+		if _, found := keyByID[id]; !found {
+			missing = append(missing, id)
+		}
+	}
+
+	if len(missing) > 0 {
+		missingErr := fmt.Errorf(
+			"occurrence collection %s does not contain rows for %d requested ids; first missing id: %s",
+			occurrences,
+			len(missing),
+			missing[0],
+		)
+
+		return missingErr
+	}
+
+	return nil
 }
 
 // widenSupersets adds the new scalar values of the requested rows to the stored
@@ -240,6 +242,25 @@ func (store *SharedStore) widenSupersets(
 type rowScalarWrite struct {
 	option WriteOption
 	rows   []collection.Row
+}
+
+func prepareRowScalarWrites(
+	occurrences string,
+	columns []collection.ScalarColumn,
+	rows []collection.Row,
+) ([]rowScalarWrite, error) {
+	options := make([]rowScalarWrite, 0, (len(rows)+sharedWriteBatchSize-1)/sharedWriteBatchSize)
+	for start := 0; start < len(rows); start += sharedWriteBatchSize {
+		batch := rows[start:min(start+sharedWriteBatchSize, len(rows))]
+		option, err := rowScalarOption(occurrences, columns, batch)
+		if err != nil {
+			return nil, err
+		}
+
+		options = append(options, rowScalarWrite{option: option, rows: batch})
+	}
+
+	return options, nil
 }
 
 // rowScalarOption builds a Milvus partial update with each row's ID, metadata,

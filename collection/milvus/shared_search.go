@@ -48,32 +48,9 @@ func (store *SharedStore) Rank(
 		return nil, errors.New("collection name is required")
 	}
 
-	compiled, err := collection.Compile(request.Filter)
+	compiled, inline, err := sharedRankingFilters(ctx, occurrences, request.Filter)
 	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"compile collection filter failed",
-			"collection",
-			occurrences,
-			"err",
-			err,
-		)
-
-		return nil, fmt.Errorf("compile filter for %s: %w", occurrences, err)
-	}
-
-	inline, err := collection.CompileInline(request.Filter)
-	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"compile inline collection filter failed",
-			"collection",
-			occurrences,
-			"err",
-			err,
-		)
-
-		return nil, fmt.Errorf("compile filter for %s: %w", occurrences, err)
+		return nil, err
 	}
 
 	superset, err := SupersetExpression(request.Filter, request.Declaration)
@@ -156,6 +133,42 @@ func (store *SharedStore) Rank(
 	}
 
 	return fuseLegs(dense, sparse, depth), nil
+}
+
+func sharedRankingFilters(
+	ctx context.Context,
+	occurrences string,
+	filter *collection.Filter,
+) (collection.CompiledFilter, string, error) {
+	compiled, err := collection.Compile(filter)
+	if err != nil {
+		slog.ErrorContext(
+			ctx,
+			"compile collection filter failed",
+			"collection",
+			occurrences,
+			"err",
+			err,
+		)
+
+		return compiled, "", fmt.Errorf("compile filter for %s: %w", occurrences, err)
+	}
+
+	inline, err := collection.CompileInline(filter)
+	if err != nil {
+		slog.ErrorContext(
+			ctx,
+			"compile inline collection filter failed",
+			"collection",
+			occurrences,
+			"err",
+			err,
+		)
+
+		return compiled, "", fmt.Errorf("compile filter for %s: %w", occurrences, err)
+	}
+
+	return compiled, inline, nil
 }
 
 // sparseLeg returns the depth best BM25 occurrences in score order and then
