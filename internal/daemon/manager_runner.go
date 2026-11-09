@@ -68,76 +68,7 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 			manager.mu.Unlock()
 			close(done)
 		}()
-		if !manager.awaitEmbeddingModel(backgroundContext, jobID) {
-			manager.updateJobCancelled(backgroundContext, jobID)
-			return
-		}
-
-		for attempt := 1; attempt <= jobStartRetryAttempts; attempt++ {
-			manager.mu.Lock()
-			job, found := manager.jobs[jobID]
-			manager.mu.Unlock()
-			if !found {
-				return
-			}
-
-			if isTerminalJobState(job.State) {
-				return
-			}
-
-			holdSyncLock := manager.semantic != nil && manager.semantic.Available()
-			capacity, outcome, capacityErr := manager.acquireJobCapacity(
-				backgroundContext,
-				job,
-				holdSyncLock,
-			)
-			if outcome != syncLockAcquired {
-				manager.finishCapacityAdmissionFailure(
-					backgroundContext,
-					jobID,
-					outcome,
-					capacityErr,
-				)
-
-				return
-			}
-
-			lockOutcome, lockErr := manager.refreshSyncLockAfterAdmission(
-				backgroundContext,
-				capacity,
-				holdSyncLock,
-			)
-			if lockOutcome != syncLockAcquired {
-				capacity.release(context.WithoutCancel(backgroundContext))
-				manager.finishCapacityAdmissionFailure(
-					backgroundContext,
-					jobID,
-					lockOutcome,
-					lockErr,
-				)
-
-				return
-			}
-
-			runContext := withJobCapacity(backgroundContext, capacity)
-			runContext = withJobSchedulerLease(runContext, jobID, capacity.lease)
-			graphTask, retryStart := func() (*graphIndexTask, bool) {
-				defer capacity.release(context.WithoutCancel(backgroundContext))
-				return manager.runJob(runContext, jobID)
-			}()
-			if manager.retryJobStart(backgroundContext, jobID, retryStart, attempt) {
-				continue
-			}
-
-			if manager.jobIsQueued(jobID) {
-				manager.updateJobCancelled(backgroundContext, jobID)
-				return
-			}
-
-			manager.runGraphIndexTask(backgroundContext, graphTask)
-
-			return
-		}
+		manager.runQueuedJob(backgroundContext, jobID)
 	}()
 }
 
@@ -294,4 +225,67 @@ func (manager *Manager) JobSuccessorID(job model.Job) string {
 	}
 
 	return buildJobSuccessors(codebaseJobs)[job.ID]
+}
+
+func (manager *Manager) runQueuedJob(backgroundContext context.Context, jobID string) {
+	if !manager.awaitEmbeddingModel(backgroundContext, jobID) {
+		manager.updateJobCancelled(backgroundContext, jobID)
+		return
+	}
+
+	for attempt := 1; attempt <= jobStartRetryAttempts; attempt++ {
+		manager.mu.Lock()
+		job, found := manager.jobs[jobID]
+		manager.mu.Unlock()
+		if !found {
+			return
+		}
+
+		if isTerminalJobState(job.State) {
+			return
+		}
+
+		holdSyncLock := manager.semantic != nil && manager.semantic.Available()
+		capacity, outcome, capacityErr := manager.acquireJobCapacity(
+			backgroundContext,
+			job,
+			holdSyncLock,
+		)
+		if outcome != syncLockAcquired {
+			manager.finishCapacityAdmissionFailure(backgroundContext, jobID, outcome, capacityErr)
+
+			return
+		}
+
+		lockOutcome, lockErr := manager.refreshSyncLockAfterAdmission(
+			backgroundContext,
+			capacity,
+			holdSyncLock,
+		)
+		if lockOutcome != syncLockAcquired {
+			capacity.release(context.WithoutCancel(backgroundContext))
+			manager.finishCapacityAdmissionFailure(backgroundContext, jobID, lockOutcome, lockErr)
+
+			return
+		}
+
+		runContext := withJobCapacity(backgroundContext, capacity)
+		runContext = withJobSchedulerLease(runContext, jobID, capacity.lease)
+		graphTask, retryStart := func() (*graphIndexTask, bool) {
+			defer capacity.release(context.WithoutCancel(backgroundContext))
+			return manager.runJob(runContext, jobID)
+		}()
+		if manager.retryJobStart(backgroundContext, jobID, retryStart, attempt) {
+			continue
+		}
+
+		if manager.jobIsQueued(jobID) {
+			manager.updateJobCancelled(backgroundContext, jobID)
+			return
+		}
+
+		manager.runGraphIndexTask(backgroundContext, graphTask)
+
+		return
+	}
 }

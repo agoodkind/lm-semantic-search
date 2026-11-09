@@ -135,60 +135,10 @@ func (manager *Manager) acquireJobCapacity(
 		return nil, syncLockCancelled, wrappedErr
 	}
 
-	manager.policyMutationMutex.Lock()
-	manager.mu.Lock()
-	latestJob, found := manager.jobs[job.ID]
-	manager.mu.Unlock()
-	if found {
-		latestPolicy, policyErr := model.ApplySchedulingPolicyPatch(
-			latestJob.EffectiveSchedulingPolicy,
-			model.SchedulingPolicyPatch{
-				Priority:         nil,
-				Quiet:            nil,
-				IdleAfterSeconds: nil,
-			},
-		)
-		if policyErr != nil {
-			manager.policyMutationMutex.Unlock()
-			lease.Release()
-			wrappedErr := fmt.Errorf("normalize latest scheduler job policy: %w", policyErr)
-			slog.ErrorContext(
-				ctx,
-				"normalize latest scheduler job policy failed",
-				"job_id",
-				job.ID,
-				"err",
-				wrappedErr,
-			)
-
-			return nil, syncLockFailed, wrappedErr
-		}
-
-		priority := latestPolicy.Priority
-		quiet := latestPolicy.Quiet
-		idleAfterSeconds := latestPolicy.IdleAfterSeconds
-		if policyErr := lease.UpdatePolicy(model.SchedulingPolicyPatch{
-			Priority:         &priority,
-			Quiet:            &quiet,
-			IdleAfterSeconds: &idleAfterSeconds,
-		}); policyErr != nil {
-			manager.policyMutationMutex.Unlock()
-			lease.Release()
-			wrappedErr := fmt.Errorf("refresh scheduler job policy: %w", policyErr)
-			slog.ErrorContext(
-				ctx,
-				"refresh scheduler job policy failed",
-				"job_id",
-				job.ID,
-				"err",
-				wrappedErr,
-			)
-
-			return nil, syncLockFailed, wrappedErr
-		}
+	if err := manager.refreshJobCapacityPolicy(ctx, job.ID, lease); err != nil {
+		return nil, syncLockFailed, err
 	}
 
-	manager.policyMutationMutex.Unlock()
 	if !holdSyncLock && manager.semantic != nil && manager.semantic.Available() {
 		holdSyncLock = true
 	}
@@ -551,4 +501,67 @@ func (manager *Manager) runReleasingCapacityIfStalled(
 	}
 
 	return operationErr
+}
+
+func (manager *Manager) refreshJobCapacityPolicy(
+	ctx context.Context,
+	jobID string,
+	lease *jobscheduler.Lease,
+) error {
+	manager.policyMutationMutex.Lock()
+	manager.mu.Lock()
+	latestJob, found := manager.jobs[jobID]
+	manager.mu.Unlock()
+	if found {
+		latestPolicy, policyErr := model.ApplySchedulingPolicyPatch(
+			latestJob.EffectiveSchedulingPolicy,
+			model.SchedulingPolicyPatch{
+				Priority:         nil,
+				Quiet:            nil,
+				IdleAfterSeconds: nil,
+			},
+		)
+		if policyErr != nil {
+			manager.policyMutationMutex.Unlock()
+			lease.Release()
+			wrappedErr := fmt.Errorf("normalize latest scheduler job policy: %w", policyErr)
+			slog.ErrorContext(
+				ctx,
+				"normalize latest scheduler job policy failed",
+				"job_id",
+				jobID,
+				"err",
+				wrappedErr,
+			)
+
+			return wrappedErr
+		}
+
+		priority := latestPolicy.Priority
+		quiet := latestPolicy.Quiet
+		idleAfterSeconds := latestPolicy.IdleAfterSeconds
+		if policyErr := lease.UpdatePolicy(model.SchedulingPolicyPatch{
+			Priority:         &priority,
+			Quiet:            &quiet,
+			IdleAfterSeconds: &idleAfterSeconds,
+		}); policyErr != nil {
+			manager.policyMutationMutex.Unlock()
+			lease.Release()
+			wrappedErr := fmt.Errorf("refresh scheduler job policy: %w", policyErr)
+			slog.ErrorContext(
+				ctx,
+				"refresh scheduler job policy failed",
+				"job_id",
+				jobID,
+				"err",
+				wrappedErr,
+			)
+
+			return wrappedErr
+		}
+	}
+
+	manager.policyMutationMutex.Unlock()
+
+	return nil
 }

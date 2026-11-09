@@ -287,68 +287,7 @@ func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutc
 		return bootSelfCheckSkipped, nil
 	}
 
-	failureGeneration := manager.dependencyFailureGenerationNow()
-	startedAt := clock.Now()
-	err := manager.runBootSelfCheckQuery(ctx, codebase.CanonicalPath)
-	durationMS := clock.Now().Sub(startedAt).Milliseconds()
-	if err != nil {
-		manager.noteDependencyFailure(err)
-		checkErr := fmt.Errorf("boot self-check query against %s: %w", codebase.CanonicalPath, err)
-		slog.ErrorContext(
-			ctx,
-			"daemon.selfcheck.failed",
-			"component",
-			"daemon",
-			"subcomponent",
-			"selfcheck",
-			"codebase_id",
-			codebase.ID,
-			"path",
-			codebase.CanonicalPath,
-			"duration_ms",
-			durationMS,
-			"err",
-			checkErr,
-		)
-
-		return bootSelfCheckFailed, checkErr
-	}
-
-	if !manager.noteDependencyHealthyIfGeneration(failureGeneration) {
-		slog.WarnContext(
-			ctx,
-			"daemon.selfcheck.superseded",
-			"component",
-			"daemon",
-			"subcomponent",
-			"selfcheck",
-			"codebase_id",
-			codebase.ID,
-			"path",
-			codebase.CanonicalPath,
-			"duration_ms",
-			durationMS,
-		)
-
-		return bootSelfCheckSuperseded, nil
-	}
-
-	slog.InfoContext(
-		ctx,
-		"daemon.selfcheck.passed",
-		"component",
-		"daemon",
-		"subcomponent",
-		"selfcheck",
-		"codebase_id",
-		codebase.ID,
-		"path",
-		codebase.CanonicalPath,
-		"duration_ms",
-		durationMS,
-	)
-
-	return bootSelfCheckPassed, nil
+	return manager.runBootSelfCheckTarget(ctx, codebase)
 }
 
 func (manager *Manager) runBootSelfCheckQuery(ctx context.Context, codebasePath string) error {
@@ -431,4 +370,72 @@ func (manager *Manager) bootSelfCheckTarget() (model.Codebase, bool) {
 	}
 
 	return best, found
+}
+
+func (manager *Manager) runBootSelfCheckTarget(
+	ctx context.Context,
+	codebase model.Codebase,
+) (bootSelfCheckOutcome, error) {
+	failureGeneration := manager.dependencyFailureGenerationNow()
+	startedAt := clock.Now()
+	err := manager.runBootSelfCheckQuery(ctx, codebase.CanonicalPath)
+	durationMS := clock.Now().Sub(startedAt).Milliseconds()
+	if err != nil {
+		manager.noteDependencyFailure(err)
+		checkErr := fmt.Errorf("boot self-check query against %s: %w", codebase.CanonicalPath, err)
+		slog.ErrorContext(
+			ctx,
+			"daemon.selfcheck.failed",
+			"component",
+			"daemon",
+			"subcomponent",
+			"selfcheck",
+			"codebase_id",
+			codebase.ID,
+			"path",
+			codebase.CanonicalPath,
+			"duration_ms",
+			durationMS,
+			"err",
+			checkErr,
+		)
+
+		return bootSelfCheckFailed, checkErr
+	}
+
+	if !manager.noteDependencyHealthyIfGeneration(failureGeneration) {
+		slog.WarnContext(
+			ctx,
+			"daemon.selfcheck.superseded",
+			"component",
+			"daemon",
+			"subcomponent",
+			"selfcheck",
+			"codebase_id",
+			codebase.ID,
+			"path",
+			codebase.CanonicalPath,
+			"duration_ms",
+			durationMS,
+		)
+
+		return bootSelfCheckSuperseded, nil
+	}
+
+	slog.InfoContext(
+		ctx,
+		"daemon.selfcheck.passed",
+		"component",
+		"daemon",
+		"subcomponent",
+		"selfcheck",
+		"codebase_id",
+		codebase.ID,
+		"path",
+		codebase.CanonicalPath,
+		"duration_ms",
+		durationMS,
+	)
+
+	return bootSelfCheckPassed, nil
 }

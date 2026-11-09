@@ -67,70 +67,7 @@ func sortResumePlans(plans []resumePlan) {
 // background repair pass restarts the build, rather than parking it as failed.
 // Call this once after NewManager returns and before the daemon advertises ready.
 func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
-	manager.mu.Lock()
-	plans := make([]resumePlan, 0)
-
-	for _, codebase := range manager.codebases {
-		if codebase.Kind == model.CodebaseKindDocument {
-			// A conversation codebase recovers through its own ingest trigger;
-			// its chat:// path is not a directory the index runner can walk.
-			continue
-		}
-
-		if codebase.Status != model.CodebaseStatusIndexing {
-			continue
-		}
-
-		effectivePolicy := codebase.SchedulingPolicy
-		override := model.SchedulingPolicyPatch{Priority: nil, Quiet: nil, IdleAfterSeconds: nil}
-		var queueSequence uint64
-		if interrupted, found := manager.jobs[codebase.ActiveJobID]; found {
-			effectivePolicy = interrupted.EffectiveSchedulingPolicy
-			override = interrupted.SchedulingOverride
-			queueSequence = interrupted.QueueSequence
-		}
-
-		plans = append(
-			plans,
-			resumePlan{
-				canonicalPath:             codebase.CanonicalPath,
-				config:                    codebase.EffectiveConfig,
-				codebaseID:                codebase.ID,
-				checkpoint:                resumeCheckpointNone,
-				effectiveSchedulingPolicy: effectivePolicy,
-				schedulingOverride:        override,
-				queueSequence:             queueSequence,
-				converge:                  false,
-				interruptedJobID:          "",
-				codebase:                  codebase,
-			},
-		)
-	}
-
-	for _, interrupted := range manager.interruptedConvergeJobs {
-		codebase, found := manager.codebases[interrupted.CodebaseID]
-		if !found || codebase.Kind == model.CodebaseKindDocument {
-			continue
-		}
-
-		plans = append(
-			plans,
-			resumePlan{
-				canonicalPath:             codebase.CanonicalPath,
-				config:                    codebase.EffectiveConfig,
-				codebaseID:                codebase.ID,
-				checkpoint:                resumeCheckpointLive,
-				effectiveSchedulingPolicy: interrupted.EffectiveSchedulingPolicy,
-				schedulingOverride:        interrupted.SchedulingOverride,
-				queueSequence:             interrupted.QueueSequence,
-				converge:                  true,
-				interruptedJobID:          interrupted.ID,
-				codebase:                  codebase,
-			},
-		)
-	}
-
-	manager.mu.Unlock()
+	plans := manager.orphanedResumePlans()
 
 	// A daemon restarted during maintenance leaves its interrupted builds where
 	// they are; the repair pass resumes them on the first sweep after the mode
@@ -521,4 +458,73 @@ func (manager *Manager) logResumeHeld(ctx context.Context, codebaseID string, pa
 // inside the ResumeOrphanedJobs loop.
 func (manager *Manager) logResumeLaunched(ctx context.Context, codebaseID string, path string) {
 	slog.InfoContext(ctx, "resumed orphaned indexing job", "codebase_id", codebaseID, "path", path)
+}
+
+func (manager *Manager) orphanedResumePlans() []resumePlan {
+	manager.mu.Lock()
+	plans := make([]resumePlan, 0)
+
+	for _, codebase := range manager.codebases {
+		if codebase.Kind == model.CodebaseKindDocument {
+			// A conversation codebase recovers through its own ingest trigger;
+			// its chat:// path is not a directory the index runner can walk.
+			continue
+		}
+
+		if codebase.Status != model.CodebaseStatusIndexing {
+			continue
+		}
+
+		effectivePolicy := codebase.SchedulingPolicy
+		override := model.SchedulingPolicyPatch{Priority: nil, Quiet: nil, IdleAfterSeconds: nil}
+		var queueSequence uint64
+		if interrupted, found := manager.jobs[codebase.ActiveJobID]; found {
+			effectivePolicy = interrupted.EffectiveSchedulingPolicy
+			override = interrupted.SchedulingOverride
+			queueSequence = interrupted.QueueSequence
+		}
+
+		plans = append(
+			plans,
+			resumePlan{
+				canonicalPath:             codebase.CanonicalPath,
+				config:                    codebase.EffectiveConfig,
+				codebaseID:                codebase.ID,
+				checkpoint:                resumeCheckpointNone,
+				effectiveSchedulingPolicy: effectivePolicy,
+				schedulingOverride:        override,
+				queueSequence:             queueSequence,
+				converge:                  false,
+				interruptedJobID:          "",
+				codebase:                  codebase,
+			},
+		)
+	}
+
+	for _, interrupted := range manager.interruptedConvergeJobs {
+		codebase, found := manager.codebases[interrupted.CodebaseID]
+		if !found || codebase.Kind == model.CodebaseKindDocument {
+			continue
+		}
+
+		plans = append(
+			plans,
+			resumePlan{
+				canonicalPath:             codebase.CanonicalPath,
+				config:                    codebase.EffectiveConfig,
+				codebaseID:                codebase.ID,
+				checkpoint:                resumeCheckpointLive,
+				effectiveSchedulingPolicy: interrupted.EffectiveSchedulingPolicy,
+				schedulingOverride:        interrupted.SchedulingOverride,
+				queueSequence:             interrupted.QueueSequence,
+				converge:                  true,
+				interruptedJobID:          interrupted.ID,
+				codebase:                  codebase,
+			},
+		)
+	}
+
+	manager.mu.Unlock()
+
+	return plans
 }
