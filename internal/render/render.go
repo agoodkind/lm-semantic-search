@@ -96,7 +96,8 @@ func renderStartIndex(startIndex view.StartIndexView) string {
 	overlap := ""
 	if startIndex.OverlapsCodebaseID != "" {
 		overlap = fmt.Sprintf(
-			"\n⚠️  Overlap: this tree is also covered by codebase %s. Both will index files in the shared subtree independently.",
+			"\n⚠️  Overlap: this tree is also covered by codebase %s. "+
+				"Both will index files in the shared subtree independently.",
 			startIndex.OverlapsCodebaseID,
 		)
 	}
@@ -833,7 +834,8 @@ func renderConversationSearch(conversationView view.ConversationSearchView) stri
 		formatted = append(
 			formatted,
 			fmt.Sprintf(
-				"%d. Conversation message [%s]\n   Conversation: %s\n   Message index: %d\n   Role: %s\n   Timestamp Unix: %d\n   Rank: %d\n   Content:\n```\n%s\n```",
+				"%d. Conversation message [%s]\n   Conversation: %s\n   Message index: %d\n"+
+					"   Role: %s\n   Timestamp Unix: %d\n   Rank: %d\n   Content:\n```\n%s\n```",
 				index+1,
 				conversationView.CollectionID,
 				result.ConversationID,
