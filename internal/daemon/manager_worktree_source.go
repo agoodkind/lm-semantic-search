@@ -96,52 +96,12 @@ func (manager *Manager) resolveWorktreeSourceIntent(
 		)
 	}
 
-	targetWorktree, targetInRepository := gitworktree.Resolve(canonicalPath)
-	sourceWorktree, sourceInRepository := gitworktree.Resolve(sourcePath)
-	if !targetInRepository || !sourceInRepository ||
-		targetWorktree.CommonDir != sourceWorktree.CommonDir {
-		return emptyIntent, fmt.Errorf(
-			"resolve worktree source repository: %w",
-			adapterr.NewInvalidPath(
-				fmt.Sprintf(
-					"worktree source path %q and target path %q are not in the same Git repository",
-					sourcePath,
-					canonicalPath,
-				),
-				nil,
-			),
-		)
-	}
-
-	manager.mu.Lock()
-	_, sourceRegistered := manager.findCodebaseByExactRoot(sourcePath)
-	cyclic := manager.worktreeSourceCycleLocked(canonicalPath, sourcePath)
-	manager.mu.Unlock()
-	if sourceWorktree.WorktreeRoot != sourcePath && !sourceRegistered {
-		return emptyIntent, fmt.Errorf(
-			"resolve worktree source root: %w",
-			adapterr.NewInvalidPath(
-				fmt.Sprintf(
-					"source path %q is neither a worktree root of the repository nor a registered codebase root",
-					sourcePath,
-				),
-				nil,
-			),
-		)
-	}
-
-	if cyclic {
-		return emptyIntent, fmt.Errorf(
-			"validate worktree source ancestry: %w",
-			adapterr.NewInvalidPath(
-				fmt.Sprintf(
-					"recording worktree source path %q would create a source cycle that includes target path %q",
-					sourcePath,
-					canonicalPath,
-				),
-				nil,
-			),
-		)
+	if validationErr := manager.validateWorktreeSourceRepository(
+		ctx,
+		canonicalPath,
+		sourcePath,
+	); validationErr != nil {
+		return emptyIntent, validationErr
 	}
 
 	intent.sourcePath = sourcePath
@@ -278,4 +238,71 @@ func worktreeSourceEqual(first model.Codebase, second model.Codebase) bool {
 	return first.WorktreeSourcePath == second.WorktreeSourcePath &&
 		first.WorktreeSourceID == second.WorktreeSourceID &&
 		first.WorktreeStartingCommit == second.WorktreeStartingCommit
+}
+
+func (manager *Manager) validateWorktreeSourceRepository(
+	ctx context.Context,
+	canonicalPath string,
+	sourcePath string,
+) error {
+	const validationMessage = "worktree source validation failed"
+
+	targetWorktree, targetInRepository := gitworktree.Resolve(canonicalPath)
+	sourceWorktree, sourceInRepository := gitworktree.Resolve(sourcePath)
+	if !targetInRepository || !sourceInRepository ||
+		targetWorktree.CommonDir != sourceWorktree.CommonDir {
+		validationErr := fmt.Errorf(
+			"resolve worktree source repository: %w",
+			adapterr.NewInvalidPath(
+				fmt.Sprintf(
+					"worktree source path %q and target path %q are not in the same Git repository",
+					sourcePath,
+					canonicalPath,
+				),
+				nil,
+			),
+		)
+		slog.WarnContext(ctx, validationMessage, "err", validationErr)
+
+		return validationErr
+	}
+
+	manager.mu.Lock()
+	_, sourceRegistered := manager.findCodebaseByExactRoot(sourcePath)
+	cyclic := manager.worktreeSourceCycleLocked(canonicalPath, sourcePath)
+	manager.mu.Unlock()
+	if sourceWorktree.WorktreeRoot != sourcePath && !sourceRegistered {
+		validationErr := fmt.Errorf(
+			"resolve worktree source root: %w",
+			adapterr.NewInvalidPath(
+				fmt.Sprintf(
+					"source path %q is neither a worktree root of the repository nor a registered codebase root",
+					sourcePath,
+				),
+				nil,
+			),
+		)
+		slog.WarnContext(ctx, validationMessage, "err", validationErr)
+
+		return validationErr
+	}
+
+	if cyclic {
+		validationErr := fmt.Errorf(
+			"validate worktree source ancestry: %w",
+			adapterr.NewInvalidPath(
+				fmt.Sprintf(
+					"recording worktree source path %q would create a source cycle that includes target path %q",
+					sourcePath,
+					canonicalPath,
+				),
+				nil,
+			),
+		)
+		slog.WarnContext(ctx, validationMessage, "err", validationErr)
+
+		return validationErr
+	}
+
+	return nil
 }

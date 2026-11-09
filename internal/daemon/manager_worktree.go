@@ -70,29 +70,7 @@ func (manager *Manager) discoverWorktree(
 	indexConfig := manager.enrichIndexConfig(emptyAutoIndexConfig())
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
 
-	collectionName := ""
-	collectionAbsent := true
-	if manager.semantic != nil {
-		collectionName = manager.semantic.CollectionName(info.WorktreeRoot)
-		if manager.semantic.Available() {
-			hasCollection, collectionErr := manager.semantic.HasCollectionForPath(
-				ctx,
-				info.WorktreeRoot,
-			)
-			if collectionErr != nil {
-				slog.WarnContext(
-					ctx,
-					"discover worktree: check collection failed",
-					"path",
-					info.WorktreeRoot,
-					"err",
-					collectionErr,
-				)
-			} else {
-				collectionAbsent = !hasCollection
-			}
-		}
-	}
+	collectionName, collectionAbsent := manager.discoveredCollectionState(ctx, info.WorktreeRoot)
 
 	sourceOverlaps := manager.discoveredSourceOverlaps(ctx, info, indexConfig)
 
@@ -146,25 +124,7 @@ func (manager *Manager) discoverWorktree(
 	manager.observer.Invalidate(record.ID)
 	manager.mu.Unlock()
 
-	notifyCtx := correlation.WithContext(
-		context.WithoutCancel(ctx),
-		correlation.FromContext(ctx).Child(),
-	)
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(
-					notifyCtx,
-					"notify codebase added panic",
-					"codebase_id",
-					record.ID,
-					"err",
-					recovered,
-				)
-			}
-		}()
-		manager.notifyCodebaseAdded(notifyCtx, record)
-	}()
+	manager.notifyIndexCodebaseStart(ctx, record)
 	slog.InfoContext(
 		ctx,
 		"discovered worktree on read; build deferred",
@@ -656,13 +616,13 @@ func (manager *Manager) startReleasedBuild(ctx context.Context, codebaseID strin
 // merge. The merge-up redirect consults it so a worktree root is never folded
 // into a sibling worktree's index.
 func (manager *Manager) isWorktreeBoundary(canonicalPath string, ancestor model.Codebase) bool {
-	info, ok := gitworktree.Resolve(canonicalPath)
-	if !ok || info.WorktreeRoot != canonicalPath {
+	info, resolved := gitworktree.Resolve(canonicalPath)
+	if !resolved || info.WorktreeRoot != canonicalPath {
 		return false
 	}
 
-	ancestorCommon, ok := gitworktree.CommonDirAt(ancestor.CanonicalPath)
-	if !ok {
+	ancestorCommon, ancestorResolved := gitworktree.CommonDirAt(ancestor.CanonicalPath)
+	if !ancestorResolved {
 		return false
 	}
 
@@ -674,13 +634,13 @@ func (manager *Manager) isWorktreeBoundary(canonicalPath string, ancestor model.
 // sibling worktree, not a nested part of the parent, so the parent's build must
 // not reuse its vectors or absorb its registration.
 func isSameRepoSiblingWorktree(parentPath string, childPath string) bool {
-	parentCommon, ok := gitworktree.CommonDirAt(parentPath)
-	if !ok {
+	parentCommon, parentResolved := gitworktree.CommonDirAt(parentPath)
+	if !parentResolved {
 		return false
 	}
 
-	childCommon, ok := gitworktree.CommonDirAt(childPath)
-	if !ok {
+	childCommon, childResolved := gitworktree.CommonDirAt(childPath)
+	if !childResolved {
 		return false
 	}
 
@@ -703,4 +663,32 @@ func emptyAutoIndexConfig() model.IndexConfig {
 		VectorBackend:      "",
 		Hybrid:             false,
 	}
+}
+
+func (manager *Manager) discoveredCollectionState(
+	ctx context.Context,
+	worktreeRoot string,
+) (string, bool) {
+	collectionName := ""
+	collectionAbsent := true
+	if manager.semantic != nil {
+		collectionName = manager.semantic.CollectionName(worktreeRoot)
+		if manager.semantic.Available() {
+			hasCollection, collectionErr := manager.semantic.HasCollectionForPath(ctx, worktreeRoot)
+			if collectionErr != nil {
+				slog.WarnContext(
+					ctx,
+					"discover worktree: check collection failed",
+					"path",
+					worktreeRoot,
+					"err",
+					collectionErr,
+				)
+			} else {
+				collectionAbsent = !hasCollection
+			}
+		}
+	}
+
+	return collectionName, collectionAbsent
 }

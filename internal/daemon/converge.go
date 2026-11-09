@@ -145,35 +145,7 @@ func (manager *Manager) convergePathsWithLstatAndNow(
 	// destination match the source's inode while it still lives in the
 	// snapshot.
 	outcome.PathsGiven = safeInt32(len(relativePaths))
-	lastProgressAt := now()
-	lastReportedPaths := int32(0)
-	reportedProgress := false
-	reportProgress := func(final bool, allowHeartbeat bool) bool {
-		if ctx.Err() != nil && !final {
-			return false
-		}
-
-		if progress == nil {
-			return true
-		}
-
-		pathsSinceReport := outcome.PathsProcessed - lastReportedPaths
-		if !final && pathsSinceReport < convergeProgressPathInterval &&
-			now().Sub(lastProgressAt) < convergeProgressTimeInterval {
-			return true
-		}
-
-		if reportedProgress && pathsSinceReport == 0 && !allowHeartbeat {
-			return true
-		}
-
-		progress(outcome)
-		lastProgressAt = now()
-		lastReportedPaths = outcome.PathsProcessed
-		reportedProgress = true
-
-		return true
-	}
+	reportProgress := newConvergeProgressReporter(ctx, &outcome, progress, now)
 	defer reportProgress(true, false)
 	classifiedPaths, classifyErr := classifyConvergePathsWithProgress(
 		ctx,
@@ -203,33 +175,10 @@ func (manager *Manager) convergePathsWithLstatAndNow(
 		reportProgress,
 	)
 	if changed {
-		if writeErr := merkle.WriteSnapshot(snapshotPath, snapshot); writeErr != nil {
-			slog.ErrorContext(
-				ctx,
-				"converge.snapshot_write_failed",
-				"component",
-				"daemon",
-				"subcomponent",
-				"converge",
-				"path",
-				snapshotPath,
-				"err",
-				writeErr,
-			)
-			wrappedWriteErr := fmt.Errorf("write converge snapshot %s: %w", snapshotPath, writeErr)
-			if convergeErr != nil {
-				return outcome, errors.Join(convergeErr, wrappedWriteErr)
-			}
-
-			return outcome, wrappedWriteErr
-		}
+		return outcome, writeConvergeSnapshot(ctx, snapshotPath, snapshot, convergeErr)
 	}
 
-	if convergeErr != nil {
-		return outcome, convergeErr
-	}
-
-	return outcome, nil
+	return outcome, convergeErr
 }
 
 func (manager *Manager) convergeClassifiedPaths(
@@ -821,7 +770,7 @@ func fileExists(absolutePath string) bool {
 func (manager *Manager) logConvergeReindexErr(
 	ctx context.Context,
 	relativePath string,
-	op string,
+	operation string,
 	err error,
 ) {
 	if errors.Is(err, semantic.ErrCollectionMissing) {
@@ -835,7 +784,7 @@ func (manager *Manager) logConvergeReindexErr(
 			"path",
 			relativePath,
 			"op",
-			op,
+			operation,
 		)
 
 		return
@@ -851,8 +800,76 @@ func (manager *Manager) logConvergeReindexErr(
 		"path",
 		relativePath,
 		"op",
-		op,
+		operation,
 		"err",
 		err,
 	)
+}
+
+func newConvergeProgressReporter(
+	ctx context.Context,
+	outcome *ConvergeOutcome,
+	progress ConvergeProgressFunc,
+	now func() time.Time,
+) func(bool, bool) bool {
+	lastProgressAt := now()
+	lastReportedPaths := int32(0)
+	reportedProgress := false
+
+	return func(final bool, allowHeartbeat bool) bool {
+		if ctx.Err() != nil && !final {
+			return false
+		}
+
+		if progress == nil {
+			return true
+		}
+
+		pathsSinceReport := outcome.PathsProcessed - lastReportedPaths
+		if !final && pathsSinceReport < convergeProgressPathInterval &&
+			now().Sub(lastProgressAt) < convergeProgressTimeInterval {
+			return true
+		}
+
+		if reportedProgress && pathsSinceReport == 0 && !allowHeartbeat {
+			return true
+		}
+
+		progress(*outcome)
+		lastProgressAt = now()
+		lastReportedPaths = outcome.PathsProcessed
+		reportedProgress = true
+
+		return true
+	}
+}
+
+func writeConvergeSnapshot(
+	ctx context.Context,
+	snapshotPath string,
+	snapshot merkle.Snapshot,
+	convergeErr error,
+) error {
+	if writeErr := merkle.WriteSnapshot(snapshotPath, snapshot); writeErr != nil {
+		slog.ErrorContext(
+			ctx,
+			"converge.snapshot_write_failed",
+			"component",
+			"daemon",
+			"subcomponent",
+			"converge",
+			"path",
+			snapshotPath,
+			"err",
+			writeErr,
+		)
+		wrappedWriteErr := fmt.Errorf("write converge snapshot %s: %w", snapshotPath, writeErr)
+		if convergeErr != nil {
+			return errors.Join(convergeErr, wrappedWriteErr)
+		}
+
+		return wrappedWriteErr
+	}
+
+	return convergeErr
 }
