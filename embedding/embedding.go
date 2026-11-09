@@ -417,50 +417,13 @@ func (provider *openAICompatibleProvider) EmbedBatch(
 			return BatchResult{Vectors: vectors, Skipped: skipped}, nil
 		}
 
-		rejection, isPerInput := oversizedInputRejection(embedErr)
-		if !isPerInput {
-			// A genuine server or transport failure. The typed error propagates and
-			// the daemon classifies it, which may mark the embedder unhealthy.
-			return BatchResult{}, embedErr
-		}
-
-		position := rejection.index
-		if position < 0 && len(surviving) == 1 {
-			// The endpoint refused a single-input request, so the offending input is
-			// unambiguous even though its message named no index.
-			position = 0
-		}
-
-		if position < 0 || position >= len(surviving) {
-			// The endpoint refused the request as carrying an over-long input but did
-			// not say which one, and several are in flight, so no single input can be
-			// dropped. The fault is still the request's and not the endpoint's, so it
-			// must not read as a rejecting embedder and must not degrade its health.
-			slog.WarnContext(
-				ctx,
-				"embedding endpoint refused a batch without naming the input",
-				"provider",
-				provider.name,
-				"model",
-				provider.model,
-				"inputs",
-				len(surviving),
-				"err",
-				embedErr,
-			)
-
-			return BatchResult{}, fmt.Errorf(
-				"embed %s batch: %w",
-				provider.name,
-				adapterr.NewEmbedInputRejected(
-					hostedInputRejection(
-						adapterr.EmbedRejectionContextLengthExceeded,
-						rejection.reportedTokens,
-						rejection.maxTokens,
-					),
-					embedErr,
-				),
-			)
+		position, rejection, rejectionErr := provider.refusedInputPosition(
+			ctx,
+			embedErr,
+			len(surviving),
+		)
+		if rejectionErr != nil {
+			return BatchResult{}, rejectionErr
 		}
 
 		originalIndex := surviving[position]
@@ -572,92 +535,15 @@ func (provider *openAICompatibleProvider) embedWithRetry(
 
 		statusCode, transient := transientEmbedStatus(err)
 		if !transient {
-			slog.ErrorContext(
-				ctx,
-				"generate embeddings failed",
-				"provider",
-				provider.name,
-				"model",
-				provider.model,
-				"status",
-				statusCode,
-				"err",
-				err,
-			)
-			var apiErr *openai.Error
-			switch {
-			case ctx.Err() != nil:
-				// The caller's context ended (a job cancel or daemon shutdown), so
-				// report a cancellation, never a down endpoint.
-				return nil, fmt.Errorf(
-					"generate %s embeddings: %w",
-					provider.name,
-					adapterr.NewEmbedCancelled(ctx.Err()),
-				)
-			case errors.Is(err, context.DeadlineExceeded):
-				// The per-request bound fired while the caller's context is still
-				// live: the endpoint accepted the request but did not answer within
-				// requestTimeout. Fail as unreachable so the job fails and retries
-				// later instead of the goroutine hanging forever on a wedged endpoint.
-				return nil, fmt.Errorf(
-					"generate %s embeddings: endpoint did not respond within %s: %w",
-					provider.name,
-					provider.requestTimeout,
-					adapterr.NewEmbedderUnreachable(err),
-				)
-			case errors.Is(err, context.Canceled):
-				return nil, fmt.Errorf(
-					"generate %s embeddings: %w",
-					provider.name,
-					adapterr.NewEmbedCancelled(err),
-				)
-			case errors.As(err, &apiErr):
-				// Reachable endpoint that answered with a non-429 HTTP error.
-				return nil, fmt.Errorf(
-					"generate %s embeddings: %w",
-					provider.name,
-					adapterr.NewEmbedderRejected(fmt.Errorf("%w: %w", ErrEmbedderRejected, err)),
-				)
-			default:
-				// Network failure: the endpoint is unreachable.
-				return nil, fmt.Errorf(
-					"generate %s embeddings: %w",
-					provider.name,
-					adapterr.NewEmbedderUnreachable(err),
-				)
-			}
+			return nil, provider.classifyEmbeddingFailure(ctx, err, statusCode)
 		}
 
 		if attempt == embedMaxAttempts {
 			break
 		}
 
-		backoff := embedBackoff(attempt)
-		slog.WarnContext(
-			ctx,
-			"embedding endpoint busy, retrying",
-			"provider",
-			provider.name,
-			"model",
-			provider.model,
-			"status",
-			statusCode,
-			"attempt",
-			attempt,
-			"backoff",
-			backoff,
-		)
-		timer := time.NewTimer(backoff)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-
-			return nil, fmt.Errorf(
-				"wait to retry %s embeddings: %w",
-				provider.name,
-				adapterr.NewEmbedCancelled(ctx.Err()),
-			)
-		case <-timer.C:
+		if err := provider.waitForEmbeddingRetry(ctx, attempt, statusCode); err != nil {
+			return nil, err
 		}
 	}
 
@@ -852,4 +738,155 @@ func hasNothingToEmbed(text string) bool {
 // Providers outside this package use it for the same refusal.
 func HasNothingToEmbed(text string) bool {
 	return hasNothingToEmbed(text)
+}
+
+func (provider *openAICompatibleProvider) refusedInputPosition(
+	ctx context.Context,
+	embedErr error,
+	inputCount int,
+) (int, perInputRejection, error) {
+	rejection, isPerInput := oversizedInputRejection(embedErr)
+	if !isPerInput {
+		// A genuine server or transport failure. The typed error propagates and
+		// the daemon classifies it, which may mark the embedder unhealthy.
+		return 0, rejection, embedErr
+	}
+
+	position := rejection.index
+	if position < 0 && inputCount == 1 {
+		// The endpoint refused a single-input request, so the offending input is
+		// unambiguous even though its message named no index.
+		position = 0
+	}
+
+	if position < 0 || position >= inputCount {
+		// The endpoint refused the request as carrying an over-long input but did
+		// not say which one, and several are in flight, so no single input can be
+		// dropped. The fault is still the request's and not the endpoint's, so it
+		// must not read as a rejecting embedder and must not degrade its health.
+		slog.WarnContext(
+			ctx,
+			"embedding endpoint refused a batch without naming the input",
+			"provider",
+			provider.name,
+			"model",
+			provider.model,
+			"inputs",
+			inputCount,
+			"err",
+			embedErr,
+		)
+
+		return position, rejection, fmt.Errorf(
+			"embed %s batch: %w",
+			provider.name,
+			adapterr.NewEmbedInputRejected(
+				hostedInputRejection(
+					adapterr.EmbedRejectionContextLengthExceeded,
+					rejection.reportedTokens,
+					rejection.maxTokens,
+				),
+				embedErr,
+			),
+		)
+	}
+
+	return position, rejection, nil
+}
+
+func (provider *openAICompatibleProvider) classifyEmbeddingFailure(
+	ctx context.Context,
+	err error,
+	statusCode int,
+) error {
+	slog.ErrorContext(
+		ctx,
+		"generate embeddings failed",
+		"provider",
+		provider.name,
+		"model",
+		provider.model,
+		"status",
+		statusCode,
+		"err",
+		err,
+	)
+	var apiErr *openai.Error
+	switch {
+	case ctx.Err() != nil:
+		// The caller's context ended (a job cancel or daemon shutdown), so
+		// report a cancellation, never a down endpoint.
+		return fmt.Errorf(
+			"generate %s embeddings: %w",
+			provider.name,
+			adapterr.NewEmbedCancelled(ctx.Err()),
+		)
+	case errors.Is(err, context.DeadlineExceeded):
+		// The per-request bound fired while the caller's context is still
+		// live: the endpoint accepted the request but did not answer within
+		// requestTimeout. Fail as unreachable so the job fails and retries
+		// later instead of the goroutine hanging forever on a wedged endpoint.
+		return fmt.Errorf(
+			"generate %s embeddings: endpoint did not respond within %s: %w",
+			provider.name,
+			provider.requestTimeout,
+			adapterr.NewEmbedderUnreachable(err),
+		)
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf(
+			"generate %s embeddings: %w",
+			provider.name,
+			adapterr.NewEmbedCancelled(err),
+		)
+	case errors.As(err, &apiErr):
+		// Reachable endpoint that answered with a non-429 HTTP error.
+		return fmt.Errorf(
+			"generate %s embeddings: %w",
+			provider.name,
+			adapterr.NewEmbedderRejected(fmt.Errorf("%w: %w", ErrEmbedderRejected, err)),
+		)
+	default:
+		// Network failure: the endpoint is unreachable.
+		return fmt.Errorf(
+			"generate %s embeddings: %w",
+			provider.name,
+			adapterr.NewEmbedderUnreachable(err),
+		)
+	}
+}
+
+func (provider *openAICompatibleProvider) waitForEmbeddingRetry(
+	ctx context.Context,
+	attempt int,
+	statusCode int,
+) error {
+	backoff := embedBackoff(attempt)
+	slog.WarnContext(
+		ctx,
+		"embedding endpoint busy, retrying",
+		"provider",
+		provider.name,
+		"model",
+		provider.model,
+		"status",
+		statusCode,
+		"attempt",
+		attempt,
+		"backoff",
+		backoff,
+	)
+	timer := time.NewTimer(backoff)
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+
+		return fmt.Errorf(
+			"wait to retry %s embeddings: %w",
+			provider.name,
+			adapterr.NewEmbedCancelled(ctx.Err()),
+		)
+	case <-timer.C:
+	}
+
+	return nil
 }
