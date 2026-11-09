@@ -171,7 +171,8 @@ func resolveRequestPath(requestedPath string, callerCwd string) (string, error) 
 	cwd := strings.TrimSpace(callerCwd)
 	if !filepath.IsAbs(cwd) {
 		return "", fmt.Errorf(
-			"path %q is relative and the request carries no absolute caller working directory; pass an absolute path or upgrade the client",
+			"path %q is relative and the request carries no absolute caller working directory; "+
+				"pass an absolute path or upgrade the client",
 			requestedPath,
 		)
 	}

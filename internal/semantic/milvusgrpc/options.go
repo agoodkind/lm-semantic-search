@@ -111,13 +111,13 @@ func (handler callObserverStatsHandler) TagRPC(
 }
 
 func (handler callObserverStatsHandler) HandleRPC(ctx context.Context, rpcStats stats.RPCStats) {
-	payload, ok := rpcStats.(*stats.OutPayload)
-	if !ok {
+	payload, isOutgoingPayload := rpcStats.(*stats.OutPayload)
+	if !isOutgoingPayload {
 		return
 	}
 
-	request, ok := payload.Payload.(proto.Message)
-	if !ok {
+	request, isProtoMessage := payload.Payload.(proto.Message)
+	if !isProtoMessage {
 		return
 	}
 

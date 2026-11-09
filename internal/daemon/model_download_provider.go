@@ -52,7 +52,9 @@ func modelNotReadyError(snapshot modelDownloadSnapshot) *adapterr.AdapterError {
 
 	return adapterr.NewEmbeddingModelNotReady(
 		message,
-		"Retry after the download completes. If the download is deferred, use the profile command to set --model-download-network-override or change --model-download-network-policy.",
+		"Retry after the download completes. If the download is deferred, "+
+			"use the profile command to set --model-download-network-override "+
+			"or change --model-download-network-policy.",
 		nil,
 	)
 }

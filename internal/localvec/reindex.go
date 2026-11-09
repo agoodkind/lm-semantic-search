@@ -267,31 +267,7 @@ func (store *Store) embedRows(
 		return result, err
 	}
 
-	// Pre-split oversized chunks at the active model's real input limit before the
-	// embedder sees them. The offline ONNX tokenizer would otherwise truncate an
-	// oversized input to its 2048/512-token maximum and silently lose the rest, so
-	// the byte budget is derived from the preset limit, not the 4096
-	// OpenAI-compatible limit.
-	byteBudget := config.EmbedChunkByteBudgetForLimit(
-		store.cfg.EmbeddingMaxTokens,
-		config.ActiveEmbedTokenLimit(store.cfg),
-	)
-	splitChunks, splitCount := semantic.SplitChunksToByteBudget(chunks, byteBudget)
-	if splitCount > 0 {
-		slog.InfoContext(
-			ctx,
-			"localvec.split_over_token_budget",
-			"byte_budget",
-			byteBudget,
-			"chunks_split",
-			splitCount,
-			"expanded_from",
-			len(chunks),
-			"expanded_to",
-			len(splitChunks),
-		)
-	}
-
+	splitChunks := store.splitChunksToInputBudget(ctx, chunks)
 	result.rows = make([]row, 0, len(splitChunks))
 
 	missChunks := make([]model.StoredChunk, 0, len(splitChunks))
@@ -381,6 +357,38 @@ func (store *Store) embedRows(
 	}
 
 	return result, nil
+}
+
+func (store *Store) splitChunksToInputBudget(
+	ctx context.Context,
+	chunks []model.StoredChunk,
+) []model.StoredChunk {
+	// Pre-split oversized chunks at the active model's real input limit before the
+	// embedder sees them. The offline ONNX tokenizer would otherwise truncate an
+	// oversized input to its 2048/512-token maximum and silently lose the rest, so
+	// the byte budget is derived from the preset limit, not the 4096
+	// OpenAI-compatible limit.
+	byteBudget := config.EmbedChunkByteBudgetForLimit(
+		store.cfg.EmbeddingMaxTokens,
+		config.ActiveEmbedTokenLimit(store.cfg),
+	)
+	splitChunks, splitCount := semantic.SplitChunksToByteBudget(chunks, byteBudget)
+	if splitCount > 0 {
+		slog.InfoContext(
+			ctx,
+			"localvec.split_over_token_budget",
+			"byte_budget",
+			byteBudget,
+			"chunks_split",
+			splitCount,
+			"expanded_from",
+			len(chunks),
+			"expanded_to",
+			len(splitChunks),
+		)
+	}
+
+	return splitChunks
 }
 
 func emitProgress(

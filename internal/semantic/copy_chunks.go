@@ -436,20 +436,9 @@ func copiedRowAt(
 	columns copiedRowColumns,
 	rowIndex int,
 ) (copiedRow, error) {
-	idValue, err := columns.id.GetAsString(rowIndex)
+	idValue, err := copiedIDAt(ctx, collectionName, columns.id, rowIndex)
 	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"read id column for copy failed",
-			"collection",
-			collectionName,
-			"row",
-			rowIndex,
-			"err",
-			err,
-		)
-
-		return copiedRow{}, fmt.Errorf("read id column at %d: %w", rowIndex, err)
+		return copiedRow{}, err
 	}
 
 	contentValue, err := columns.content.GetAsString(rowIndex)
@@ -492,14 +481,7 @@ func copiedRowAt(
 		return copiedRow{}, fmt.Errorf("read file_extension column at %d: %w", rowIndex, err)
 	}
 
-	languageValue := ""
-	if columns.metadata != nil {
-		metadataValue, metadataErr := columns.metadata.GetAsString(rowIndex)
-		if metadataErr == nil {
-			languageValue = decodeMetadataLanguage(metadataValue)
-		}
-	}
-
+	languageValue := copiedRowLanguage(columns.metadata, rowIndex)
 	vector, err := milvusstore.VectorAt(columns.vector, rowIndex)
 	if err != nil {
 		slog.ErrorContext(ctx, "read vector column for copy failed", "row", rowIndex, "err", err)
@@ -538,4 +520,41 @@ func copiedRowAt(
 		splitPartRecorded: splitPartRecorded,
 		embeddingModel:    embeddingModel,
 	}, nil
+}
+
+func copiedIDAt(
+	ctx context.Context,
+	collectionName string,
+	idColumn column.Column,
+	rowIndex int,
+) (string, error) {
+	idValue, err := idColumn.GetAsString(rowIndex)
+	if err != nil {
+		slog.ErrorContext(
+			ctx,
+			"read id column for copy failed",
+			"collection",
+			collectionName,
+			"row",
+			rowIndex,
+			"err",
+			err,
+		)
+
+		return "", fmt.Errorf("read id column at %d: %w", rowIndex, err)
+	}
+
+	return idValue, nil
+}
+
+func copiedRowLanguage(metadataColumn column.Column, rowIndex int) string {
+	languageValue := ""
+	if metadataColumn != nil {
+		metadataValue, metadataErr := metadataColumn.GetAsString(rowIndex)
+		if metadataErr == nil {
+			languageValue = decodeMetadataLanguage(metadataValue)
+		}
+	}
+
+	return languageValue
 }

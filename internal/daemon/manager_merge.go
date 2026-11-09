@@ -114,19 +114,19 @@ func (manager *Manager) absorbDescendants(ctx context.Context, descendants []mod
 	manager.mu.Unlock()
 	manager.policyMutationMutex.Unlock()
 
-	for _, id := range removed {
-		if err := manager.clearGraphCache(ctx, id); err != nil {
+	for _, codebaseID := range removed {
+		if err := manager.clearGraphCache(ctx, codebaseID); err != nil {
 			slog.WarnContext(
 				ctx,
 				"remove absorbed child graph failed",
 				"child_codebase_id",
-				id,
+				codebaseID,
 				"err",
 				err,
 			)
 		}
 
-		manager.notifyCodebaseRemoved(ctx, id)
+		manager.notifyCodebaseRemoved(ctx, codebaseID)
 	}
 
 	if len(removed) > 0 {

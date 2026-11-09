@@ -220,152 +220,8 @@ func buildStatusMetrics(
 		)
 	}
 
-	list = append(
-		list,
-		intMetric(statusGroupJobs, "jobs_active", snapshot.JobsActive, unitJobs),
-		intMetric(statusGroupJobs, "jobs_completed_total", snapshot.JobsCompletedTotal, unitJobs),
-		intMetric(statusGroupJobs, "jobs_failed_total", snapshot.JobsFailedTotal, unitJobs),
-		intMetric(statusGroupJobs, "jobs_cancelled_total", snapshot.JobsCancelledTotal, unitJobs),
-		intMetric(statusGroupJobs, "boot_resumes_total", snapshot.BootResumesTotal, unitJobs),
-		intMetric(
-			statusGroupJobs,
-			"sync_skipped_inflight_total",
-			snapshot.SyncSkippedInflightTotal,
-			unitRequests,
-		),
-		intMetric(statusGroupEmbed, "embed_inflight", snapshot.EmbedInflight, unitBatches),
-		intMetric(statusGroupEmbed, "embed_batches_total", snapshot.EmbedBatchesTotal, unitBatches),
-		intMetric(
-			statusGroupEmbed,
-			"embed_batches_failed",
-			snapshot.EmbedBatchesFailed,
-			unitBatches,
-		),
-		intMetric(statusGroupEmbed, "embed_vectors_total", snapshot.EmbedVectorsTotal, unitVectors),
-		intMetric(statusGroupEmbed, "embed_latency_ms_sum", snapshot.EmbedLatencyMSSum, unitMillis),
-		intMetric(
-			statusGroupEmbed,
-			"embed_chunks_reused_total",
-			snapshot.EmbedChunksReusedTotal,
-			unitChunks,
-		),
-		intMetric(
-			statusGroupEmbed,
-			"embed_inputs_refused_empty",
-			snapshot.EmbedInputsRefusedEmpty,
-			unitInputs,
-		),
-		intMetric(
-			statusGroupConverge,
-			"converge_upsert_total",
-			snapshot.ConvergeUpsertTotal,
-			unitPaths,
-		),
-		intMetric(
-			statusGroupConverge,
-			"converge_remove_total",
-			snapshot.ConvergeRemoveTotal,
-			unitPaths,
-		),
-		intMetric(
-			statusGroupConverge,
-			"converge_copy_chunks_total",
-			snapshot.ConvergeCopyChunksTotal,
-			unitPaths,
-		),
-		intMetric(statusGroupConverge, "sweep_runs_total", snapshot.SweepRunsTotal, unitRuns),
-		intMetric(statusGroupConverge, "sweep_changed_total", snapshot.SweepChangedTotal, unitRuns),
-		intMetric(
-			statusGroupMilvus,
-			"milvus_collection_loads_total",
-			snapshot.MilvusCollectionLoadsTotal,
-			unitLoads,
-		),
-		intMetric(
-			statusGroupMilvus,
-			"milvus_collection_load_failures_total",
-			snapshot.MilvusCollectionLoadFailuresTotal,
-			unitLoads,
-		),
-		intMetric(
-			statusGroupMilvus,
-			"milvus_collection_load_wait_timeouts_total",
-			snapshot.MilvusCollectionLoadWaitTimeoutsTotal,
-			unitTimeouts,
-		),
-		intMetric(
-			statusGroupMilvus,
-			"milvus_collection_load_inflight",
-			snapshot.MilvusCollectionLoadInflight,
-			unitLoads,
-		),
-		intMetric(
-			statusGroupMilvus,
-			"milvus_collection_load_latency_ms_sum",
-			snapshot.MilvusCollectionLoadLatencyMSSum,
-			unitMillis,
-		),
-		intMetric(
-			statusGroupMilvus,
-			"milvus_collection_unloads_total",
-			snapshot.MilvusCollectionUnloadsTotal,
-			unitUnloads,
-		),
-		intMetric(
-			statusGroupMilvus,
-			"milvus_collection_unload_failures_total",
-			snapshot.MilvusCollectionUnloadFailuresTotal,
-			unitUnloads,
-		),
-		intMetric(
-			statusGroupMilvus,
-			"milvus_collection_unload_skipped_in_use_total",
-			snapshot.MilvusCollectionUnloadSkippedInUseTotal,
-			unitUnloads,
-		),
-		intMetric(
-			statusGroupMilvus,
-			"milvus_collection_unload_latency_ms_sum",
-			snapshot.MilvusCollectionUnloadLatencyMSSum,
-			unitMillis,
-		),
-		intMetric(
-			statusGroupMilvus,
-			"milvus_collection_leases_active",
-			snapshot.MilvusCollectionLeasesActive,
-			unitLeases,
-		),
-		intMetric(
-			statusGroupMilvus,
-			"milvus_collections_idle",
-			snapshot.MilvusCollectionsIdle,
-			unitCollections,
-		),
-		intMetric(
-			statusGroupMilvus,
-			"milvus_collections_loading",
-			snapshot.MilvusCollectionsLoading,
-			unitCollections,
-		),
-		intMetric(
-			statusGroupMilvus,
-			"milvus_collections_ready",
-			snapshot.MilvusCollectionsReady,
-			unitCollections,
-		),
-		intMetric(
-			statusGroupMilvus,
-			"milvus_mmap_migrations_total",
-			snapshot.MilvusMmapMigrationsTotal,
-			unitMigrations,
-		),
-		intMetric(
-			statusGroupMilvus,
-			"milvus_mmap_migration_failures_total",
-			snapshot.MilvusMmapMigrationFailuresTotal,
-			unitMigrations,
-		),
-	)
+	list = appendWorkMetrics(list, snapshot)
+	list = appendMilvusMetrics(list, snapshot)
 
 	list = append(list, runtimeMetrics()...)
 
@@ -639,84 +495,9 @@ func jobActivityRow(job model.Job) *pb.ActivityRow {
 			),
 			stringMetric(statusGroupActivity, "trigger", wire.GetTrigger()),
 			boolMetric(statusGroupActivity, "forced", wire.GetForced()),
-			stringMetric(statusGroupActivity, "phase", progress.GetPhase()),
-			doubleMetric(
-				statusGroupActivity,
-				"overall_percent",
-				progress.GetOverallPercent(),
-				unitPercent,
-			),
-			doubleMetric(
-				statusGroupActivity,
-				"phase_percent",
-				progress.GetPhasePercent(),
-				unitPercent,
-			),
-			intMetric(
-				statusGroupActivity,
-				"files_processed",
-				int64(progress.GetFilesProcessed()),
-				unitFiles,
-			),
-			intMetric(
-				statusGroupActivity,
-				"files_total",
-				int64(progress.GetFilesTotal()),
-				unitFiles,
-			),
-			intMetric(
-				statusGroupActivity,
-				"chunks_generated",
-				int64(progress.GetChunksGenerated()),
-				unitChunks,
-			),
-			intMetric(
-				statusGroupActivity,
-				"chunks_embedded",
-				int64(progress.GetChunksEmbedded()),
-				unitChunks,
-			),
-			intMetric(
-				statusGroupActivity,
-				"chunks_reused",
-				int64(progress.GetChunksReused()),
-				unitChunks,
-			),
-			intMetric(
-				statusGroupActivity,
-				"chunks_dropped",
-				int64(progress.GetChunksDropped()),
-				unitChunks,
-			),
-			intMetric(
-				statusGroupActivity,
-				"reuse_vectors_loaded",
-				int64(progress.GetReuseVectorsLoaded()),
-				unitVectors,
-			),
-			intMetric(
-				statusGroupActivity,
-				"collection_rows_written",
-				int64(progress.GetCollectionRowsWritten()),
-				unitRows,
-			),
-			intMetric(
-				statusGroupActivity,
-				"embedding_batches_completed",
-				int64(progress.GetEmbeddingBatchesCompleted()),
-				unitBatches,
-			),
-			intMetric(
-				statusGroupActivity,
-				"embedding_batches_total",
-				int64(progress.GetEmbeddingBatchesTotal()),
-				unitBatches,
-			),
-			protoTimeMetric(statusGroupActivity, "started_at", wire.GetStartedAt()),
-			protoTimeMetric(statusGroupActivity, "last_event_at", progress.GetLastEventAt()),
-			protoTimeMetric(statusGroupActivity, "heartbeat_at", progress.GetHeartbeatAt()),
 		},
 	}
+	row.Metrics = appendJobProgressMetrics(row.GetMetrics(), wire, progress)
 	rowsMetric := absentMetric(statusGroupActivity, "collection_rows_written_total")
 	batchesMetric := absentMetric(statusGroupActivity, "embedding_batches_completed_total")
 	if totals := job.Progress.WriteTotals; totals != nil {
@@ -772,4 +553,231 @@ func watcherActivityRow(entry WatcherActivity, canonicalPath string) *pb.Activit
 			timeMetric(statusGroupActivity, "started_at", entry.StartedAt),
 		},
 	}
+}
+
+func appendWorkMetrics(list []*pb.Metric, snapshot metrics.Snapshot) []*pb.Metric {
+	return append(
+		list,
+		intMetric(statusGroupJobs, "jobs_active", snapshot.JobsActive, unitJobs),
+		intMetric(statusGroupJobs, "jobs_completed_total", snapshot.JobsCompletedTotal, unitJobs),
+		intMetric(statusGroupJobs, "jobs_failed_total", snapshot.JobsFailedTotal, unitJobs),
+		intMetric(statusGroupJobs, "jobs_cancelled_total", snapshot.JobsCancelledTotal, unitJobs),
+		intMetric(statusGroupJobs, "boot_resumes_total", snapshot.BootResumesTotal, unitJobs),
+		intMetric(
+			statusGroupJobs,
+			"sync_skipped_inflight_total",
+			snapshot.SyncSkippedInflightTotal,
+			unitRequests,
+		),
+		intMetric(statusGroupEmbed, "embed_inflight", snapshot.EmbedInflight, unitBatches),
+		intMetric(statusGroupEmbed, "embed_batches_total", snapshot.EmbedBatchesTotal, unitBatches),
+		intMetric(
+			statusGroupEmbed,
+			"embed_batches_failed",
+			snapshot.EmbedBatchesFailed,
+			unitBatches,
+		),
+		intMetric(statusGroupEmbed, "embed_vectors_total", snapshot.EmbedVectorsTotal, unitVectors),
+		intMetric(statusGroupEmbed, "embed_latency_ms_sum", snapshot.EmbedLatencyMSSum, unitMillis),
+		intMetric(
+			statusGroupEmbed,
+			"embed_chunks_reused_total",
+			snapshot.EmbedChunksReusedTotal,
+			unitChunks,
+		),
+		intMetric(
+			statusGroupEmbed,
+			"embed_inputs_refused_empty",
+			snapshot.EmbedInputsRefusedEmpty,
+			unitInputs,
+		),
+		intMetric(
+			statusGroupConverge,
+			"converge_upsert_total",
+			snapshot.ConvergeUpsertTotal,
+			unitPaths,
+		),
+		intMetric(
+			statusGroupConverge,
+			"converge_remove_total",
+			snapshot.ConvergeRemoveTotal,
+			unitPaths,
+		),
+		intMetric(
+			statusGroupConverge,
+			"converge_copy_chunks_total",
+			snapshot.ConvergeCopyChunksTotal,
+			unitPaths,
+		),
+		intMetric(statusGroupConverge, "sweep_runs_total", snapshot.SweepRunsTotal, unitRuns),
+		intMetric(statusGroupConverge, "sweep_changed_total", snapshot.SweepChangedTotal, unitRuns),
+	)
+}
+
+func appendMilvusMetrics(list []*pb.Metric, snapshot metrics.Snapshot) []*pb.Metric {
+	return append(
+		list,
+		intMetric(
+			statusGroupMilvus,
+			"milvus_collection_loads_total",
+			snapshot.MilvusCollectionLoadsTotal,
+			unitLoads,
+		),
+		intMetric(
+			statusGroupMilvus,
+			"milvus_collection_load_failures_total",
+			snapshot.MilvusCollectionLoadFailuresTotal,
+			unitLoads,
+		),
+		intMetric(
+			statusGroupMilvus,
+			"milvus_collection_load_wait_timeouts_total",
+			snapshot.MilvusCollectionLoadWaitTimeoutsTotal,
+			unitTimeouts,
+		),
+		intMetric(
+			statusGroupMilvus,
+			"milvus_collection_load_inflight",
+			snapshot.MilvusCollectionLoadInflight,
+			unitLoads,
+		),
+		intMetric(
+			statusGroupMilvus,
+			"milvus_collection_load_latency_ms_sum",
+			snapshot.MilvusCollectionLoadLatencyMSSum,
+			unitMillis,
+		),
+		intMetric(
+			statusGroupMilvus,
+			"milvus_collection_unloads_total",
+			snapshot.MilvusCollectionUnloadsTotal,
+			unitUnloads,
+		),
+		intMetric(
+			statusGroupMilvus,
+			"milvus_collection_unload_failures_total",
+			snapshot.MilvusCollectionUnloadFailuresTotal,
+			unitUnloads,
+		),
+		intMetric(
+			statusGroupMilvus,
+			"milvus_collection_unload_skipped_in_use_total",
+			snapshot.MilvusCollectionUnloadSkippedInUseTotal,
+			unitUnloads,
+		),
+		intMetric(
+			statusGroupMilvus,
+			"milvus_collection_unload_latency_ms_sum",
+			snapshot.MilvusCollectionUnloadLatencyMSSum,
+			unitMillis,
+		),
+		intMetric(
+			statusGroupMilvus,
+			"milvus_collection_leases_active",
+			snapshot.MilvusCollectionLeasesActive,
+			unitLeases,
+		),
+		intMetric(
+			statusGroupMilvus,
+			"milvus_collections_idle",
+			snapshot.MilvusCollectionsIdle,
+			unitCollections,
+		),
+		intMetric(
+			statusGroupMilvus,
+			"milvus_collections_loading",
+			snapshot.MilvusCollectionsLoading,
+			unitCollections,
+		),
+		intMetric(
+			statusGroupMilvus,
+			"milvus_collections_ready",
+			snapshot.MilvusCollectionsReady,
+			unitCollections,
+		),
+		intMetric(
+			statusGroupMilvus,
+			"milvus_mmap_migrations_total",
+			snapshot.MilvusMmapMigrationsTotal,
+			unitMigrations,
+		),
+		intMetric(
+			statusGroupMilvus,
+			"milvus_mmap_migration_failures_total",
+			snapshot.MilvusMmapMigrationFailuresTotal,
+			unitMigrations,
+		),
+	)
+}
+
+func appendJobProgressMetrics(list []*pb.Metric, wire *pb.Job, progress *pb.Progress) []*pb.Metric {
+	return append(
+		list,
+		stringMetric(statusGroupActivity, "phase", progress.GetPhase()),
+		doubleMetric(
+			statusGroupActivity,
+			"overall_percent",
+			progress.GetOverallPercent(),
+			unitPercent,
+		),
+		doubleMetric(statusGroupActivity, "phase_percent", progress.GetPhasePercent(), unitPercent),
+		intMetric(
+			statusGroupActivity,
+			"files_processed",
+			int64(progress.GetFilesProcessed()),
+			unitFiles,
+		),
+		intMetric(statusGroupActivity, "files_total", int64(progress.GetFilesTotal()), unitFiles),
+		intMetric(
+			statusGroupActivity,
+			"chunks_generated",
+			int64(progress.GetChunksGenerated()),
+			unitChunks,
+		),
+		intMetric(
+			statusGroupActivity,
+			"chunks_embedded",
+			int64(progress.GetChunksEmbedded()),
+			unitChunks,
+		),
+		intMetric(
+			statusGroupActivity,
+			"chunks_reused",
+			int64(progress.GetChunksReused()),
+			unitChunks,
+		),
+		intMetric(
+			statusGroupActivity,
+			"chunks_dropped",
+			int64(progress.GetChunksDropped()),
+			unitChunks,
+		),
+		intMetric(
+			statusGroupActivity,
+			"reuse_vectors_loaded",
+			int64(progress.GetReuseVectorsLoaded()),
+			unitVectors,
+		),
+		intMetric(
+			statusGroupActivity,
+			"collection_rows_written",
+			int64(progress.GetCollectionRowsWritten()),
+			unitRows,
+		),
+		intMetric(
+			statusGroupActivity,
+			"embedding_batches_completed",
+			int64(progress.GetEmbeddingBatchesCompleted()),
+			unitBatches,
+		),
+		intMetric(
+			statusGroupActivity,
+			"embedding_batches_total",
+			int64(progress.GetEmbeddingBatchesTotal()),
+			unitBatches,
+		),
+		protoTimeMetric(statusGroupActivity, "started_at", wire.GetStartedAt()),
+		protoTimeMetric(statusGroupActivity, "last_event_at", progress.GetLastEventAt()),
+		protoTimeMetric(statusGroupActivity, "heartbeat_at", progress.GetHeartbeatAt()),
+	)
 }

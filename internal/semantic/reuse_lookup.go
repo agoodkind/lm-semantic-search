@@ -464,18 +464,16 @@ func (service *Service) discoverStoredHashReuseCandidates(
 	filter string,
 	contentsByHash map[string]string,
 ) (reuseVectorCandidateByID, error) {
-	iterator, err := service.milvus.QueryIterator(
-		ctx,
-		milvusclient.NewQueryIteratorOption(collectionName).WithBatchSize(reuseVectorBatchSize).
-			WithFilter(
-				filter,
-			).
-			WithOutputFields(
-				idFieldName,
-				contentHashFieldName,
-				embeddingModelFieldName,
-			),
-	)
+	outputFields := []string{idFieldName, contentHashFieldName, embeddingModelFieldName}
+	queryOption := milvusclient.NewQueryIteratorOption(collectionName).
+		WithBatchSize(
+			reuseVectorBatchSize,
+		).
+		WithFilter(
+			filter,
+		)
+	queryOption = queryOption.WithOutputFields(outputFields...)
+	iterator, err := service.milvus.QueryIterator(ctx, queryOption)
 	if err != nil {
 		peerInfo, _ := peer.FromContext(ctx)
 		slog.ErrorContext(
