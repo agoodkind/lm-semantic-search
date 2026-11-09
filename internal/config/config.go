@@ -396,155 +396,136 @@ func Default() (Config, error) {
 		return Config{}, err
 	}
 
-	return ApplyProfile(Config{
-		Profile:           resolveProfile(fileConfig.Profile),
-		IndexBackend:      IndexBackendMilvus,
-		ConfigRoot:        configRoot,
-		ConfigPath:        configPath,
-		StateRoot:         stateRoot,
-		SocketPath:        socketPath,
-		RegistryPath:      filepath.Join(stateRoot, "registry.json"),
-		JobsPath:          filepath.Join(stateRoot, "jobs.jsonl"),
-		EventsPath:        filepath.Join(stateRoot, "events.jsonl"),
-		LogsDir:           logsDir,
-		LogPath:           logPath,
-		MerkleDir:         filepath.Join(stateRoot, "merkle"),
-		LocksDir:          filepath.Join(stateRoot, "locks"),
-		SocketsDir:        socketsDir,
-		ChunksDir:         filepath.Join(stateRoot, "chunks"),
-		GraphDir:          filepath.Join(stateRoot, "graph"),
-		ContextRoot:       contextRoot,
-		ModelCacheRoot:    modelCacheRoot,
-		EmbeddingProvider: embeddingProviderName,
-		EmbeddingModel: envOrDefault(
-			"EMBEDDING_MODEL",
-			embeddingDefaults.model,
-		),
-		OfflineEmbeddingModel:        embeddingDefaults.offlineModel,
-		ModelDownloadNetworkPolicy:   modelDownloadNetwork.Policy,
-		ModelDownloadNetworkOverride: modelDownloadNetwork.Override,
-		EmbeddingBatchSize: envIntOrDefault(
-			"EMBEDDING_BATCH_SIZE",
-			intOrDefault(fileConfig.EmbeddingBatchSize, 32),
-		),
-		EmbeddingBatchTokenBudget: intOrDefault(
-			fileConfig.EmbeddingBatchTokenBudget,
-			defaultEmbeddingBatchTokenBudget,
-		),
-		EmbeddingMaxTokens: resolveEmbeddingMaxTokens(
-			fileConfig.EmbeddingMaxTokens,
-		),
-		EmbeddingRequestTimeoutMS: resolveEmbeddingRequestTimeoutMS(
-			fileConfig.EmbeddingRequestTimeoutMS,
-		),
-		EmbeddingDimension: envInt32OrDefault(
-			"EMBEDDING_DIMENSION",
-			fileConfig.EmbeddingDimension,
-		),
-		OpenAIAPIKey: envOrDefault("OPENAI_API_KEY", fileConfig.OpenAIAPIKey),
-		OpenAIBaseURL: envOrDefault(
-			"OPENAI_BASE_URL",
-			fileConfig.OpenAIBaseURL,
-		),
-		QueryInstructionPrefix: embeddingDefaults.queryInstructionText,
-		CustomIgnorePatterns: parseCommaSeparated(
-			os.Getenv("CUSTOM_IGNORE_PATTERNS"),
-		),
-		IncludeSubmodules: parseCommaSeparated(
-			os.Getenv("CLAUDE_CONTEXT_INCLUDE_SUBMODULES"),
-		),
-		MilvusAddress: envOrDefault(
-			"MILVUS_ADDRESS",
-			fileConfig.MilvusAddress,
-		),
-		MilvusToken:    envOrDefault("MILVUS_TOKEN", fileConfig.MilvusToken),
-		MilvusDatabase: envOrDefault("MILVUS_DATABASE", ""),
-		MilvusMetadataCallTimeoutMS: resolveMilvusMetadataCallTimeoutMS(
-			fileConfig.MilvusMetadataCallTimeoutMS,
-		),
-		MilvusMutationCallTimeoutMS: resolveMilvusMutationCallTimeoutMS(
-			fileConfig.MilvusMutationCallTimeoutMS,
-		),
-		MilvusCollectionLoadTimeoutMS: resolveMilvusCollectionLoadTimeoutMS(
-			fileConfig.MilvusCollectionLoadTimeoutMS,
-		),
-		MilvusCollectionLoadWaitTimeoutMS: loadWaitTimeoutMS,
-		MilvusCollectionIdleTimeoutMS:     idleTimeoutMS,
-		MilvusMaxConcurrentCollectionLoads: resolveMilvusMaxConcurrentCollectionLoads(
-			fileConfig.MilvusMaxConcurrentCollectionLoads,
-		),
-		CollectionNameOverride: envOrDefault(
-			"CODE_CHUNKS_COLLECTION_NAME_OVERRIDE",
-			fileConfig.CollectionNameOverride,
-		),
-		HybridMode: envBoolOrDefault(
-			"HYBRID_MODE",
-			boolOrDefault(fileConfig.HybridMode, true),
-		),
-		BackgroundSyncEnabled: envBoolOrDefault(
-			"CLAUDE_CONTEXT_BACKGROUND_SYNC",
-			true,
-		),
-		SyncIntervalMS: envIntOrDefault(
-			"CLAUDE_CONTEXT_SYNC_INTERVAL_MS",
-			defaultSyncInterval,
-		),
-		TriggerWatcherEnabled: envBoolOrDefault(
-			"CLAUDE_CONTEXT_TRIGGER_WATCHER",
-			true,
-		),
-		FileWatcherEnabled:   envBoolOrDefault("CLAUDE_CONTEXT_FILE_WATCHER", true),
-		DebugListenerEnabled: envBoolOrDefault("CLAUDE_CONTEXT_DEBUG_LISTENER", true),
-		DebugListenAddr: envOrDefault(
-			"CLAUDE_CONTEXT_DEBUG_LISTEN_ADDR",
-			defaultDebugListenAddr,
-		),
-		PerfCountersIntervalMS: envIntOrDefault(
-			"CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS",
-			defaultPerfCountersIntervalMS,
-		),
-		MaxConcurrentIndexJobs: envIntOrDefault(
-			"CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS",
-			defaultMaxConcurrentIndexJobs,
-		),
-		MaxJobChunks: envInt32OrDefault(
-			"CLAUDE_CONTEXT_MAX_JOB_CHUNKS",
-			defaultMaxJobChunks,
-		),
-		MaxConversationsPerIngest: envIntOrDefault(
-			"CLAUDE_CONTEXT_MAX_CONVERSATIONS_PER_INGEST",
-			defaultMaxConversationsPerIngest,
-		),
-		MaxJobBytes: envInt64OrDefault(
-			"CLAUDE_CONTEXT_MAX_JOB_BYTES",
-			defaultMaxJobBytes,
-		),
-		ExpectedJobGrowthFactor: envFloat64OrDefault(
-			"CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FACTOR",
-			defaultExpectedJobGrowthFactor,
-		),
-		ExpectedJobGrowthFloor: envInt32OrDefault(
-			"CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FLOOR",
-			defaultExpectedJobGrowthFloor,
-		),
-		ResumeIndexingOnBoot: envBoolOrDefault("CLAUDE_CONTEXT_RESUME_ON_BOOT", true),
-		LogRotationMaxBytes: envInt64OrDefault(
-			"CLAUDE_CONTEXT_LOG_ROTATION_MAX_BYTES",
-			defaultLogRotationMaxBytes,
-		),
-		LogRetentionBytes: envInt64OrDefault(
-			"CLAUDE_CONTEXT_LOG_RETENTION_BYTES",
-			defaultLogRetentionBytes,
-		),
-		LogCleanupEnabled: envBoolOrDefault(
-			"CLAUDE_CONTEXT_LOG_CLEANUP_ENABLED",
-			true,
-		),
-		LogCleanupIntervalMS: envIntOrDefault(
-			"CLAUDE_CONTEXT_LOG_CLEANUP_INTERVAL_MS",
-			defaultLogCleanupIntervalMS,
-		),
-	}), nil
+	var cfg Config
+	cfg.Profile = resolveProfile(fileConfig.Profile)
+	cfg.IndexBackend = IndexBackendMilvus
+	cfg.ConfigRoot = configRoot
+	cfg.ConfigPath = configPath
+	cfg.StateRoot = stateRoot
+	cfg.SocketPath = socketPath
+	cfg.RegistryPath = filepath.Join(stateRoot, "registry.json")
+	cfg.JobsPath = filepath.Join(stateRoot, "jobs.jsonl")
+	cfg.EventsPath = filepath.Join(stateRoot, "events.jsonl")
+	cfg.LogsDir = logsDir
+	cfg.LogPath = logPath
+	cfg.MerkleDir = filepath.Join(stateRoot, "merkle")
+	cfg.LocksDir = filepath.Join(stateRoot, "locks")
+	cfg.SocketsDir = socketsDir
+	cfg.ChunksDir = filepath.Join(stateRoot, "chunks")
+	cfg.GraphDir = filepath.Join(stateRoot, "graph")
+	cfg.ContextRoot = contextRoot
+	cfg.ModelCacheRoot = modelCacheRoot
+	cfg.EmbeddingProvider = embeddingProviderName
+	populateEmbeddingDefaults(&cfg, fileConfig, embeddingDefaults, modelDownloadNetwork)
+	populateMilvusDefaults(&cfg, fileConfig, loadWaitTimeoutMS, idleTimeoutMS)
+	populateRuntimeDefaults(&cfg)
+
+	return ApplyProfile(cfg), nil
+}
+
+func populateEmbeddingDefaults(
+	cfg *Config,
+	fileConfig persistedConfig,
+	embeddingDefaults embeddingConfigDefaults,
+	modelDownloadNetwork ModelDownloadNetworkSettings,
+) {
+	cfg.EmbeddingModel = envOrDefault("EMBEDDING_MODEL", embeddingDefaults.model)
+	cfg.OfflineEmbeddingModel = embeddingDefaults.offlineModel
+	cfg.ModelDownloadNetworkPolicy = modelDownloadNetwork.Policy
+	cfg.ModelDownloadNetworkOverride = modelDownloadNetwork.Override
+	cfg.EmbeddingBatchSize = envIntOrDefault(
+		"EMBEDDING_BATCH_SIZE",
+		intOrDefault(fileConfig.EmbeddingBatchSize, 32),
+	)
+	cfg.EmbeddingBatchTokenBudget = intOrDefault(
+		fileConfig.EmbeddingBatchTokenBudget,
+		defaultEmbeddingBatchTokenBudget,
+	)
+	cfg.EmbeddingMaxTokens = resolveEmbeddingMaxTokens(fileConfig.EmbeddingMaxTokens)
+	cfg.EmbeddingRequestTimeoutMS = resolveEmbeddingRequestTimeoutMS(
+		fileConfig.EmbeddingRequestTimeoutMS,
+	)
+	cfg.EmbeddingDimension = envInt32OrDefault("EMBEDDING_DIMENSION", fileConfig.EmbeddingDimension)
+	cfg.OpenAIAPIKey = envOrDefault("OPENAI_API_KEY", fileConfig.OpenAIAPIKey)
+	cfg.OpenAIBaseURL = envOrDefault("OPENAI_BASE_URL", fileConfig.OpenAIBaseURL)
+	cfg.QueryInstructionPrefix = embeddingDefaults.queryInstructionText
+	cfg.CustomIgnorePatterns = parseCommaSeparated(os.Getenv("CUSTOM_IGNORE_PATTERNS"))
+	cfg.IncludeSubmodules = parseCommaSeparated(os.Getenv("CLAUDE_CONTEXT_INCLUDE_SUBMODULES"))
+}
+
+func populateMilvusDefaults(
+	cfg *Config,
+	fileConfig persistedConfig,
+	loadWaitTimeoutMS int,
+	idleTimeoutMS int,
+) {
+	cfg.MilvusAddress = envOrDefault("MILVUS_ADDRESS", fileConfig.MilvusAddress)
+	cfg.MilvusToken = envOrDefault("MILVUS_TOKEN", fileConfig.MilvusToken)
+	cfg.MilvusDatabase = envOrDefault("MILVUS_DATABASE", "")
+	cfg.MilvusMetadataCallTimeoutMS = resolveMilvusMetadataCallTimeoutMS(
+		fileConfig.MilvusMetadataCallTimeoutMS,
+	)
+	cfg.MilvusMutationCallTimeoutMS = resolveMilvusMutationCallTimeoutMS(
+		fileConfig.MilvusMutationCallTimeoutMS,
+	)
+	cfg.MilvusCollectionLoadTimeoutMS = resolveMilvusCollectionLoadTimeoutMS(
+		fileConfig.MilvusCollectionLoadTimeoutMS,
+	)
+	cfg.MilvusCollectionLoadWaitTimeoutMS = loadWaitTimeoutMS
+	cfg.MilvusCollectionIdleTimeoutMS = idleTimeoutMS
+	cfg.MilvusMaxConcurrentCollectionLoads = resolveMilvusMaxConcurrentCollectionLoads(
+		fileConfig.MilvusMaxConcurrentCollectionLoads,
+	)
+	cfg.CollectionNameOverride = envOrDefault(
+		"CODE_CHUNKS_COLLECTION_NAME_OVERRIDE",
+		fileConfig.CollectionNameOverride,
+	)
+	cfg.HybridMode = envBoolOrDefault("HYBRID_MODE", boolOrDefault(fileConfig.HybridMode, true))
+}
+
+func populateRuntimeDefaults(cfg *Config) {
+	cfg.BackgroundSyncEnabled = envBoolOrDefault("CLAUDE_CONTEXT_BACKGROUND_SYNC", true)
+	cfg.SyncIntervalMS = envIntOrDefault("CLAUDE_CONTEXT_SYNC_INTERVAL_MS", defaultSyncInterval)
+	cfg.TriggerWatcherEnabled = envBoolOrDefault("CLAUDE_CONTEXT_TRIGGER_WATCHER", true)
+	cfg.FileWatcherEnabled = envBoolOrDefault("CLAUDE_CONTEXT_FILE_WATCHER", true)
+	cfg.DebugListenerEnabled = envBoolOrDefault("CLAUDE_CONTEXT_DEBUG_LISTENER", true)
+	cfg.DebugListenAddr = envOrDefault("CLAUDE_CONTEXT_DEBUG_LISTEN_ADDR", defaultDebugListenAddr)
+	cfg.PerfCountersIntervalMS = envIntOrDefault(
+		"CLAUDE_CONTEXT_PERF_COUNTERS_INTERVAL_MS",
+		defaultPerfCountersIntervalMS,
+	)
+	cfg.MaxConcurrentIndexJobs = envIntOrDefault(
+		"CLAUDE_CONTEXT_MAX_CONCURRENT_INDEX_JOBS",
+		defaultMaxConcurrentIndexJobs,
+	)
+	cfg.MaxJobChunks = envInt32OrDefault("CLAUDE_CONTEXT_MAX_JOB_CHUNKS", defaultMaxJobChunks)
+	cfg.MaxConversationsPerIngest = envIntOrDefault(
+		"CLAUDE_CONTEXT_MAX_CONVERSATIONS_PER_INGEST",
+		defaultMaxConversationsPerIngest,
+	)
+	cfg.MaxJobBytes = envInt64OrDefault("CLAUDE_CONTEXT_MAX_JOB_BYTES", defaultMaxJobBytes)
+	cfg.ExpectedJobGrowthFactor = envFloat64OrDefault(
+		"CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FACTOR",
+		defaultExpectedJobGrowthFactor,
+	)
+	cfg.ExpectedJobGrowthFloor = envInt32OrDefault(
+		"CLAUDE_CONTEXT_EXPECTED_JOB_GROWTH_FLOOR",
+		defaultExpectedJobGrowthFloor,
+	)
+	cfg.ResumeIndexingOnBoot = envBoolOrDefault("CLAUDE_CONTEXT_RESUME_ON_BOOT", true)
+	cfg.LogRotationMaxBytes = envInt64OrDefault(
+		"CLAUDE_CONTEXT_LOG_ROTATION_MAX_BYTES",
+		defaultLogRotationMaxBytes,
+	)
+	cfg.LogRetentionBytes = envInt64OrDefault(
+		"CLAUDE_CONTEXT_LOG_RETENTION_BYTES",
+		defaultLogRetentionBytes,
+	)
+	cfg.LogCleanupEnabled = envBoolOrDefault("CLAUDE_CONTEXT_LOG_CLEANUP_ENABLED", true)
+	cfg.LogCleanupIntervalMS = envIntOrDefault(
+		"CLAUDE_CONTEXT_LOG_CLEANUP_INTERVAL_MS",
+		defaultLogCleanupIntervalMS,
+	)
 }
 
 func resolveXDGConfigHome(homeDir string) string {
