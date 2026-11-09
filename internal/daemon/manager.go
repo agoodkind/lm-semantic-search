@@ -644,29 +644,26 @@ func (manager *Manager) startIndexWithIntent(
 // success.
 func (manager *Manager) commitStartIndexLocked(
 	ctx context.Context,
-	canonicalPath string,
-	requestedPath string,
-	client model.ClientInfo,
-	indexConfig model.IndexConfig,
-	force bool,
+	request indexStartOperation,
 	presence collectionPresence,
-	budget model.AdmissionBudget,
-	policyIntent indexPolicyIntent,
-	sourceIntent worktreeSourceIntent,
-	recoveredPlan *resumePlan,
 ) (model.Job, model.Codebase, bool, string, error) {
 	var emptyJob model.Job
 	var emptyCodebase model.Codebase
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
-	decision, err := manager.decideStartIndexLocked(canonicalPath, indexConfig, force, presence)
+	decision, err := manager.decideStartIndexLocked(
+		request.canonicalPath,
+		request.indexConfig,
+		request.force,
+		presence,
+	)
 	if err != nil {
 		slog.ErrorContext(
 			ctx,
 			"resolve active job failed",
 			"canonical_path",
-			canonicalPath,
+			request.canonicalPath,
 			"err",
 			err,
 		)
@@ -676,7 +673,7 @@ func (manager *Manager) commitStartIndexLocked(
 
 	resolvedCodebase, effectivePolicy, err := manager.resolveIndexPolicyLocked(
 		decision.codebase,
-		policyIntent,
+		request.policyIntent,
 	)
 	if err != nil {
 		return emptyJob, emptyCodebase, false, "", err
@@ -685,7 +682,7 @@ func (manager *Manager) commitStartIndexLocked(
 	resolvedCodebase, sourceErr := manager.applyWorktreeSourceLocked(
 		ctx,
 		resolvedCodebase,
-		sourceIntent,
+		request.sourceIntent,
 	)
 	if sourceErr != nil {
 		return emptyJob, emptyCodebase, false, "", sourceErr
@@ -719,12 +716,12 @@ func (manager *Manager) commitStartIndexLocked(
 		manager.mergePendingCodeRequestLocked(
 			decision.codebase.ID,
 			pendingCodeRequest{
-				requestedPath: requestedPath,
-				canonicalPath: canonicalPath,
-				client:        client,
-				indexConfig:   indexConfig,
-				force:         force,
-				policyPatch:   policyIntent.Patch,
+				requestedPath: request.requestedPath,
+				canonicalPath: request.canonicalPath,
+				client:        request.client,
+				indexConfig:   request.indexConfig,
+				force:         request.force,
+				policyPatch:   request.policyIntent.Patch,
 			},
 		)
 
@@ -732,7 +729,7 @@ func (manager *Manager) commitStartIndexLocked(
 	}
 
 	overlapsCodebaseID := ""
-	if ancestor, found := manager.findStrictAncestor(canonicalPath); found {
+	if ancestor, found := manager.findStrictAncestor(request.canonicalPath); found {
 		overlapsCodebaseID = ancestor.ID
 	}
 
@@ -747,80 +744,7 @@ func (manager *Manager) commitStartIndexLocked(
 		return emptyJob, decision.codebase, false, overlapsCodebaseID, nil
 	}
 
-	codebase := decision.codebase
-	// A first build is pending until its queued job acquires a slot; updateJobRunning
-	// flips it to indexing. A rebuild of an already-indexed codebase stays indexing so
-	// it keeps reading as active work over the prior index, not as a fresh request.
-	codebase.Status = model.CodebaseStatusPending
-	if codebase.LastSuccessfulRun != nil {
-		codebase.Status = model.CodebaseStatusIndexing
-	}
-
-	codebase.EffectiveConfig = indexConfig
-	codebase.InodeTrackingDisabled = detectInodeTrackingDisabled(ctx, canonicalPath)
-	if manager.semantic != nil && manager.semantic.Available() {
-		codebase.CollectionName = manager.semantic.CollectionName(canonicalPath)
-	}
-
-	if info, ok := gitworktree.Resolve(canonicalPath); ok && info.Linked {
-		codebase.WorktreeCommonDir = info.CommonDir
-	}
-
-	codebase.UpdatedAt = clock.Now()
-
-	operation := jobOperationIndex
-	if decision.mode == startIndexModeIncremental {
-		operation = jobOperationStreamingReindex
-	}
-
-	job := newQueuedJob(
-		codebase.ID,
-		requestedPath,
-		canonicalPath,
-		client,
-		string(operation),
-		force,
-		indexConfig,
-		budget,
-		clock.Now(),
-	)
-	if recoveredPlan != nil {
-		queueSequence := recoveredPlan.queueSequence
-		if queueSequence == 0 {
-			queueSequence = manager.nextQueueSequenceLocked()
-		}
-
-		applyJobSchedulingPolicy(
-			&job,
-			recoveredPlan.effectiveSchedulingPolicy,
-			recoveredPlan.schedulingOverride,
-			queueSequence,
-		)
-	} else {
-		applyJobSchedulingPolicy(
-			&job,
-			effectivePolicy,
-			policyIntent.Patch,
-			manager.nextQueueSequenceLocked(),
-		)
-	}
-
-	codebase.ActiveJobID = job.ID
-	manager.codebases[codebase.ID] = codebase
-	if err := manager.saveLocked(); err != nil {
-		return emptyJob, emptyCodebase, false, "", err
-	}
-
-	if err := manager.appendJobLocked("start_index", job); err != nil {
-		return emptyJob, emptyCodebase, false, "", err
-	}
-
-	// The committed EffectiveConfig may carry new custom ignore patterns, so signal
-	// the observer to invalidate the cached matcher; the next live decision rebuilds
-	// it from the registry source of truth.
-	manager.observer.Invalidate(codebase.ID)
-
-	return job, codebase, false, overlapsCodebaseID, nil
+	return manager.createIndexJobLocked(ctx, request, decision, effectivePolicy, overlapsCodebaseID)
 }
 
 // SyncIndex registers a new sync job for an existing tracked codebase.
@@ -917,72 +841,16 @@ func (manager *Manager) syncIndexWithPolicy(
 	indexConfig := manager.enrichIndexConfig(codebase.EffectiveConfig)
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
 
-	activeJob, resolution, err := manager.activeJobLocked(codebase, indexConfig)
-	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"resolve active sync job failed",
-			"canonical_path",
-			canonicalPath,
-			"err",
-			err,
-		)
-		manager.mu.Unlock()
-		var emptyJob model.Job
-		var emptyCodebase model.Codebase
-
-		return emptyJob, emptyCodebase, false, err
+	request := pendingCodeRequest{
+		requestedPath: requestedPath,
+		canonicalPath: canonicalPath,
+		client:        client,
+		indexConfig:   indexConfig,
+		force:         false,
+		policyPatch:   policyPatch,
 	}
 
-	if resolution == activeJobDedup {
-		manager.mu.Unlock()
-		return activeJob, codebase, true, nil
-	}
-
-	if resolution == activeJobConflict {
-		// A non-matching-config sync arriving while a code job is active coalesces
-		// onto the depth-1 pending slot and returns the active job as deduplicated, so
-		// the caller treats it as success. The slot drains on the active job's
-		// terminal transition.
-		manager.mergePendingCodeRequestLocked(
-			codebase.ID,
-			pendingCodeRequest{
-				requestedPath: requestedPath,
-				canonicalPath: canonicalPath,
-				client:        client,
-				indexConfig:   indexConfig,
-				force:         false,
-				policyPatch:   policyPatch,
-			},
-		)
-		manager.mu.Unlock()
-
-		return activeJob, codebase, true, nil
-	}
-
-	job, err := manager.enqueueCodeSyncJobLocked(
-		codebase,
-		pendingCodeRequest{
-			requestedPath: requestedPath,
-			canonicalPath: canonicalPath,
-			client:        client,
-			indexConfig:   indexConfig,
-			force:         false,
-			policyPatch:   policyPatch,
-		},
-	)
-	if err != nil {
-		manager.mu.Unlock()
-		var emptyJob model.Job
-		var emptyCodebase model.Codebase
-
-		return emptyJob, emptyCodebase, false, err
-	}
-
-	updatedCodebase := manager.codebases[codebase.ID]
-	manager.mu.Unlock()
-
-	return job, updatedCodebase, false, nil
+	return manager.enqueueResolvedSyncLocked(ctx, codebase, request)
 }
 
 // Codebase lifecycle hook plumbing lives in manager_lifecycle.go.
@@ -1133,3 +1001,141 @@ func (manager *Manager) dedupAgainstActiveJob(
 // manager_config.go. Boundary guards (StateRoot, directory, inode-stability)
 // live in manager_guards.go. Active-job snapshot and cancellation helpers live
 // in manager_active_job.go.
+
+func (manager *Manager) createIndexJobLocked(
+	ctx context.Context,
+	request indexStartOperation,
+	decision startIndexDecision,
+	effectivePolicy model.SchedulingPolicy,
+	overlapsCodebaseID string,
+) (model.Job, model.Codebase, bool, string, error) {
+	var emptyJob model.Job
+	var emptyCodebase model.Codebase
+	codebase := decision.codebase
+	// A first build is pending until its queued job acquires a slot; updateJobRunning
+	// flips it to indexing. A rebuild of an already-indexed codebase stays indexing so
+	// it keeps reading as active work over the prior index, not as a fresh request.
+	codebase.Status = model.CodebaseStatusPending
+	if codebase.LastSuccessfulRun != nil {
+		codebase.Status = model.CodebaseStatusIndexing
+	}
+
+	codebase.EffectiveConfig = request.indexConfig
+	codebase.InodeTrackingDisabled = detectInodeTrackingDisabled(ctx, request.canonicalPath)
+	if manager.semantic != nil && manager.semantic.Available() {
+		codebase.CollectionName = manager.semantic.CollectionName(request.canonicalPath)
+	}
+
+	if info, ok := gitworktree.Resolve(request.canonicalPath); ok && info.Linked {
+		codebase.WorktreeCommonDir = info.CommonDir
+	}
+
+	codebase.UpdatedAt = clock.Now()
+
+	operation := jobOperationIndex
+	if decision.mode == startIndexModeIncremental {
+		operation = jobOperationStreamingReindex
+	}
+
+	job := newQueuedJob(
+		codebase.ID,
+		request.requestedPath,
+		request.canonicalPath,
+		request.client,
+		string(operation),
+		request.force,
+		request.indexConfig,
+		request.budget,
+		clock.Now(),
+	)
+	if request.recoveredPlan != nil {
+		queueSequence := request.recoveredPlan.queueSequence
+		if queueSequence == 0 {
+			queueSequence = manager.nextQueueSequenceLocked()
+		}
+
+		applyJobSchedulingPolicy(
+			&job,
+			request.recoveredPlan.effectiveSchedulingPolicy,
+			request.recoveredPlan.schedulingOverride,
+			queueSequence,
+		)
+	} else {
+		applyJobSchedulingPolicy(
+			&job,
+			effectivePolicy,
+			request.policyIntent.Patch,
+			manager.nextQueueSequenceLocked(),
+		)
+	}
+
+	codebase.ActiveJobID = job.ID
+	manager.codebases[codebase.ID] = codebase
+	if err := manager.saveLocked(); err != nil {
+		return emptyJob, emptyCodebase, false, "", err
+	}
+
+	if err := manager.appendJobLocked("start_index", job); err != nil {
+		return emptyJob, emptyCodebase, false, "", err
+	}
+
+	// The committed EffectiveConfig may carry new custom ignore patterns, so signal
+	// the observer to invalidate the cached matcher; the next live decision rebuilds
+	// it from the registry source of truth.
+	manager.observer.Invalidate(codebase.ID)
+
+	return job, codebase, false, overlapsCodebaseID, nil
+}
+
+func (manager *Manager) enqueueResolvedSyncLocked(
+	ctx context.Context,
+	codebase model.Codebase,
+	request pendingCodeRequest,
+) (model.Job, model.Codebase, bool, error) {
+	activeJob, resolution, err := manager.activeJobLocked(codebase, request.indexConfig)
+	if err != nil {
+		slog.ErrorContext(
+			ctx,
+			"resolve active sync job failed",
+			"canonical_path",
+			request.canonicalPath,
+			"err",
+			err,
+		)
+		manager.mu.Unlock()
+		var emptyJob model.Job
+		var emptyCodebase model.Codebase
+
+		return emptyJob, emptyCodebase, false, err
+	}
+
+	if resolution == activeJobDedup {
+		manager.mu.Unlock()
+		return activeJob, codebase, true, nil
+	}
+
+	if resolution == activeJobConflict {
+		// A non-matching-config sync arriving while a code job is active coalesces
+		// onto the depth-1 pending slot and returns the active job as deduplicated, so
+		// the caller treats it as success. The slot drains on the active job's
+		// terminal transition.
+		manager.mergePendingCodeRequestLocked(codebase.ID, request)
+		manager.mu.Unlock()
+
+		return activeJob, codebase, true, nil
+	}
+
+	job, err := manager.enqueueCodeSyncJobLocked(codebase, request)
+	if err != nil {
+		manager.mu.Unlock()
+		var emptyJob model.Job
+		var emptyCodebase model.Codebase
+
+		return emptyJob, emptyCodebase, false, err
+	}
+
+	updatedCodebase := manager.codebases[codebase.ID]
+	manager.mu.Unlock()
+
+	return job, updatedCodebase, false, nil
+}

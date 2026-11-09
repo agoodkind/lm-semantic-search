@@ -317,16 +317,8 @@ func (manager *Manager) commitIndexStart(
 	evidence := manager.probeCollectionEvidence(ctx, operation.canonicalPath, "StartIndex")
 	job, codebase, deduped, overlapsCodebaseID, err := manager.commitStartIndexLocked(
 		ctx,
-		operation.canonicalPath,
-		operation.requestedPath,
-		operation.client,
-		operation.indexConfig,
-		operation.force,
+		operation,
 		evidence.presence,
-		operation.budget,
-		operation.policyIntent,
-		operation.sourceIntent,
-		operation.recoveredPlan,
 	)
 	if err != nil || deduped {
 		return job, codebase, deduped, overlapsCodebaseID, err
