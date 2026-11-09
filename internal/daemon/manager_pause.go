@@ -230,6 +230,14 @@ func (manager *Manager) checkpointJob(ctx context.Context) error {
 		return nil
 	}
 
+	return manager.resumePausedLease(ctx, value, claim)
+}
+
+func (manager *Manager) resumePausedLease(
+	ctx context.Context,
+	value jobSchedulerLeaseContext,
+	claim *jobscheduler.PauseClaim,
+) error {
 	if !claim.Yield() {
 		failure := fmt.Errorf("yield scheduler pause claim")
 		value.lease.Release()

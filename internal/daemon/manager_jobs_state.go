@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"runtime"
+	"time"
 
 	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/clock"
@@ -45,6 +45,53 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 	}
 
 	now := clock.Now()
+	if err := manager.prepareRunningCodebase(currentJob, now); err != nil {
+		return err
+	}
+
+	_, transitioned, transitionErr := manager.serializeJobTransitionLocked(
+		job.ID,
+		"job_running",
+		func(current *model.Job) bool {
+			if current.State != model.JobStateQueued {
+				return false
+			}
+
+			current.State = model.JobStateRunning
+			current.SchedulingReason = model.SchedulingReasonUnspecified
+			current.UpdatedAt = now
+			current.Progress.Phase = "Preparing and scanning files..."
+			current.Progress.ModelDownload = nil
+			current.Progress.LastEventAt = now
+			current.Progress.HeartbeatAt = now
+			current.Progress.OverallPercent = 0
+
+			return true
+		},
+	)
+	if transitionErr != nil {
+		manager.mu.Lock()
+		manager.jobs[currentJob.ID] = currentJob
+		manager.mu.Unlock()
+
+		wrapped := errors.Join(
+			errRetryJobStart,
+			fmt.Errorf("append running job event: %w", transitionErr),
+		)
+		slog.Error("append running job event failed", "job_id", currentJob.ID, "err", wrapped)
+
+		return wrapped
+	}
+
+	if !transitioned {
+		return fmt.Errorf("start job: job state changed")
+	}
+
+	return nil
+}
+
+// prepareRunningCodebase requires manager.mu and releases it before returning.
+func (manager *Manager) prepareRunningCodebase(currentJob model.Job, now time.Time) error {
 	// A first build was pending while its job sat queued; now that the job is
 	// running, the codebase is actively indexing. Persist this transition before
 	// journaling the running job so a crash leaves boot recovery a resumable
@@ -119,41 +166,6 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 	}
 
 	manager.mu.Unlock()
-
-	_, transitioned, transitionErr := manager.serializeJobTransitionLocked(
-		job.ID,
-		"job_running",
-		func(current *model.Job) bool {
-			if current.State != model.JobStateQueued {
-				return false
-			}
-
-			current.State = model.JobStateRunning
-			current.SchedulingReason = model.SchedulingReasonUnspecified
-			current.UpdatedAt = now
-			current.Progress.Phase = "Preparing and scanning files..."
-			current.Progress.ModelDownload = nil
-			current.Progress.LastEventAt = now
-			current.Progress.HeartbeatAt = now
-			current.Progress.OverallPercent = 0
-
-			return true
-		},
-	)
-	if transitionErr != nil {
-		manager.mu.Lock()
-		manager.jobs[currentJob.ID] = currentJob
-		manager.mu.Unlock()
-
-		return errors.Join(
-			errRetryJobStart,
-			fmt.Errorf("append running job event: %w", transitionErr),
-		)
-	}
-
-	if !transitioned {
-		return fmt.Errorf("start job: job state changed")
-	}
 
 	return nil
 }
@@ -429,84 +441,6 @@ func (manager *Manager) setJobRunMode(jobID string, runMode string) {
 	manager.jobs[jobID] = job
 }
 
-// routeToBootstrap records the machine-readable reason before a job enters the
-// expensive bootstrap path.
-func (manager *Manager) routeToBootstrap(
-	ctx context.Context,
-	jobID string,
-	reason bootstrapReason,
-) {
-	caller := bootstrapRouteCaller()
-	if !reason.known() {
-		slog.WarnContext(
-			ctx,
-			"unknown bootstrap reason",
-			"reason",
-			reason,
-			"caller",
-			caller,
-			"job_id",
-			jobID,
-		)
-	}
-
-	manager.transitionMutex.Lock()
-	defer manager.transitionMutex.Unlock()
-	manager.mu.Lock()
-	job, found := manager.jobs[jobID]
-	if !found {
-		manager.mu.Unlock()
-		return
-	}
-
-	job.Progress.BootstrapReason = string(reason)
-	codebaseID := job.CodebaseID
-	manager.jobs[jobID] = job
-	manager.mu.Unlock()
-
-	slog.InfoContext(
-		ctx,
-		"bootstrap.route",
-		"reason",
-		reason,
-		"caller",
-		caller,
-		"codebase_id",
-		codebaseID,
-		"job_id",
-		jobID,
-	)
-}
-
-func (reason bootstrapReason) known() bool {
-	switch reason {
-	case bootstrapReasonFirstIndex,
-		bootstrapReasonForcedReindex,
-		bootstrapReasonStagingResume,
-		bootstrapReasonEmptyDiffCollectionMissing,
-		bootstrapReasonEmptyDiffCollectionEmpty,
-		bootstrapReasonDeltaCollectionMissing,
-		bootstrapReasonDeltaCodebaseMissing:
-		return true
-	default:
-		return false
-	}
-}
-
-func bootstrapRouteCaller() string {
-	pc, _, _, ok := runtime.Caller(2)
-	if !ok {
-		return ""
-	}
-
-	function := runtime.FuncForPC(pc)
-	if function == nil {
-		return ""
-	}
-
-	return function.Name()
-}
-
 func (manager *Manager) updateJobCompleted(
 	ctx context.Context,
 	jobID string,
@@ -579,26 +513,7 @@ func (manager *Manager) updateJobCompletedWithPolicy(
 	}
 
 	delete(manager.failedBuildRetries, codebase.ID)
-	codebase.Status = model.CodebaseStatusIndexed
-	// Clear ActiveJobID only when it still points at this job, so a raced or
-	// duplicate terminal transition never clobbers a drained successor.
-	if codebase.ActiveJobID == jobID {
-		codebase.ActiveJobID = ""
-	}
-
-	codebase.Quarantine = nil
-	codebase.LastSuccessfulRun = &model.IndexRunSummary{
-		IndexedFiles: result.IndexedFiles,
-		TotalChunks:  result.TotalChunks,
-		TotalBytes:   result.TotalBytes,
-		Status:       "completed",
-		CompletedAt:  now,
-		SkippedFiles: result.SkippedFiles,
-	}
-	codebase.LiveFileTotal = result.IndexedFiles
-	codebase.LiveChunkTotal = result.TotalChunks
-	codebase.MerkleSnapshotPath = manager.merklePath(codebase.ID)
-	codebase.UpdatedAt = now
+	codebase = manager.completedCodebase(codebase, jobID, result, now)
 	manager.codebases[codebase.ID] = codebase
 	manager.writeCompletedArtifacts(ctx, codebase, result, jobID)
 	if err := manager.saveLocked(); err != nil {
@@ -636,6 +551,36 @@ func (manager *Manager) updateJobCompletedWithPolicy(
 		drained:       drained,
 		notifyStopped: false,
 	}
+}
+
+func (manager *Manager) completedCodebase(
+	codebase model.Codebase,
+	jobID string,
+	result indexer.Result,
+	now time.Time,
+) model.Codebase {
+	codebase.Status = model.CodebaseStatusIndexed
+	// Clear ActiveJobID only when it still points at this job, so a raced or
+	// duplicate terminal transition never clobbers a drained successor.
+	if codebase.ActiveJobID == jobID {
+		codebase.ActiveJobID = ""
+	}
+
+	codebase.Quarantine = nil
+	codebase.LastSuccessfulRun = &model.IndexRunSummary{
+		IndexedFiles: result.IndexedFiles,
+		TotalChunks:  result.TotalChunks,
+		TotalBytes:   result.TotalBytes,
+		Status:       "completed",
+		CompletedAt:  now,
+		SkippedFiles: result.SkippedFiles,
+	}
+	codebase.LiveFileTotal = result.IndexedFiles
+	codebase.LiveChunkTotal = result.TotalChunks
+	codebase.MerkleSnapshotPath = manager.merklePath(codebase.ID)
+	codebase.UpdatedAt = now
+
+	return codebase
 }
 
 // writeCompletedArtifacts persists the chunk cache and Merkle snapshot for a
