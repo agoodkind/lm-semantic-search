@@ -522,44 +522,14 @@ func (runner *Runner) Index(
 		)
 	}
 
-	accumulator := &indexAccumulator{
-		totalChunks:       0,
-		totalBytes:        0,
-		indexedCount:      0,
-		storedChunks:      make([]model.StoredChunk, 0),
-		fileHashes:        make(map[string]string, len(discoveryResult.Files)),
-		skippedFiles:      []string{},
-		skippedOversize:   0,
-		skippedUnreadable: 0,
-	}
+	accumulator := newIndexAccumulator(len(discoveryResult.Files))
 	for index, path := range discoveryResult.Files {
-		if err := ctx.Err(); err != nil {
-			slog.ErrorContext(ctx, "indexing cancelled before file read", "path", path, "err", err)
-			return Result{}, fmt.Errorf("indexing cancelled before file read %s: %w", path, err)
-		}
-
-		relativePath, err := filepath.Rel(root, path)
-		if err != nil {
-			slog.ErrorContext(
-				ctx,
-				"compute relative chunk path failed",
-				"root",
-				root,
-				"path",
-				path,
-				"err",
-				err,
-			)
-
-			return Result{}, fmt.Errorf("compute relative chunk path for %s: %w", path, err)
-		}
-
-		if err := runner.ingestFile(
+		if err := runner.ingestDiscoveredFile(
 			ctx,
 			resolver,
 			codebaseID,
 			root,
-			relativePath,
+			path,
 			indexConfig.SplitterType,
 			accumulator,
 		); err != nil {
@@ -756,4 +726,59 @@ func safeInt32(value int) int32 {
 	}
 
 	return int32(value)
+}
+
+func newIndexAccumulator(fileCount int) *indexAccumulator {
+	return &indexAccumulator{
+		totalChunks:       0,
+		totalBytes:        0,
+		indexedCount:      0,
+		storedChunks:      make([]model.StoredChunk, 0),
+		fileHashes:        make(map[string]string, fileCount),
+		skippedFiles:      []string{},
+		skippedOversize:   0,
+		skippedUnreadable: 0,
+	}
+}
+
+func (runner *Runner) ingestDiscoveredFile(
+	ctx context.Context,
+	resolver *indexability.Resolver,
+	codebaseID string,
+	root string,
+	path string,
+	splitterType string,
+	accumulator *indexAccumulator,
+) error {
+	if err := ctx.Err(); err != nil {
+		slog.ErrorContext(ctx, "indexing cancelled before file read", "path", path, "err", err)
+
+		return fmt.Errorf("indexing cancelled before file read %s: %w", path, err)
+	}
+
+	relativePath, err := filepath.Rel(root, path)
+	if err != nil {
+		slog.ErrorContext(
+			ctx,
+			"compute relative chunk path failed",
+			"root",
+			root,
+			"path",
+			path,
+			"err",
+			err,
+		)
+
+		return fmt.Errorf("compute relative chunk path for %s: %w", path, err)
+	}
+
+	return runner.ingestFile(
+		ctx,
+		resolver,
+		codebaseID,
+		root,
+		relativePath,
+		splitterType,
+		accumulator,
+	)
 }
