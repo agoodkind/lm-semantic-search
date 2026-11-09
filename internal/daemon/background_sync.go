@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -210,29 +209,6 @@ func (syncer *BackgroundSync) runPeriodicMaintenance(ctx context.Context) {
 	syncer.runPeriodicLoop(ctx, func() { syncer.runPeriodicMaintenanceOnce(ctx) })
 }
 
-func (syncer *BackgroundSync) runPeriodicLoop(ctx context.Context, action func()) {
-	initialTimer := time.NewTimer(defaultInitialSyncDelay)
-	defer initialTimer.Stop()
-	interval := time.Duration(syncer.cfg.SyncIntervalMS) * time.Millisecond
-	if syncer.cfg.SyncIntervalMS < minimumSyncIntervalMS {
-		interval = time.Duration(minimumSyncIntervalMS) * time.Millisecond
-	}
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-initialTimer.C:
-			action()
-		case <-ticker.C:
-			action()
-		}
-	}
-}
-
 // ensureMmapEnabled drives
 // collections once per periodic tick. It is a no-op when Milvus is unavailable
 // and near-free after the first successful sweep (already-migrated collections
@@ -357,103 +333,7 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 
 	codebases := syncer.manager.ListIndexes(ctx)
 	for _, codebase := range codebases {
-		if codebase.Kind == model.CodebaseKindDocument {
-			continue
-		}
-
-		if codebase.Status == model.CodebaseStatusQuarantined {
-			syncer.handleQuarantinedCodebase(ctx, codebase)
-			continue
-		}
-
-		if _, err := os.Stat(codebase.CanonicalPath); errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-
-		hasActiveJob := syncer.hasActiveJob(codebase)
-		if shouldSkipForActiveFirstBuildStaging(codebase, hasActiveJob) {
-			continue
-		}
-
-		// A discovered worktree whose deferred build never ran (for example the
-		// daemon restarted before the short timer fired) is built here as the
-		// backstop. StartIndex deduplicates, so this never double-starts a build
-		// that the timer already kicked off.
-		if codebase.Status == model.CodebaseStatusDiscovered {
-			discoverCtx := correlation.WithContext(
-				ctx,
-				correlation.FromContext(ctx).Child().WithIdentityAttributes(
-					correlation.IdentityAttribute{
-						Key:   "codebase_id",
-						Value: codebase.ID,
-					},
-				),
-			)
-			syncer.manager.startDeferredBuild(discoverCtx, codebase.CanonicalPath)
-			continue
-		}
-
-		if codebase.Status == model.CodebaseStatusFailed {
-			retryCtx := correlation.WithContext(
-				ctx,
-				correlation.FromContext(ctx).Child().WithIdentityAttributes(
-					correlation.IdentityAttribute{
-						Key:   "codebase_id",
-						Value: codebase.ID,
-					},
-				),
-			)
-			syncer.manager.retryFailedBuild(retryCtx, codebase)
-			continue
-		}
-
-		if codebase.Status != model.CodebaseStatusIndexed {
-			continue
-		}
-
-		syntheticJobID := fmt.Sprintf("sync-%s-%d", codebase.ID, clock.Now().Unix())
-		iterCtx := correlation.WithContext(
-			ctx,
-			correlation.FromContext(ctx).Child().WithIdentityAttributes(
-				correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID},
-				correlation.IdentityAttribute{Key: "job_id", Value: syntheticJobID},
-			),
-		)
-
-		// Keep this codebase's ignore rules fresh independent of the file watcher.
-		// CheckSources stats the codebase's ignore sources and invalidates the
-		// resolver when any changed, so an edit to a non-indexed source or any edit
-		// made while the watcher is disabled is caught on this sweep. It runs before
-		// and independent of the change detection below.
-		syncer.manager.observer.CheckSources(iterCtx, codebase.ID, codebase.CanonicalPath)
-
-		changed, err := syncer.codebaseChanged(iterCtx, codebase)
-		if err != nil {
-			slog.ErrorContext(
-				iterCtx,
-				"check sync state failed",
-				"path",
-				codebase.CanonicalPath,
-				"err",
-				err,
-			)
-			continue
-		}
-
-		metrics.SweepRan(changed)
-		if !changed {
-			continue
-		}
-
-		// Skip this codebase while its watcher converge waits or runs. After the
-		// converge ends, a later sweep starts a sync if the codebase still differs
-		// from its snapshot.
-		if syncer.convergeAdmitted(codebase.ID) {
-			metrics.SyncSkippedInflight()
-			continue
-		}
-
-		syncer.startSweepSync(iterCtx, codebase)
+		syncer.syncCodebase(ctx, codebase)
 	}
 }
 
@@ -557,26 +437,7 @@ func (syncer *BackgroundSync) handleQuarantinedCodebase(
 		return
 	}
 
-	job, codebase, deduplicated, err := syncer.manager.SyncIndex(
-		ctx,
-		codebase.CanonicalPath,
-		model.ClientInfo{Name: "daemon-quarantine-release", PID: 0},
-	)
-	_ = job
-	_ = codebase
-	_ = deduplicated
-	if err != nil && !syncConflictError(err) {
-		slog.ErrorContext(
-			ctx,
-			"start destructive sync after quarantine confirmation failed",
-			"codebase_id",
-			codebase.ID,
-			"path",
-			codebase.CanonicalPath,
-			"err",
-			err,
-		)
-	}
+	syncer.startConfirmedQuarantineSync(ctx, codebase)
 }
 
 // convergeViaWatcher registers the debounced path set before scheduler
@@ -767,44 +628,6 @@ func (syncer *BackgroundSync) executeWatcherConverge(
 	}
 }
 
-func (syncer *BackgroundSync) convergeProgressReporter(jobID string) func(ConvergeOutcome) {
-	lastReportedPaths := int32(-1)
-
-	return func(progress ConvergeOutcome) {
-		if progress.PathsProcessed == lastReportedPaths {
-			syncer.manager.updateDetachedJobHeartbeat(jobID)
-			return
-		}
-
-		percent := 100.0
-		if progress.PathsGiven > 0 {
-			percent = float64(progress.PathsProcessed) / float64(progress.PathsGiven) * 100
-		}
-
-		syncer.manager.updateDetachedJobProgress(
-			jobID,
-			indexer.Progress{
-				Phase:                  "Converging changed paths...",
-				OverallPercent:         percent,
-				FilesTotal:             progress.PathsGiven,
-				FilesProcessed:         progress.PathsProcessed,
-				FilesEmbedded:          0,
-				FilesSkippedOversize:   0,
-				FilesSkippedUnreadable: 0,
-				FilesPending:           0,
-				ChunksProcessed:        0,
-				ChunksReused:           0,
-				ChunksEmbedded:         0,
-				ChunksGenerated:        0,
-				ChunksDropped:          0,
-				ReuseVectorsLoaded:     0,
-			},
-			"path",
-		)
-		lastReportedPaths = progress.PathsProcessed
-	}
-}
-
 type convergeJobRegistration struct {
 	job     model.Job
 	release func()
@@ -819,19 +642,7 @@ func (syncer *BackgroundSync) registerConvergeJob(
 	defer syncer.manager.policyMutationMutex.Unlock()
 
 	now := clock.Now()
-	job := newQueuedJob(
-		codebase.ID,
-		codebase.CanonicalPath,
-		codebase.CanonicalPath,
-		model.ClientInfo{Name: "daemon-watcher", PID: 0},
-		"converge",
-		false,
-		codebase.EffectiveConfig,
-		emptyAdmissionBudget,
-		now,
-	)
-	job.Progress.FilesTotal = safeInt32(len(relativePaths))
-	job.Progress.Unit = "path"
+	job := newConvergeJob(codebase, relativePaths, now)
 
 	jobCorr := correlation.FromContext(ctx).WithIdentityAttributes(correlation.IdentityAttribute{
 		Key:   "job_id",
@@ -1015,194 +826,6 @@ func (manager *Manager) startDetachedJob(jobID string) error {
 	return nil
 }
 
-func (syncer *BackgroundSync) watcherCodebase(codebaseID string) (model.Codebase, bool) {
-	syncer.manager.mu.Lock()
-	defer syncer.manager.mu.Unlock()
-	codebase, found := syncer.manager.codebases[codebaseID]
-
-	return codebase, found
-}
-
-func (syncer *BackgroundSync) hasActiveJob(codebase model.Codebase) bool {
-	syncer.manager.mu.Lock()
-	defer syncer.manager.mu.Unlock()
-	current, found := syncer.manager.codebases[codebase.ID]
-	if !found {
-		return false
-	}
-
-	return syncer.manager.activeJobSnapshotLocked(current) != nil
-}
-
-func (syncer *BackgroundSync) deferWatcherPaths(codebaseID string, relativePaths []string) {
-	if len(relativePaths) == 0 {
-		return
-	}
-
-	syncer.deferredWatcherMu.Lock()
-	defer syncer.deferredWatcherMu.Unlock()
-	buffered, found := syncer.deferredWatcherPaths[codebaseID]
-	if !found {
-		buffered = make(map[string]struct{}, len(relativePaths))
-		syncer.deferredWatcherPaths[codebaseID] = buffered
-	}
-
-	for _, relativePath := range relativePaths {
-		buffered[relativePath] = struct{}{}
-	}
-}
-
-// deferredPathCounts reports how many changed paths each codebase has buffered
-// while its first build runs. That work is real and waiting: it converges the
-// moment the build promotes, so a status read that omitted it would report a
-// quiet system while edits piled up. The returned map is a copy.
-func (syncer *BackgroundSync) deferredPathCounts() map[string]int {
-	syncer.deferredWatcherMu.Lock()
-	defer syncer.deferredWatcherMu.Unlock()
-
-	counts := make(map[string]int, len(syncer.deferredWatcherPaths))
-	for codebaseID, paths := range syncer.deferredWatcherPaths {
-		counts[codebaseID] = len(paths)
-	}
-
-	return counts
-}
-
-func (syncer *BackgroundSync) takeDeferredWatcherPaths(codebaseID string) []string {
-	syncer.deferredWatcherMu.Lock()
-	defer syncer.deferredWatcherMu.Unlock()
-	buffered := syncer.deferredWatcherPaths[codebaseID]
-	if len(buffered) == 0 {
-		return nil
-	}
-
-	relativePaths := make([]string, 0, len(buffered))
-	for relativePath := range buffered {
-		relativePaths = append(relativePaths, relativePath)
-	}
-
-	sort.Strings(relativePaths)
-	delete(syncer.deferredWatcherPaths, codebaseID)
-
-	return relativePaths
-}
-
-// beginConverge claims the per-codebase converge slot, returning false when a
-// converge for that codebase is already running.
-func (syncer *BackgroundSync) beginConverge(codebaseID string) bool {
-	syncer.convergeMu.Lock()
-	defer syncer.convergeMu.Unlock()
-	if _, admitted := syncer.converging[codebaseID]; admitted {
-		return false
-	}
-
-	// A zero start time means admitted but not yet running: the converge still
-	// has to win an index slot and the shared advisory lock. markConvergeRunning
-	// stamps the real time once both waits are behind it, so a status read never
-	// reports a queued converge as running work whose age keeps growing.
-	syncer.converging[codebaseID] = time.Time{}
-
-	return true
-}
-
-// markConvergeRunning records that an admitted converge has taken its index slot
-// and the shared advisory lock, so it is doing work rather than waiting for
-// capacity.
-func (syncer *BackgroundSync) markConvergeRunning(codebaseID string) {
-	syncer.convergeMu.Lock()
-	defer syncer.convergeMu.Unlock()
-	if _, admitted := syncer.converging[codebaseID]; !admitted {
-		return
-	}
-
-	syncer.converging[codebaseID] = clock.Now()
-}
-
-// endConverge releases the per-codebase converge slot.
-func (syncer *BackgroundSync) endConverge(codebaseID string) {
-	syncer.convergeMu.Lock()
-	defer syncer.convergeMu.Unlock()
-	delete(syncer.converging, codebaseID)
-}
-
-// requeuePaths re-enqueues a deferred converge's paths so the change is picked
-// up on the next debounce rather than dropped.
-func (syncer *BackgroundSync) requeuePaths(codebaseID string, relativePaths []string) {
-	for _, relativePath := range relativePaths {
-		syncer.queue.Enqueue(codebaseID, relativePath)
-	}
-}
-
-func (syncer *BackgroundSync) codebaseChanged(
-	ctx context.Context,
-	codebase model.Codebase,
-) (bool, error) {
-	if codebase.Kind == model.CodebaseKindDocument {
-		return false, nil
-	}
-
-	// The checkpoint read goes through the manager's one live-checkpoint reader,
-	// so an empty codebase that never wrote a file is not reported as damaged on
-	// every sweep. Its absent checkpoint reads as the empty snapshot it would
-	// have written, which matches the empty capture below, so the sweep also
-	// stops enqueuing a sync for a codebase where nothing changed. A codebase
-	// that did index files and lost its checkpoint still reports the loss, and
-	// its empty snapshot differs from a non-empty capture, so the resync it
-	// needs still starts.
-	existingSnapshot := syncer.manager.loadLiveCheckpoint(
-		ctx,
-		codebase,
-		codebase.EffectiveConfig.IgnoreDigest,
-	).snapshot
-
-	currentSnapshot, err := merkle.Capture(
-		ctx,
-		syncer.manager.indexability,
-		codebase.ID,
-		codebase.CanonicalPath,
-		codebase.EffectiveConfig,
-	)
-	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"capture Merkle snapshot failed",
-			"path",
-			codebase.CanonicalPath,
-			"err",
-			err,
-		)
-
-		return false, fmt.Errorf("capture Merkle snapshot for %s: %w", codebase.CanonicalPath, err)
-	}
-
-	if !merkle.Equal(existingSnapshot, currentSnapshot) {
-		return true, nil
-	}
-
-	presence := syncer.manager.probeCollectionEvidence(
-		ctx,
-		codebase.CanonicalPath,
-		"backgroundSync",
-	).presence
-	currentSnapshotHash := snapshotHashForGraph(
-		currentSnapshot,
-		codebase.EffectiveConfig.IgnoreDigest,
-	)
-
-	return syncer.manager.shouldReconcileGraph(codebase.ID, currentSnapshotHash, presence), nil
-}
-
-func syncConflictError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	message := err.Error()
-
-	return strings.Contains(message, "conflicting active job") ||
-		strings.Contains(message, "codebase not tracked")
-}
-
 // Watcher activity states describe file-change work before job registration and
 // paths waiting behind a running converge.
 const (
@@ -1296,4 +919,134 @@ func (syncer *BackgroundSync) WatcherActivity() []WatcherActivity {
 	)
 
 	return activity
+}
+
+func (syncer *BackgroundSync) syncCodebase(ctx context.Context, codebase model.Codebase) {
+	if codebase.Kind == model.CodebaseKindDocument {
+		return
+	}
+
+	if codebase.Status == model.CodebaseStatusQuarantined {
+		syncer.handleQuarantinedCodebase(ctx, codebase)
+		return
+	}
+
+	if _, err := os.Stat(codebase.CanonicalPath); errors.Is(err, os.ErrNotExist) {
+		return
+	}
+
+	hasActiveJob := syncer.hasActiveJob(codebase)
+	if shouldSkipForActiveFirstBuildStaging(codebase, hasActiveJob) {
+		return
+	}
+
+	// A discovered worktree whose deferred build never ran (for example the
+	// daemon restarted before the short timer fired) is built here as the
+	// backstop. StartIndex deduplicates, so this never double-starts a build
+	// that the timer already kicked off.
+	if codebase.Status == model.CodebaseStatusDiscovered {
+		discoverCtx := correlation.WithContext(
+			ctx,
+			correlation.FromContext(ctx).Child().WithIdentityAttributes(
+				correlation.IdentityAttribute{
+					Key:   "codebase_id",
+					Value: codebase.ID,
+				},
+			),
+		)
+		syncer.manager.startDeferredBuild(discoverCtx, codebase.CanonicalPath)
+
+		return
+	}
+
+	if codebase.Status == model.CodebaseStatusFailed {
+		retryCtx := correlation.WithContext(
+			ctx,
+			correlation.FromContext(ctx).Child().WithIdentityAttributes(
+				correlation.IdentityAttribute{
+					Key:   "codebase_id",
+					Value: codebase.ID,
+				},
+			),
+		)
+		syncer.manager.retryFailedBuild(retryCtx, codebase)
+
+		return
+	}
+
+	if codebase.Status != model.CodebaseStatusIndexed {
+		return
+	}
+
+	syntheticJobID := fmt.Sprintf("sync-%s-%d", codebase.ID, clock.Now().Unix())
+	iterCtx := correlation.WithContext(
+		ctx,
+		correlation.FromContext(ctx).Child().WithIdentityAttributes(
+			correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID},
+			correlation.IdentityAttribute{Key: "job_id", Value: syntheticJobID},
+		),
+	)
+
+	// Keep this codebase's ignore rules fresh independent of the file watcher.
+	// CheckSources stats the codebase's ignore sources and invalidates the
+	// resolver when any changed, so an edit to a non-indexed source or any edit
+	// made while the watcher is disabled is caught on this sweep. It runs before
+	// and independent of the change detection below.
+	syncer.manager.observer.CheckSources(iterCtx, codebase.ID, codebase.CanonicalPath)
+
+	changed, err := syncer.codebaseChanged(iterCtx, codebase)
+	if err != nil {
+		slog.ErrorContext(
+			iterCtx,
+			"check sync state failed",
+			"path",
+			codebase.CanonicalPath,
+			"err",
+			err,
+		)
+
+		return
+	}
+
+	metrics.SweepRan(changed)
+	if !changed {
+		return
+	}
+
+	// Skip this codebase while its watcher converge waits or runs. After the
+	// converge ends, a later sweep starts a sync if the codebase still differs
+	// from its snapshot.
+	if syncer.convergeAdmitted(codebase.ID) {
+		metrics.SyncSkippedInflight()
+
+		return
+	}
+
+	syncer.startSweepSync(iterCtx, codebase)
+}
+
+func (syncer *BackgroundSync) startConfirmedQuarantineSync(
+	ctx context.Context,
+	codebase model.Codebase,
+) {
+	job, codebase, deduplicated, err := syncer.manager.SyncIndex(
+		ctx,
+		codebase.CanonicalPath,
+		model.ClientInfo{Name: "daemon-quarantine-release", PID: 0},
+	)
+	_ = job
+	_ = codebase
+	_ = deduplicated
+	if err != nil && !syncConflictError(err) {
+		slog.ErrorContext(
+			ctx,
+			"start destructive sync after quarantine confirmation failed",
+			"codebase_id",
+			codebase.ID,
+			"path",
+			codebase.CanonicalPath,
+			"err",
+			err,
+		)
+	}
 }
