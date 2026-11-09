@@ -140,37 +140,7 @@ type Service struct {
 // NewService constructs the semantic search runtime.
 func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	if strings.TrimSpace(cfg.MilvusAddress) == "" {
-		service := &Service{
-			cfg:                            cfg,
-			embedder:                       nil,
-			milvus:                         nil,
-			insertRows:                     nil,
-			available:                      atomic.Bool{},
-			reconnectCancel:                nil,
-			reconnectDone:                  nil,
-			reconciliationMutex:            sync.Mutex{},
-			reconciliationCancel:           nil,
-			reconciliationWork:             sync.WaitGroup{},
-			closeOnce:                      sync.Once{},
-			reuseCatalogReady:              sync.Map{},
-			reuseCatalogMutex:              sync.Mutex{},
-			reuseCatalogAppendMutex:        sync.Mutex{},
-			reuseVectorDimensions:          sync.Map{},
-			reuseVectorDimensionMutex:      sync.Mutex{},
-			reuseVectorDimensionGeneration: make(map[string]uint64),
-			collectionLoads: collectionLoadCoordinator{
-				mutex:   sync.Mutex{},
-				flights: nil,
-			},
-			loadGates:                   newCollectionLoadGates(),
-			residency:                   nil,
-			ensuredSplitPartColumns:     sync.Map{},
-			ensuredReuseIdentityColumns: sync.Map{},
-			mmapPolicyVersions:          make(map[string]int),
-			mmapPolicyMutex:             sync.Mutex{},
-			mmapPolicyGeneration:        make(map[string]uint64),
-			mmapPolicyFailures:          make(map[string]mmapPolicyFailure),
-		}
+		service := newServiceState(cfg, nil)
 		service.initializeResidencyController()
 
 		return service, nil
@@ -190,37 +160,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 		return nil, fmt.Errorf("create embedding provider: %w", err)
 	}
 
-	service := &Service{
-		cfg:                            cfg,
-		embedder:                       embedder,
-		milvus:                         nil,
-		insertRows:                     nil,
-		available:                      atomic.Bool{},
-		reconnectCancel:                nil,
-		reconnectDone:                  nil,
-		reconciliationMutex:            sync.Mutex{},
-		reconciliationCancel:           nil,
-		reconciliationWork:             sync.WaitGroup{},
-		closeOnce:                      sync.Once{},
-		reuseCatalogReady:              sync.Map{},
-		reuseCatalogMutex:              sync.Mutex{},
-		reuseCatalogAppendMutex:        sync.Mutex{},
-		reuseVectorDimensions:          sync.Map{},
-		reuseVectorDimensionMutex:      sync.Mutex{},
-		reuseVectorDimensionGeneration: make(map[string]uint64),
-		collectionLoads: collectionLoadCoordinator{
-			mutex:   sync.Mutex{},
-			flights: nil,
-		},
-		loadGates:                   newCollectionLoadGates(),
-		residency:                   nil,
-		ensuredSplitPartColumns:     sync.Map{},
-		ensuredReuseIdentityColumns: sync.Map{},
-		mmapPolicyVersions:          make(map[string]int),
-		mmapPolicyMutex:             sync.Mutex{},
-		mmapPolicyGeneration:        make(map[string]uint64),
-		mmapPolicyFailures:          make(map[string]mmapPolicyFailure),
-	}
+	service := newServiceState(cfg, embedder)
 	service.initializeResidencyController()
 
 	client, err := service.dialMilvus(ctx)

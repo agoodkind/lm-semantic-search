@@ -29,11 +29,6 @@ const (
 	reuseVectorFloatBytes       = 4
 )
 
-func contentHash(content string) string {
-	normalized, _ := milvusstore.SanitizeUTF8(content)
-	return contentVectorKey(normalized)
-}
-
 // LoadReuseVectorsForContents resolves only vectors needed by chunks. It reads
 // the content catalog first, then the target collection, then resident fallback
 // collections. Stored vectors qualify unless both stored and current model
@@ -112,26 +107,6 @@ func (service *Service) LoadReuseVectorsForContentsFrom(
 	return reuse, nil
 }
 
-func (service *Service) reuseCandidates(
-	chunks []model.StoredChunk,
-) (map[string]string, []string) {
-	contentsByStorageKey := make(map[string]string, len(chunks))
-
-	storageKeys := make([]string, 0, len(chunks))
-	for _, chunk := range chunks {
-		content, _ := milvusstore.SanitizeUTF8(chunk.Content)
-		storageKey := contentHash(content)
-		if _, found := contentsByStorageKey[storageKey]; found {
-			continue
-		}
-
-		contentsByStorageKey[storageKey] = content
-		storageKeys = append(storageKeys, storageKey)
-	}
-
-	return contentsByStorageKey, storageKeys
-}
-
 func (service *Service) loadCatalogReuse(
 	ctx context.Context,
 	storageKeys []string,
@@ -184,24 +159,6 @@ func (service *Service) loadCatalogReuse(
 	}
 
 	return nil
-}
-
-func missingReuseContents(
-	contentsByStorageKey map[string]string,
-	reuse map[string]model.ReuseVector,
-) []string {
-	missingContents := make([]string, 0, len(contentsByStorageKey))
-	for _, content := range contentsByStorageKey {
-		if _, found := reuse[contentVectorKey(content)]; !found {
-			missingContents = append(missingContents, content)
-		}
-	}
-
-	return missingContents
-}
-
-func embeddingModelsCompatible(stored string, current string) bool {
-	return stored == "" || current == "" || stored == current
 }
 
 func (service *Service) loadCollectionReuse(
@@ -400,30 +357,6 @@ func (service *Service) loadStoredHashReuseBatch(
 	}
 
 	return service.loadReuseVectorCandidates(ctx, collectionName, candidates, reuse)
-}
-
-func reuseLookupBatches(values []string) [][]string {
-	batches := make([][]string, 0)
-
-	for len(values) > 0 {
-		count := 0
-		escapedBytes := 0
-
-		for count < len(values) && count < reuseLookupBatchSize {
-			valueBytes := len(collection.EscapeString(values[count])) + 4
-			if count > 0 && escapedBytes+valueBytes > reuseLookupMaxEscapedBytes {
-				break
-			}
-
-			escapedBytes += valueBytes
-			count++
-		}
-
-		batches = append(batches, values[:count])
-		values = values[count:]
-	}
-
-	return batches
 }
 
 type reuseVectorCandidate struct {
