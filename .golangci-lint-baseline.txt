@@ -1,4 +1,4 @@
-# golangci-lint: generated_at=2026-11-09T06:16:24Z
+# golangci-lint: generated_at=2026-11-09T13:01:04Z
 client/client.go:31:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T06:16:24Z
 client/client.go:32:2: missing whitespace above this line (too many lines above return) (wsl_v5)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T06:16:24Z
 cmd/ci-auto-update/main.go:689:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T06:16:24Z
@@ -1839,7 +1839,6 @@ collection/milvus/schema.go:157:10: do not define dynamic errors, use wrapped st
 collection/milvus/schema.go:165:11: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"create Milvus collection %s: dimension %d is not positive\", collectionName, request.Dimension)" (err113)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T05:07:35Z
 collection/milvus/schema.go:80:1: CreateCollectionOption returns interface (github.com/milvus-io/milvus/client/v3/milvusclient.CreateCollectionOption) (ireturn)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T05:07:35Z
 collection/milvus/schema.go:80:1: The line is 153 characters long, which exceeds the maximum of 120 characters. (lll)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T05:07:35Z
-collection/milvus/schema.go:81:1: 81-92 lines are duplicate of `collection/milvus/shared_schema.go:75-86` (dupl)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T05:07:35Z
 collection/milvus/schema.go:83:1: The line is 176 characters long, which exceeds the maximum of 120 characters. (lll)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T05:07:35Z
 collection/milvus/schema.go:84:1: The line is 139 characters long, which exceeds the maximum of 120 characters. (lll)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T05:07:35Z
 collection/milvus/schema.go:87:1: The line is 141 characters long, which exceeds the maximum of 120 characters. (lll)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T05:07:35Z
@@ -1956,7 +1955,6 @@ collection/milvus/shared_schema.go:392:1: The line is 122 characters long, which
 collection/milvus/shared_schema.go:449:58: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"unexpected type %T\", raw)" (err113)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T05:07:35Z
 collection/milvus/shared_schema.go:76:1: The line is 142 characters long, which exceeds the maximum of 120 characters. (lll)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T05:07:35Z
 collection/milvus/shared_schema.go:74:1: occurrenceCollectionOption returns interface (github.com/milvus-io/milvus/client/v3/milvusclient.CreateCollectionOption) (ireturn)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T05:07:35Z
-collection/milvus/shared_schema.go:75:1: 75-86 lines are duplicate of `collection/milvus/schema.go:81-92` (dupl)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T05:07:35Z
 collection/milvus/shared_schema.go:77:1: The line is 176 characters long, which exceeds the maximum of 120 characters. (lll)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T05:07:35Z
 collection/milvus/shared_schema.go:78:1: The line is 139 characters long, which exceeds the maximum of 120 characters. (lll)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T05:07:35Z
 collection/milvus/shared_schema.go:81:1: The line is 141 characters long, which exceeds the maximum of 120 characters. (lll)	# golangci-lint:first_added=2026-11-09T05:07:35Z last_seen=2026-11-09T05:07:35Z
