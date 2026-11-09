@@ -88,61 +88,7 @@ func (store *Store) CreateCollectionOption(
 	dimension int,
 	scalars []collection.ScalarColumn,
 ) milvusclient.CreateCollectionOption {
-	schema := entity.NewSchema().
-		WithField(
-			entity.NewField().WithName(IDField).WithDataType(entity.FieldTypeVarChar).WithMaxLength(
-				idFieldMaxLength,
-			).WithIsPrimaryKey(
-				true,
-			),
-		).
-		WithField(
-			entity.NewField().WithName(ContentField).WithDataType(
-				entity.FieldTypeVarChar,
-			).WithMaxLength(
-				contentFieldMaxLength,
-			).WithEnableAnalyzer(
-				true,
-			).WithEnableMatch(
-				true,
-			),
-		).
-		WithField(
-			entity.NewField().WithName(RelativePathField).WithDataType(
-				entity.FieldTypeVarChar,
-			).WithMaxLength(
-				relativePathFieldMaxLength,
-			),
-		).
-		WithField(
-			entity.NewField().WithName(StartLineField).WithDataType(entity.FieldTypeInt64),
-		).
-		WithField(
-			entity.NewField().WithName(EndLineField).WithDataType(entity.FieldTypeInt64),
-		).
-		WithField(
-			entity.NewField().WithName(FileExtensionField).WithDataType(
-				entity.FieldTypeVarChar,
-			).WithMaxLength(
-				fileExtensionFieldMaxLength,
-			),
-		).
-		WithField(
-			entity.NewField().WithName(MetadataField).WithDataType(
-				entity.FieldTypeVarChar,
-			).WithMaxLength(
-				metadataFieldMaxLength,
-			),
-		).
-		WithField(
-			ContentHashFieldSchema(),
-		).
-		WithField(
-			EmbeddingModelFieldSchema(),
-		).
-		WithField(
-			SplitPartFieldSchema(),
-		).
+	schema := baseChunkSchema().
 		WithField(
 			entity.NewField().WithName(DenseVectorField).WithDataType(
 				entity.FieldTypeFloatVector,
@@ -317,4 +263,62 @@ func (store *Store) EnsureCollection(ctx context.Context, request collection.Ens
 	_, err = store.AddMissingScalarColumns(ctx, collectionName, request.Declaration.Scalars)
 
 	return err
+}
+
+func baseChunkSchema() *entity.Schema {
+	return entity.NewSchema().
+		WithField(
+			entity.NewField().WithName(IDField).WithDataType(entity.FieldTypeVarChar).WithMaxLength(
+				idFieldMaxLength,
+			).WithIsPrimaryKey(
+				true,
+			),
+		).
+		WithField(
+			entity.NewField().WithName(ContentField).WithDataType(
+				entity.FieldTypeVarChar,
+			).WithMaxLength(
+				contentFieldMaxLength,
+			).WithEnableAnalyzer(
+				true,
+			).WithEnableMatch(
+				true,
+			),
+		).
+		WithField(
+			entity.NewField().WithName(RelativePathField).WithDataType(
+				entity.FieldTypeVarChar,
+			).WithMaxLength(
+				relativePathFieldMaxLength,
+			),
+		).
+		WithField(
+			entity.NewField().WithName(StartLineField).WithDataType(entity.FieldTypeInt64),
+		).
+		WithField(
+			entity.NewField().WithName(EndLineField).WithDataType(entity.FieldTypeInt64),
+		).
+		WithField(
+			entity.NewField().WithName(FileExtensionField).WithDataType(
+				entity.FieldTypeVarChar,
+			).WithMaxLength(
+				fileExtensionFieldMaxLength,
+			),
+		).
+		WithField(
+			entity.NewField().WithName(MetadataField).WithDataType(
+				entity.FieldTypeVarChar,
+			).WithMaxLength(
+				metadataFieldMaxLength,
+			),
+		).
+		WithField(
+			ContentHashFieldSchema(),
+		).
+		WithField(
+			EmbeddingModelFieldSchema(),
+		).
+		WithField(
+			SplitPartFieldSchema(),
+		)
 }
