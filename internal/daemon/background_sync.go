@@ -928,6 +928,7 @@ func (syncer *BackgroundSync) syncCodebase(ctx context.Context, codebase model.C
 
 	if codebase.Status == model.CodebaseStatusQuarantined {
 		syncer.handleQuarantinedCodebase(ctx, codebase)
+
 		return
 	}
 

@@ -20,6 +20,19 @@ type bootstrapReason string
 
 var errRetryJobStart = errors.New("retry job start persistence")
 
+var (
+	errRunningCodebaseMissing      = errors.New("start job: codebase missing")
+	errRunningCodebaseOwnerChanged = errors.New("start job: codebase ownership changed")
+)
+
+type codebaseRunStatusError struct {
+	status model.CodebaseStatus
+}
+
+func (failure *codebaseRunStatusError) Error() string {
+	return fmt.Sprintf("start job: codebase status %q cannot run", failure.status)
+}
+
 const (
 	bootstrapReasonFirstIndex                 bootstrapReason = "first_index"
 	bootstrapReasonForcedReindex              bootstrapReason = "forced_reindex"
@@ -99,12 +112,14 @@ func (manager *Manager) prepareRunningCodebase(currentJob model.Job, now time.Ti
 	codebase, found := manager.codebases[currentJob.CodebaseID]
 	if !found {
 		manager.mu.Unlock()
-		return fmt.Errorf("start job: codebase missing")
+
+		return errRunningCodebaseMissing
 	}
 
 	if codebase.ActiveJobID != currentJob.ID {
 		manager.mu.Unlock()
-		return fmt.Errorf("start job: codebase ownership changed")
+
+		return errRunningCodebaseOwnerChanged
 	}
 
 	previousCodebase := codebase
@@ -159,10 +174,12 @@ func (manager *Manager) prepareRunningCodebase(currentJob model.Job, now time.Ti
 		model.CodebaseStatusDiscovered,
 		model.CodebaseStatusQuarantined:
 		manager.mu.Unlock()
-		return fmt.Errorf("start job: codebase status %q cannot run", codebase.Status)
+
+		return &codebaseRunStatusError{status: codebase.Status}
 	default:
 		manager.mu.Unlock()
-		return fmt.Errorf("start job: codebase status %q cannot run", codebase.Status)
+
+		return &codebaseRunStatusError{status: codebase.Status}
 	}
 
 	manager.mu.Unlock()

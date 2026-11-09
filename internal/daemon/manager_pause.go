@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -19,6 +20,8 @@ const (
 )
 
 type jobSchedulerLeaseContextKey struct{}
+
+var errPauseClaimYield = errors.New("yield scheduler pause claim")
 
 type jobSchedulerLeaseContext struct {
 	jobID string
@@ -239,7 +242,7 @@ func (manager *Manager) resumePausedLease(
 	claim *jobscheduler.PauseClaim,
 ) error {
 	if !claim.Yield() {
-		failure := fmt.Errorf("yield scheduler pause claim")
+		failure := errPauseClaimYield
 		value.lease.Release()
 		manager.failScheduledJob(context.WithoutCancel(ctx), value.jobID, failure)
 

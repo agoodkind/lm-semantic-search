@@ -144,17 +144,31 @@ func requireOccurrenceRows(occurrences string, ids []string, keyByID map[string]
 	}
 
 	if len(missing) > 0 {
-		missingErr := fmt.Errorf(
-			"occurrence collection %s does not contain rows for %d requested ids; first missing id: %s",
-			occurrences,
-			len(missing),
-			missing[0],
-		)
+		missingErr := &missingOccurrenceRowsError{
+			collection: occurrences,
+			count:      len(missing),
+			firstID:    missing[0],
+		}
 
 		return missingErr
 	}
 
 	return nil
+}
+
+type missingOccurrenceRowsError struct {
+	collection string
+	count      int
+	firstID    string
+}
+
+func (failure *missingOccurrenceRowsError) Error() string {
+	return fmt.Sprintf(
+		"occurrence collection %s does not contain rows for %d requested ids; first missing id: %s",
+		failure.collection,
+		failure.count,
+		failure.firstID,
+	)
 }
 
 // widenSupersets adds the new scalar values of the requested rows to the stored

@@ -659,11 +659,9 @@ func (manager *Manager) rollbackSchedulerPolicies(
 		if !found {
 			rollbackErrors = append(
 				rollbackErrors,
-				fmt.Errorf(
-					"restore scheduler policy: old job %s is missing",
-					schedulerUpdate.jobID,
-				),
+				&missingPolicyRollbackJobError{jobID: schedulerUpdate.jobID},
 			)
+
 			continue
 		}
 
@@ -689,6 +687,25 @@ func (manager *Manager) rollbackSchedulerPolicies(
 	}
 
 	return rollbackErrors
+}
+
+type missingPolicyRollbackJobError struct {
+	jobID string
+}
+
+func (failure *missingPolicyRollbackJobError) Error() string {
+	return fmt.Sprintf("restore scheduler policy: old job %s is missing", failure.jobID)
+}
+
+type inconsistentPolicyJobError struct {
+	jobID string
+}
+
+func (failure *inconsistentPolicyJobError) Error() string {
+	return fmt.Sprintf(
+		"pending policy update job %s has inconsistent codebase identity",
+		failure.jobID,
+	)
 }
 
 func ensurePolicyUpdateTransaction(
@@ -852,6 +869,7 @@ func (manager *Manager) restorePendingPolicyRecords(
 
 		registry.Codebases[index] = transaction.OldCodebase
 		replaced = true
+
 		break
 	}
 
@@ -876,10 +894,7 @@ func (manager *Manager) restorePendingPolicyRecords(
 
 	for _, oldJob := range policyUpdateTransactionJobs(transaction) {
 		if oldJob.CodebaseID != transaction.CodebaseID {
-			identityErr := fmt.Errorf(
-				"pending policy update job %s has inconsistent codebase identity",
-				oldJob.ID,
-			)
+			identityErr := &inconsistentPolicyJobError{jobID: oldJob.ID}
 			slog.ErrorContext(
 				ctx,
 				"validate pending policy update job failed",

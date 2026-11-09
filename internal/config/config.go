@@ -429,13 +429,15 @@ func populateEmbeddingDefaults(
 	embeddingDefaults embeddingConfigDefaults,
 	modelDownloadNetwork ModelDownloadNetworkSettings,
 ) {
+	const defaultEmbeddingBatchSize = 32
+
 	cfg.EmbeddingModel = envOrDefault("EMBEDDING_MODEL", embeddingDefaults.model)
 	cfg.OfflineEmbeddingModel = embeddingDefaults.offlineModel
 	cfg.ModelDownloadNetworkPolicy = modelDownloadNetwork.Policy
 	cfg.ModelDownloadNetworkOverride = modelDownloadNetwork.Override
 	cfg.EmbeddingBatchSize = envIntOrDefault(
 		"EMBEDDING_BATCH_SIZE",
-		intOrDefault(fileConfig.EmbeddingBatchSize, 32),
+		intOrDefault(fileConfig.EmbeddingBatchSize, defaultEmbeddingBatchSize),
 	)
 	cfg.EmbeddingBatchTokenBudget = intOrDefault(
 		fileConfig.EmbeddingBatchTokenBudget,

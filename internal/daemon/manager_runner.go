@@ -230,6 +230,7 @@ func (manager *Manager) JobSuccessorID(job model.Job) string {
 func (manager *Manager) runQueuedJob(backgroundContext context.Context, jobID string) {
 	if !manager.awaitEmbeddingModel(backgroundContext, jobID) {
 		manager.updateJobCancelled(backgroundContext, jobID)
+
 		return
 	}
 
@@ -273,6 +274,7 @@ func (manager *Manager) runQueuedJob(backgroundContext context.Context, jobID st
 		runContext = withJobSchedulerLease(runContext, jobID, capacity.lease)
 		graphTask, retryStart := func() (*graphIndexTask, bool) {
 			defer capacity.release(context.WithoutCancel(backgroundContext))
+
 			return manager.runJob(runContext, jobID)
 		}()
 		if manager.retryJobStart(backgroundContext, jobID, retryStart, attempt) {
@@ -281,6 +283,7 @@ func (manager *Manager) runQueuedJob(backgroundContext context.Context, jobID st
 
 		if manager.jobIsQueued(jobID) {
 			manager.updateJobCancelled(backgroundContext, jobID)
+
 			return
 		}
 

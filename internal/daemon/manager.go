@@ -1111,6 +1111,7 @@ func (manager *Manager) enqueueResolvedSyncLocked(
 
 	if resolution == activeJobDedup {
 		manager.mu.Unlock()
+
 		return activeJob, codebase, true, nil
 	}
 
