@@ -31,104 +31,19 @@ func (manager *Manager) startIndexWithRecovery(
 
 	indexConfig = manager.enrichIndexConfig(indexConfig)
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
-	manager.policyMutationMutex.Lock()
-	policyLocked := true
-	defer func() {
-		if policyLocked {
-			manager.policyMutationMutex.Unlock()
-		}
-	}()
-
-	for {
-		job, codebase, redirected, redirectErr := manager.redirectStartIndex(
-			ctx,
-			requestedPath,
-			canonicalPath,
-			client,
-			policyIntent,
-			sourceIntent,
-		)
-		if redirected {
-			if redirectErr != nil || job.ID == "" {
-				return job, codebase, false, "", redirectErr
-			}
-
-			runContext := manager.indexJobContext(ctx, job)
-			manager.policyMutationMutex.Unlock()
-			policyLocked = false
-			manager.runJobAsync(runContext, job.ID)
-
-			return job, codebase, false, "", nil
-		}
-
-		if dedupedJob, dedupedCodebase, deduped := manager.dedupAgainstActiveJob(
-			canonicalPath,
-			indexConfig,
-		); deduped {
-			resolvedCodebase, resolveErr := manager.resolveDeduplicatedStartIndex(
-				ctx,
-				sourceIntent,
-				dedupedJob,
-				dedupedCodebase,
-				requestedPath,
-				canonicalPath,
-				client,
-				indexConfig,
-				force,
-				policyIntent,
-			)
-			if resolveErr != nil {
-				return emptyJob, emptyCodebase, false, "", resolveErr
-			}
-
-			return dedupedJob, resolvedCodebase, true, "", nil
-		}
-
-		if !force || !manager.hasActiveJobForExactPath(canonicalPath) {
-			break
-		}
-
-		manager.policyMutationMutex.Unlock()
-		policyLocked = false
-		cancelErr := manager.cancelActiveJobForPath(ctx, canonicalPath)
-		manager.policyMutationMutex.Lock()
-		policyLocked = true
-		if cancelErr != nil {
-			return emptyJob, emptyCodebase, false, "", cancelErr
-		}
+	operation := indexStartOperation{
+		requestedPath: requestedPath,
+		canonicalPath: canonicalPath,
+		client:        client,
+		indexConfig:   indexConfig,
+		force:         force,
+		budget:        budget,
+		policyIntent:  policyIntent,
+		sourceIntent:  sourceIntent,
+		recoveredPlan: recoveredPlan,
 	}
 
-	// The force-cancellation loop releases the policy lock so the prior worker
-	// can reach its terminal transition. Re-probe after that loop because the
-	// collection can change while the lock is released.
-	evidence := manager.probeCollectionEvidence(ctx, canonicalPath, "StartIndex")
-	job, codebase, deduped, overlapsCodebaseID, err := manager.commitStartIndexLocked(
-		ctx,
-		canonicalPath,
-		requestedPath,
-		client,
-		indexConfig,
-		force,
-		evidence.presence,
-		budget,
-		policyIntent,
-		sourceIntent,
-		recoveredPlan,
-	)
-	if err != nil || deduped {
-		return job, codebase, deduped, overlapsCodebaseID, err
-	}
-
-	if job.ID == "" {
-		return emptyJob, codebase, false, overlapsCodebaseID, nil
-	}
-
-	manager.notifyIndexCodebaseStart(ctx, codebase)
-	manager.policyMutationMutex.Unlock()
-	policyLocked = false
-	manager.runJobAsync(manager.indexJobContext(ctx, job), job.ID)
-
-	return job, codebase, false, overlapsCodebaseID, nil
+	return manager.runIndexStart(ctx, operation)
 }
 
 func (manager *Manager) startIndexTarget(
@@ -193,7 +108,9 @@ func (manager *Manager) redirectStartIndex(
 	if sourceIntent.sourcePath != "" || sourceIntent.startingCommit != "" {
 		refusal := adapterr.NewInvalidPath(
 			fmt.Sprintf(
-				"worktree source fields for %q are invalid inside indexed codebase %q because the daemon syncs the covering codebase without recording a source for the requested path",
+				"worktree source fields for %q are invalid inside indexed codebase %q "+
+					"because the daemon syncs the covering codebase without recording "+
+					"a source for the requested path",
 				canonicalPath,
 				ancestor.CanonicalPath,
 			),
@@ -298,4 +215,131 @@ func (manager *Manager) hasActiveJobForExactPath(canonicalPath string) bool {
 	codebase, found := manager.findCodebaseByExactRoot(canonicalPath)
 
 	return found && manager.activeJobSnapshotLocked(codebase) != nil
+}
+
+type indexStartOperation struct {
+	requestedPath string
+	canonicalPath string
+	client        model.ClientInfo
+	indexConfig   model.IndexConfig
+	force         bool
+	budget        model.AdmissionBudget
+	policyIntent  indexPolicyIntent
+	sourceIntent  worktreeSourceIntent
+	recoveredPlan *resumePlan
+}
+
+func (manager *Manager) runIndexStart(
+	ctx context.Context,
+	operation indexStartOperation,
+) (model.Job, model.Codebase, bool, string, error) {
+	var emptyJob model.Job
+	var emptyCodebase model.Codebase
+	manager.policyMutationMutex.Lock()
+	policyLocked := true
+	defer func() {
+		if policyLocked {
+			manager.policyMutationMutex.Unlock()
+		}
+	}()
+
+	for {
+		job, codebase, redirected, redirectErr := manager.redirectStartIndex(
+			ctx,
+			operation.requestedPath,
+			operation.canonicalPath,
+			operation.client,
+			operation.policyIntent,
+			operation.sourceIntent,
+		)
+		if redirected {
+			if redirectErr != nil || job.ID == "" {
+				return job, codebase, false, "", redirectErr
+			}
+
+			runContext := manager.indexJobContext(ctx, job)
+			manager.policyMutationMutex.Unlock()
+			policyLocked = false
+			manager.runJobAsync(runContext, job.ID)
+
+			return job, codebase, false, "", nil
+		}
+
+		if dedupedJob, dedupedCodebase, deduped := manager.dedupAgainstActiveJob(
+			operation.canonicalPath,
+			operation.indexConfig,
+		); deduped {
+			resolvedCodebase, resolveErr := manager.resolveDeduplicatedStartIndex(
+				ctx,
+				operation.sourceIntent,
+				dedupedJob,
+				dedupedCodebase,
+				operation.requestedPath,
+				operation.canonicalPath,
+				operation.client,
+				operation.indexConfig,
+				operation.force,
+				operation.policyIntent,
+			)
+			if resolveErr != nil {
+				return emptyJob, emptyCodebase, false, "", resolveErr
+			}
+
+			return dedupedJob, resolvedCodebase, true, "", nil
+		}
+
+		if !operation.force || !manager.hasActiveJobForExactPath(operation.canonicalPath) {
+			break
+		}
+
+		manager.policyMutationMutex.Unlock()
+		policyLocked = false
+		cancelErr := manager.cancelActiveJobForPath(ctx, operation.canonicalPath)
+		manager.policyMutationMutex.Lock()
+		policyLocked = true
+		if cancelErr != nil {
+			return emptyJob, emptyCodebase, false, "", cancelErr
+		}
+	}
+
+	return manager.commitIndexStart(ctx, operation, &policyLocked)
+}
+
+func (manager *Manager) commitIndexStart(
+	ctx context.Context,
+	operation indexStartOperation,
+	policyLocked *bool,
+) (model.Job, model.Codebase, bool, string, error) {
+	var emptyJob model.Job
+	// The force-cancellation loop releases the policy lock so the prior worker
+	// can reach its terminal transition. Re-probe after that loop because the
+	// collection can change while the lock is released.
+	evidence := manager.probeCollectionEvidence(ctx, operation.canonicalPath, "StartIndex")
+	job, codebase, deduped, overlapsCodebaseID, err := manager.commitStartIndexLocked(
+		ctx,
+		operation.canonicalPath,
+		operation.requestedPath,
+		operation.client,
+		operation.indexConfig,
+		operation.force,
+		evidence.presence,
+		operation.budget,
+		operation.policyIntent,
+		operation.sourceIntent,
+		operation.recoveredPlan,
+	)
+	if err != nil || deduped {
+		return job, codebase, deduped, overlapsCodebaseID, err
+	}
+
+	if job.ID == "" {
+		return emptyJob, codebase, false, overlapsCodebaseID, nil
+	}
+
+	manager.notifyIndexCodebaseStart(ctx, codebase)
+	manager.policyMutationMutex.Unlock()
+	*policyLocked = false
+	manager.runJobAsync(manager.indexJobContext(ctx, job), job.ID)
+
+	return job, codebase, false, overlapsCodebaseID, nil
 }
