@@ -210,7 +210,7 @@ func (manager *Manager) classifyCodebaseRepair(
 	codebase model.Codebase,
 	collectionSet map[string]struct{},
 ) repairOutcome {
-	if codebase.Kind == model.CodebaseKindDocument {
+	if codebase.Kind == model.CodebaseKindDocument || codebase.AutoIndexingPaused {
 		return repairOutcome{persist: false, cleanup: false, plan: nil}
 	}
 

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -316,7 +317,7 @@ func (manager *Manager) startAutomaticIndex(
 	}
 
 	job, codebase, deduplicated, _, err := manager.startIndexWithIntent(
-		ctx,
+		automaticIndexingContext(ctx),
 		canonicalPath,
 		client,
 		indexConfig,
@@ -324,6 +325,16 @@ func (manager *Manager) startAutomaticIndex(
 		emptyAdmissionBudget,
 		policyIntent,
 	)
+	if errors.Is(err, errAutomaticIndexingPaused) {
+		return automaticStart{
+			job:          noJob,
+			codebase:     noCodebase,
+			deduplicated: false,
+			held:         false,
+			paused:       true,
+		}, nil
+	}
+
 	if err != nil {
 		return automaticStart{
 			job:          noJob,
@@ -369,7 +380,15 @@ func (manager *Manager) startAutomaticSync(
 		return
 	}
 
-	job, _, deduplicated, err := manager.SyncIndex(ctx, codebase.CanonicalPath, client)
+	job, _, deduplicated, err := manager.SyncIndex(
+		automaticIndexingContext(ctx),
+		codebase.CanonicalPath,
+		client,
+	)
+	if errors.Is(err, errAutomaticIndexingPaused) {
+		return
+	}
+
 	if err != nil {
 		if !syncConflictError(err) {
 			slog.ErrorContext(

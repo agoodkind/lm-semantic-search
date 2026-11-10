@@ -9,6 +9,8 @@ A fork and Go rewrite of [zilliztech/claude-context](https://github.com/zillizte
 
 CLI behavior lives in the current help output, starting with `lm-semantic-search --help` and the grouped subcommand help. The daemon binary takes no help output, so its two commands are described here: `lm-semantic-search-daemon version` and [`lm-semantic-search-daemon sandbox`](docs/sandbox.md).
 
+`job cancel JOB_ID` cancels that job and pauses automatic indexing for its codebase across daemon restarts. Existing indexed content remains searchable. An explicit `codebase sync PATH` or `codebase index PATH` resumes automatic indexing.
+
 [`docs/metrics.md`](docs/metrics.md) explains the historical `status --since` report.
 
 [`docs/restartacceptance.md`](docs/restartacceptance.md) explains how to run destructive restart recovery tests inside an isolated Linux virtual machine.

@@ -996,7 +996,7 @@ func (manager *Manager) startRecoveredIndex(
 	client model.ClientInfo,
 ) error {
 	job, codebase, deduplicated, overlapsCodebaseID, err := manager.startIndexWithRecovery(
-		ctx,
+		automaticIndexingContext(ctx),
 		plan.canonicalPath,
 		client,
 		plan.config,

@@ -117,6 +117,15 @@ func renderMutationAck(ack view.MutationAckView) string {
 		return fmt.Sprintf("Successfully cleared codebase '%s'", ack.Path)
 	case view.AckCancel:
 		if !ack.AlreadyTerminal {
+			if ack.Path != "" {
+				return fmt.Sprintf(
+					"Canceled indexing job %s. Automatic indexing paused for %s. Run lm-semantic-search codebase sync %q to resume.",
+					ack.JobID,
+					ack.Path,
+					ack.Path,
+				)
+			}
+
 			return "Canceled indexing job " + ack.JobID
 		}
 

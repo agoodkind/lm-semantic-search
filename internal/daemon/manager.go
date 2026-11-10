@@ -480,15 +480,16 @@ func (manager *Manager) Version() map[string]string {
 
 func newCodebaseRecord(canonicalPath string) model.Codebase {
 	return model.Codebase{
-		ID:                newID("cb"),
-		Kind:              model.CodebaseKindCode,
-		CanonicalPath:     canonicalPath,
-		Status:            model.CodebaseStatusNotIndexed,
-		ActiveJobID:       "",
-		LastSuccessfulRun: nil,
-		LastFailedRun:     nil,
-		LiveFileTotal:     0,
-		LiveChunkTotal:    0,
+		ID:                 newID("cb"),
+		Kind:               model.CodebaseKindCode,
+		CanonicalPath:      canonicalPath,
+		Status:             model.CodebaseStatusNotIndexed,
+		ActiveJobID:        "",
+		AutoIndexingPaused: false,
+		LastSuccessfulRun:  nil,
+		LastFailedRun:      nil,
+		LiveFileTotal:      0,
+		LiveChunkTotal:     0,
 		EffectiveConfig: model.IndexConfig{
 			SplitterType:       "",
 			SplitterChunkSize:  0,
@@ -959,6 +960,12 @@ func (manager *Manager) syncIndexWithPolicy(
 	}
 
 	codebase := matches[0]
+	if err := manager.prepareAutomaticIndexingLocked(ctx, codebase); err != nil {
+		manager.mu.Unlock()
+		return model.Job{}, model.Codebase{}, false, err
+	}
+
+	codebase = manager.codebases[codebase.ID]
 	resolvedCodebase, _, policyErr := manager.resolveIndexPolicyLocked(
 		codebase,
 		indexPolicyIntent{

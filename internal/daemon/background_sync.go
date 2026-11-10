@@ -357,6 +357,10 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 
 	codebases := syncer.manager.ListIndexes(ctx)
 	for _, codebase := range codebases {
+		if codebase.AutoIndexingPaused {
+			continue
+		}
+
 		if codebase.Kind == model.CodebaseKindDocument {
 			continue
 		}
@@ -519,7 +523,7 @@ func (syncer *BackgroundSync) handleQuarantinedCodebase(
 		}
 
 		_, _, _, err = syncer.manager.SyncIndex(
-			ctx,
+			automaticIndexingContext(ctx),
 			codebase.CanonicalPath,
 			model.ClientInfo{Name: "daemon-quarantine-release", PID: 0},
 		)
@@ -558,7 +562,7 @@ func (syncer *BackgroundSync) handleQuarantinedCodebase(
 	}
 
 	job, codebase, deduplicated, err := syncer.manager.SyncIndex(
-		ctx,
+		automaticIndexingContext(ctx),
 		codebase.CanonicalPath,
 		model.ClientInfo{Name: "daemon-quarantine-release", PID: 0},
 	)
@@ -598,7 +602,7 @@ func (syncer *BackgroundSync) convergeViaWatcher(
 	ctx = correlation.WithContext(ctx, corr)
 
 	codebase, found := syncer.watcherCodebase(codebaseID)
-	if !found {
+	if !found || codebase.AutoIndexingPaused {
 		return
 	}
 
@@ -843,7 +847,8 @@ func (syncer *BackgroundSync) registerConvergeJob(
 
 	syncer.manager.mu.Lock()
 	current, found := syncer.manager.codebases[codebase.ID]
-	if !found || current.ActiveJobID != "" || current.Status != codebase.Status ||
+	if !found || current.AutoIndexingPaused || current.ActiveJobID != "" ||
+		current.Status != codebase.Status ||
 		current.ActiveJobID != codebase.ActiveJobID ||
 		!current.UpdatedAt.Equal(codebase.UpdatedAt) {
 		syncer.manager.mu.Unlock()
@@ -933,7 +938,7 @@ func (manager *Manager) startDetachedJob(jobID string) error {
 	}
 
 	codebase, found := manager.codebases[job.CodebaseID]
-	if !found || codebase.ActiveJobID != "" ||
+	if !found || codebase.AutoIndexingPaused || codebase.ActiveJobID != "" ||
 		codebase.Status != model.CodebaseStatusIndexed {
 		manager.mu.Unlock()
 		return fmt.Errorf("start converge job: codebase ownership changed")
@@ -1128,6 +1133,10 @@ func (syncer *BackgroundSync) endConverge(codebaseID string) {
 // requeuePaths re-enqueues a deferred converge's paths so the change is picked
 // up on the next debounce rather than dropped.
 func (syncer *BackgroundSync) requeuePaths(codebaseID string, relativePaths []string) {
+	if syncer.manager.automaticIndexingPaused(codebaseID) {
+		return
+	}
+
 	for _, relativePath := range relativePaths {
 		syncer.queue.Enqueue(codebaseID, relativePath)
 	}

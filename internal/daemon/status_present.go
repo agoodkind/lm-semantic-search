@@ -916,8 +916,8 @@ func (server *GRPCServer) resolveStartIndexView(
 
 // resolveCancelJobAck builds the cancel acknowledgment while preserving the
 // current cancelled-vs-terminal wording split.
-func resolveCancelJobAck(job model.Job) view.MutationAckView {
-	return view.MutationAckView{
+func resolveCancelJobAck(job model.Job, autoIndexingPaused bool) view.MutationAckView {
+	ack := view.MutationAckView{
 		Kind:            view.AckCancel,
 		Path:            "",
 		JobID:           job.ID,
@@ -932,6 +932,11 @@ func resolveCancelJobAck(job model.Job) view.MutationAckView {
 		NeededCount:     0,
 		TotalCount:      0,
 	}
+	if autoIndexingPaused {
+		ack.Path = job.CanonicalPath
+	}
+
+	return ack
 }
 
 // isTerminalJobState reports whether a job state is terminal (no further work).
