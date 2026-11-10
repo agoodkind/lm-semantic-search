@@ -354,6 +354,7 @@ func (store *Store) embedRows(
 				"err",
 				embedErr,
 			)
+
 			return result, fmt.Errorf("embed local vector chunks: %w", embedErr)
 		}
 

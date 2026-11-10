@@ -152,6 +152,7 @@ func blockingRunner(
 			case <-release:
 			case <-ctx.Done():
 				inFlight.Add(-1)
+
 				return indexer.OneFileResult{
 					Chunks:   nil,
 					FileHash: "",
@@ -299,6 +300,7 @@ func TestStartIndexQueuedBehindCapReportsQueuedThenRunning(t *testing.T) {
 		t,
 		func() bool {
 			running, ok := manager.GetJob(secondJob.ID)
+
 			return ok &&
 				(running.State == model.JobStateRunning || running.State == model.JobStateCompleted)
 		},

@@ -102,6 +102,7 @@ func (manager *Manager) resolveIndexPolicyLocked(
 	)
 	if err != nil {
 		slog.Warn("resolve scheduling policy failed", "codebase_id", codebase.ID, "err", err)
+
 		return model.Codebase{}, model.SchedulingPolicy{}, fmt.Errorf(
 			"apply scheduling policy patch: %w",
 			err,

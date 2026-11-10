@@ -224,6 +224,7 @@ func (manager *Manager) launchResumePlan(ctx context.Context, plan resumePlan) {
 			"err",
 			err,
 		)
+
 		return
 	}
 

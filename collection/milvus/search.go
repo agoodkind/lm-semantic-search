@@ -106,6 +106,7 @@ func (store *Store) Rank(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("compile filter for %s: %w", collectionName, err)
 	}
 
@@ -399,6 +400,7 @@ func rankingReadError(
 		"err",
 		err,
 	)
+
 	return fmt.Errorf("read ranking %s at %d from %s: %w", field, index, collectionName, err)
 }
 

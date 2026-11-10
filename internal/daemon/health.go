@@ -262,6 +262,7 @@ func (manager *Manager) recordDependencyFailureLocked(err error, observation hea
 			"verdict",
 			string(mode),
 		)
+
 		return
 	}
 
@@ -340,6 +341,7 @@ func (manager *Manager) recordStoreReachableLocked(observation healthObservation
 			"verdict",
 			"store_reachable",
 		)
+
 		return
 	}
 
@@ -470,6 +472,7 @@ func (manager *Manager) refreshDependencyHealth(ctx context.Context) {
 				"err",
 				probeErr,
 			)
+
 			return
 		}
 

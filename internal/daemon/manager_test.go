@@ -1550,6 +1550,7 @@ func TestRunDeltaSyncEmptyDiffPreservesCodebaseTotals(t *testing.T) {
 			error,
 		) {
 			t.Errorf("indexOne should not run on empty-diff sync; got %s", relativePath)
+
 			return indexer.OneFileResult{
 				Chunks:   nil,
 				FileHash: "",

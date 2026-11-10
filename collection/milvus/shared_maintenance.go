@@ -241,6 +241,7 @@ func (store *SharedStore) denseIndexDefinition(
 				"err",
 				err,
 			)
+
 			return denseIndexDefinition{}, fmt.Errorf(
 				"decode dense index parameters of %s: %w",
 				collectionName,
@@ -261,6 +262,7 @@ func (store *SharedStore) denseIndexDefinition(
 			"err",
 			err,
 		)
+
 		return denseIndexDefinition{}, fmt.Errorf(
 			"encode dense index parameters of %s: %w",
 			collectionName,

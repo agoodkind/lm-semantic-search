@@ -231,6 +231,7 @@ func storedBackfillValues(
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("read stored backfill column %s: %w", column.Name, err)
 		}
 
@@ -281,6 +282,7 @@ func (store *Store) writeScalarBackfill(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("build backfill columns for %s: %w", collectionName, err)
 	}
 

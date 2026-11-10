@@ -65,6 +65,7 @@ func newProfileCmd() *cobra.Command {
 						"err",
 						err,
 					)
+
 					return fmt.Errorf("--%s: %w", modelDownloadNetworkPolicyFlag, err)
 				}
 			}

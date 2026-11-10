@@ -178,6 +178,7 @@ func (manager *Manager) declaredSourceContentReuse(
 			"err",
 			sourceErr,
 		)
+
 		return targetReuse, fmt.Errorf(
 			"read reuse vectors from declared source collection %s canceled: %w",
 			source.collection,

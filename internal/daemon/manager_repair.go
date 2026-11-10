@@ -183,6 +183,7 @@ func (manager *Manager) planMissingCollectionRepairs(
 				"err",
 				err,
 			)
+
 			return nil, nil, fmt.Errorf("persist stale codebases before automatic rebuild: %w", err)
 		}
 	}

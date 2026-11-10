@@ -21,7 +21,7 @@ func automaticIndexingContext(ctx context.Context) context.Context {
 }
 
 // prepareAutomaticIndexingLocked resumes indexing only for an explicit request.
-// The caller holds manager.mu and serializes admission with policyMutationMutex.
+// The caller locks manager.mu and uses policyMutationMutex for admission.
 func (manager *Manager) prepareAutomaticIndexingLocked(
 	ctx context.Context,
 	codebase model.Codebase,
@@ -32,6 +32,8 @@ func (manager *Manager) prepareAutomaticIndexingLocked(
 
 	automatic, _ := ctx.Value(automaticIndexingKey).(bool)
 	if automatic {
+		slog.WarnContext(ctx, "automatic indexing remains paused", "codebase_id", codebase.ID)
+
 		return fmt.Errorf("%s: %w", codebase.CanonicalPath, errAutomaticIndexingPaused)
 	}
 
@@ -41,6 +43,15 @@ func (manager *Manager) prepareAutomaticIndexingLocked(
 	manager.codebases[codebase.ID] = codebase
 	if err := manager.saveLocked(); err != nil {
 		manager.codebases[original.ID] = original
+		slog.ErrorContext(
+			ctx,
+			"resume automatic indexing failed",
+			"codebase_id",
+			codebase.ID,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("resume automatic indexing for %s: %w", codebase.ID, err)
 	}
 
@@ -77,6 +88,15 @@ func (manager *Manager) pauseAutomaticIndexingLocked(ctx context.Context, job mo
 	manager.codebases[codebase.ID] = codebase
 	if err := manager.saveLocked(); err != nil {
 		manager.codebases[original.ID] = original
+		slog.ErrorContext(
+			ctx,
+			"pause automatic indexing failed",
+			"codebase_id",
+			codebase.ID,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("pause automatic indexing for %s: %w", codebase.ID, err)
 	}
 

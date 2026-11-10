@@ -80,6 +80,7 @@ func (store *SharedStore) UpdateRowScalars(
 			len(missing),
 			missing[0],
 		)
+
 		return 0, missingErr
 	}
 
@@ -192,6 +193,7 @@ func (store *SharedStore) widenSupersets(
 					key,
 					row.ID,
 				)
+
 				return missingErr
 			}
 

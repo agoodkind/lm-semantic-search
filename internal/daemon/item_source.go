@@ -235,6 +235,7 @@ func (source codeItemSource) capture(ctx context.Context) (merkle.Snapshot, erro
 			"err",
 			err,
 		)
+
 		return merkle.Snapshot{}, fmt.Errorf(
 			"capture code snapshot for %s: %w",
 			source.canonicalPath,

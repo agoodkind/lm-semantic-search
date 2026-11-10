@@ -849,6 +849,7 @@ func (service *Service) embedMissedTexts(
 			"err",
 			errors.New("vector count mismatch"),
 		)
+
 		return embedding.BatchResult{}, fmt.Errorf(
 			"embedding batch returned %d vectors for %d chunks",
 			len(result.Vectors),

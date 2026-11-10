@@ -58,6 +58,7 @@ func (manager *Manager) retryFailedBuild(ctx context.Context, codebase model.Cod
 			"err",
 			err,
 		)
+
 		return
 	}
 

@@ -187,6 +187,7 @@ func (stored *collection) scoreRowsLocked(
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("score local collection row %s: %w", candidate.ID, err)
 		}
 
@@ -211,6 +212,7 @@ func (stored *collection) nearestCandidatesLocked(query []float32, depth int) ([
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("search usearch index for local collection %s: %w", stored.name, err)
 	}
 

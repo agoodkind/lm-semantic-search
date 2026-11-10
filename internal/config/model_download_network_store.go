@@ -38,6 +38,7 @@ func SetModelDownloadNetworkOverride(path string, override bool) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("marshal model download network override %t: %w", override, err)
 	}
 

@@ -38,6 +38,7 @@ func (store *Store) QueryRows(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("build stored row filter for %s: %w", collectionName, err)
 	}
 

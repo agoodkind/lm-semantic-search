@@ -422,6 +422,7 @@ func TestForceReindexUnchangedRepoBootstrapsWhenCollectionDisappears(t *testing.
 						", ",
 					),
 				)
+
 				return false, nil
 			}
 

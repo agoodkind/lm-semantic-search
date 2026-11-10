@@ -355,6 +355,7 @@ func newManagerWithDependencies(
 		loadErr := fmt.Errorf("load daemon state: %w", err)
 		if closeErr := manager.Close(context.WithoutCancel(ctx)); closeErr != nil {
 			slog.ErrorContext(ctx, "close manager after state load failure", "err", closeErr)
+
 			return nil, errors.Join(
 				loadErr,
 				fmt.Errorf("close manager after state load failure: %w", closeErr),
@@ -479,15 +480,16 @@ func (manager *Manager) Version() map[string]string {
 
 func newCodebaseRecord(canonicalPath string) model.Codebase {
 	return model.Codebase{
-		ID:                newID("cb"),
-		Kind:              model.CodebaseKindCode,
-		CanonicalPath:     canonicalPath,
-		Status:            model.CodebaseStatusNotIndexed,
-		ActiveJobID:       "",
-		LastSuccessfulRun: nil,
-		LastFailedRun:     nil,
-		LiveFileTotal:     0,
-		LiveChunkTotal:    0,
+		ID:                 newID("cb"),
+		Kind:               model.CodebaseKindCode,
+		CanonicalPath:      canonicalPath,
+		Status:             model.CodebaseStatusNotIndexed,
+		ActiveJobID:        "",
+		AutoIndexingPaused: false,
+		LastSuccessfulRun:  nil,
+		LastFailedRun:      nil,
+		LiveFileTotal:      0,
+		LiveChunkTotal:     0,
 		EffectiveConfig: model.IndexConfig{
 			SplitterType:       "",
 			SplitterChunkSize:  0,
@@ -731,6 +733,7 @@ func (manager *Manager) commitStartIndexLocked(
 			"err",
 			err,
 		)
+
 		return emptyJob, emptyCodebase, false, "", err
 	}
 

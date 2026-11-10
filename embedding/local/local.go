@@ -151,6 +151,7 @@ func InstallRuntime(ctx context.Context, httpClient *http.Client, directory stri
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("install ONNX Runtime into %s: %w", directory, err)
 	}
 
@@ -233,6 +234,7 @@ func New(ctx context.Context, options Options) (embedding.Provider, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("create local embedding provider: %w", err)
 	}
 

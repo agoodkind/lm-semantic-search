@@ -190,6 +190,7 @@ func run(rootContext context.Context) error {
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("ensure state directory %s: %w", path, err)
 		}
 	}
@@ -241,6 +242,7 @@ func serve(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("remove stale socket %s: %w", cfg.SocketPath, err)
 	}
 
@@ -255,6 +257,7 @@ func serve(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("listen on unix socket %s: %w", cfg.SocketPath, err)
 	}
 
@@ -414,6 +417,7 @@ func startUpdateScheduler(ctx context.Context, cfg config.Config, shutdownCh cha
 			"version",
 			version.Version,
 		)
+
 		return
 	}
 
@@ -533,6 +537,7 @@ func startDebugServer(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("create debug listener on %s: %w", cfg.DebugListenAddr, err)
 	}
 
@@ -545,6 +550,7 @@ func startDebugServer(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("start debug listener on %s: %w", cfg.DebugListenAddr, err)
 	}
 

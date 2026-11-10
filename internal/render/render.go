@@ -790,6 +790,7 @@ func renderSearch(searchView view.SearchView) string {
 			searchView.Query,
 			searchView.CodebasePath,
 		)
+
 		return joinSearchSections(searchView, noResults, status, resolution, false)
 	}
 

@@ -65,6 +65,7 @@ func LoadTSMerkle(
 	var parsed tsMerkleFile
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		slog.WarnContext(ctx, "parse TS merkle failed", "path", path, "err", err)
+
 		return merkle.Snapshot{
 			ConfigDigest: "",
 			Files:        nil,

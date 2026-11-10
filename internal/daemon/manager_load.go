@@ -26,6 +26,7 @@ func (manager *Manager) load(ctx context.Context) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("read registry: %w", err)
 	}
 

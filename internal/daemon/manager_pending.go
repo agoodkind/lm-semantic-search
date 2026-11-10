@@ -253,6 +253,7 @@ func (manager *Manager) drainPendingJobLocked(
 				"err",
 				err,
 			)
+
 			return "", false
 		}
 

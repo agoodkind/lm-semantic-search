@@ -291,6 +291,7 @@ func (store *SharedStore) Delete(
 			"err",
 			err,
 		)
+
 		return 0, fmt.Errorf("compile filter for %s: %w", collectionName, err)
 	}
 
@@ -1235,6 +1236,7 @@ func buildOccurrenceWriteOption(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("build embedding model column for %s: %w", collectionName, err)
 	}
 
@@ -1253,6 +1255,7 @@ func buildOccurrenceWriteOption(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("build content hash column for %s: %w", collectionName, err)
 	}
 

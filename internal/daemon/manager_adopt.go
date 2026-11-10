@@ -135,6 +135,7 @@ func (manager *Manager) seedAdoptedMerkle(ctx context.Context, codebase model.Co
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -156,6 +157,7 @@ func (manager *Manager) seedAdoptedMerkle(ctx context.Context, codebase model.Co
 			"err",
 			err,
 		)
+
 		return
 	}
 

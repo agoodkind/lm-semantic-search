@@ -257,6 +257,7 @@ func (syncer *BackgroundSync) watchTrigger(ctx context.Context) {
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -482,6 +483,7 @@ func (syncer *BackgroundSync) handleQuarantinedCodebase(
 			"path",
 			codebase.CanonicalPath,
 		)
+
 		return
 	}
 
@@ -508,6 +510,7 @@ func (syncer *BackgroundSync) handleQuarantinedCodebase(
 			"err",
 			err,
 		)
+
 		return
 	}
 
@@ -554,6 +557,7 @@ func (syncer *BackgroundSync) handleQuarantinedCodebase(
 			"observations",
 			observations,
 		)
+
 		return
 	}
 
@@ -643,6 +647,7 @@ func (syncer *BackgroundSync) convergeViaWatcher(
 			"err",
 			err,
 		)
+
 		return
 	}
 	defer registration.release()
@@ -1175,6 +1180,7 @@ func (syncer *BackgroundSync) codebaseChanged(
 			"err",
 			err,
 		)
+
 		return false, fmt.Errorf("capture Merkle snapshot for %s: %w", codebase.CanonicalPath, err)
 	}
 

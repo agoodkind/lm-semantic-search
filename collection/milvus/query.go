@@ -32,6 +32,7 @@ func (store *Store) Query(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("compile filter for %s: %w", collectionName, err)
 	}
 
@@ -105,6 +106,7 @@ func (store *Store) Delete(
 			"err",
 			err,
 		)
+
 		return 0, fmt.Errorf("compile filter for %s: %w", collectionName, err)
 	}
 

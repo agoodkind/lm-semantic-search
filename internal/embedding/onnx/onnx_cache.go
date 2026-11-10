@@ -155,6 +155,7 @@ func ModelFilesPresent(cacheRoot string, modelName string) (bool, error) {
 				"err",
 				statErr,
 			)
+
 			return false, fmt.Errorf("inspect offline embedding artifact %s: %w", filename, statErr)
 		}
 
@@ -196,6 +197,7 @@ func InstallModelFilesWithProgress(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("resolve offline embedding model: %w", err)
 	}
 

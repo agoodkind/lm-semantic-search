@@ -379,6 +379,7 @@ func LoadSnapshotForConfig(
 			"request_digest",
 			configDigest,
 		)
+
 		return empty, fmt.Errorf("load snapshot %s: %w", path, ErrConfigDigestMismatch)
 	}
 

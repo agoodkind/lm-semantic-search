@@ -56,6 +56,7 @@ func (service *Service) ProbeHealth(ctx context.Context) error {
 			"err",
 			ErrUnavailable,
 		)
+
 		return fmt.Errorf(
 			"probe vector store client: %w",
 			adapterr.NewMilvusUnavailable(ErrUnavailable),
@@ -74,6 +75,7 @@ func (service *Service) ProbeHealth(ctx context.Context) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("probe Milvus collection list: %w", adapterr.NewMilvusUnavailable(err))
 	}
 
@@ -111,6 +113,7 @@ func (service *Service) CollectionState(
 			"err",
 			err,
 		)
+
 		return false, false, fmt.Errorf(
 			"check collection state %s: %w",
 			collectionName,
@@ -178,6 +181,7 @@ func (service *Service) observeCollectionName(
 			"err",
 			err,
 		)
+
 		return unknown, fmt.Errorf(
 			"observe collection %s: %w",
 			collectionName,
@@ -208,6 +212,7 @@ func (service *Service) observeCollectionName(
 			"err",
 			err,
 		)
+
 		return unknown, fmt.Errorf(
 			"observe collection load state %s: %w",
 			collectionName,

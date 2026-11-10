@@ -63,6 +63,7 @@ func (service *Service) BackfillCollectionScalars(
 			"err",
 			err,
 		)
+
 		return changed, orphan, fmt.Errorf("backfill scalars in %s: %w", collectionName, err)
 	}
 

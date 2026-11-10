@@ -84,6 +84,7 @@ func (manager *Manager) GraphTool(
 			"err",
 			err,
 		)
+
 		return "", fmt.Errorf("call graph tool %s for %s: %w", toolName, codebaseID, err)
 	}
 
@@ -412,6 +413,7 @@ func (manager *Manager) indexGraphNonFatal(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("index graph: %w", err)
 	}
 
@@ -434,6 +436,7 @@ func (manager *Manager) recordGraphIndexNonFatal(
 			"path",
 			canonicalPath,
 		)
+
 		return
 	}
 
@@ -577,6 +580,7 @@ func MarshalGraphToolArguments(argsJSON string, codebaseID string) (string, erro
 	var args graphToolArguments
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		slog.Warn("unmarshal graph tool arguments failed", "codebase_id", codebaseID, "err", err)
+
 		return "", fmt.Errorf(
 			"decode graph tool arguments: %w",
 			adapterr.NewInvalidArgument("args_json must be a JSON object or null"),

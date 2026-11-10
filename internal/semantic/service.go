@@ -186,6 +186,7 @@ func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("create embedding provider: %w", err)
 	}
 
@@ -729,6 +730,7 @@ func (service *Service) searchCollectionWithVector(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("search %s: %w", collectionName, err)
 	}
 
@@ -794,6 +796,7 @@ func (service *Service) collectionRowCount(
 			"err",
 			err,
 		)
+
 		return 0, fmt.Errorf("count collection %s: %w", collectionName, err)
 	}
 
@@ -809,6 +812,7 @@ func (service *Service) collectionRowCount(
 			"err",
 			errors.New("missing count(*) column"),
 		)
+
 		return 0, errors.New("milvus count query missing count(*) column")
 	}
 
@@ -824,6 +828,7 @@ func (service *Service) collectionRowCount(
 			"err",
 			err,
 		)
+
 		return 0, fmt.Errorf("read count(*) column for %s: %w", collectionName, err)
 	}
 

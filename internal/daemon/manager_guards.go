@@ -112,6 +112,7 @@ func detectInodeTrackingDisabled(ctx context.Context, canonicalPath string) bool
 			"err",
 			err,
 		)
+
 		return true
 	}
 
@@ -125,6 +126,7 @@ func detectInodeTrackingDisabled(ctx context.Context, canonicalPath string) bool
 			"err",
 			err,
 		)
+
 		return true
 	}
 
@@ -135,6 +137,7 @@ func detectInodeTrackingDisabled(ctx context.Context, canonicalPath string) bool
 			"path",
 			canonicalPath,
 		)
+
 		return true
 	}
 

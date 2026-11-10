@@ -235,6 +235,7 @@ func (store *Store) AddMissingScalarColumns(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("describe collection %s: %w", collectionName, err)
 	}
 
@@ -265,6 +266,7 @@ func (store *Store) AddMissingScalarColumns(
 				"err",
 				err,
 			)
+
 			return added, fmt.Errorf(
 				"add scalar column %s to %s: %w",
 				field.Name,

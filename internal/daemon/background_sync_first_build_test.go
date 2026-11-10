@@ -148,9 +148,15 @@ func TestIndexStoppedDropsDeferredWatcherPathsOnFailureAndCancel(t *testing.T) {
 					error,
 				) {
 					content := "package main\n"
+
 					return indexer.OneFileResult{
 						Chunks: []model.StoredChunk{
-							{Content: content, RelativePath: relativePath, StartLine: 1, EndLine: 1},
+							{
+								Content:      content,
+								RelativePath: relativePath,
+								StartLine:    1,
+								EndLine:      1,
+							},
 						},
 						FileHash: hashText(content),
 					}, nil
@@ -209,9 +215,15 @@ func TestIndexStoppedDropsDeferredWatcherPathsOnFailureAndCancel(t *testing.T) {
 					error,
 				) {
 					content := "package main\n"
+
 					return indexer.OneFileResult{
 						Chunks: []model.StoredChunk{
-							{Content: content, RelativePath: relativePath, StartLine: 1, EndLine: 1},
+							{
+								Content:      content,
+								RelativePath: relativePath,
+								StartLine:    1,
+								EndLine:      1,
+							},
 						},
 						FileHash: hashText(content),
 					}, nil
@@ -308,7 +320,12 @@ func TestRunSyncAllSkipsActiveFirstBuildButResumesInterruptedFirstBuild(t *testi
 
 					return indexer.OneFileResult{
 						Chunks: []model.StoredChunk{
-							{Content: content, RelativePath: relativePath, StartLine: 1, EndLine: 1},
+							{
+								Content:      content,
+								RelativePath: relativePath,
+								StartLine:    1,
+								EndLine:      1,
+							},
 						},
 						FileHash: hashText(content),
 					}, nil

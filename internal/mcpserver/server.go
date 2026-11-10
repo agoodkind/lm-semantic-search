@@ -541,6 +541,7 @@ func callDaemonDoctor(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("dial daemon: %w", err)
 	}
 
@@ -997,6 +998,7 @@ func callDaemonIndexAndWait(
 			"err",
 			err,
 		)
+
 		return toolErrorResult(rpcErrorText(err)), nil
 	}
 
@@ -1026,6 +1028,7 @@ func callDaemonIndexAndWait(
 					"err",
 					err,
 				)
+
 				return renderToolResponse(outputMode, jobResponse)
 			}
 
@@ -1047,6 +1050,7 @@ func callDaemonIndexAndWait(
 					"err",
 					err,
 				)
+
 				return renderToolResponse(outputMode, startResponse)
 			}
 

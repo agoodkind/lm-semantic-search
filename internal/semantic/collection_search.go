@@ -79,6 +79,7 @@ func (service *Service) SearchCollection(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("search %s: %w", request.Collection, err)
 	}
 
@@ -117,6 +118,7 @@ func (service *Service) prepareCollectionSearch(
 			"err",
 			err,
 		)
+
 		return request, fmt.Errorf("compile filter for %s: %w", collectionName, err)
 	}
 

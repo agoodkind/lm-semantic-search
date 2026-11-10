@@ -131,7 +131,11 @@ func (server *reuseLookupServer) DescribeCollection(
 				{Name: idFieldName, DataType: schemapb.DataType_VarChar, IsPrimaryKey: true},
 				{Name: contentFieldName, DataType: schemapb.DataType_VarChar},
 				{Name: contentHashFieldName, DataType: schemapb.DataType_VarChar, Nullable: true},
-				{Name: embeddingModelFieldName, DataType: schemapb.DataType_VarChar, Nullable: true},
+				{
+					Name:     embeddingModelFieldName,
+					DataType: schemapb.DataType_VarChar,
+					Nullable: true,
+				},
 				{
 					Name:     denseVectorFieldName,
 					DataType: schemapb.DataType_FloatVector,

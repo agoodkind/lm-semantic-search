@@ -46,6 +46,7 @@ func watchJob(options cliOptions, jobID string, timeout time.Duration) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("dial daemon: %w", err)
 	}
 

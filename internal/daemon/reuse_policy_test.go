@@ -99,7 +99,11 @@ func TestResolveItemReusePolicy(t *testing.T) {
 
 						switch testCase.presence {
 						case collectionPresencePresent:
-							return semantic.CollectionFacts{Exists: true, Rows: 1, RowsKnown: true}, nil
+							return semantic.CollectionFacts{
+								Exists:    true,
+								Rows:      1,
+								RowsKnown: true,
+							}, nil
 						case collectionPresenceMissing:
 							return semantic.CollectionFacts{
 								Exists:    false,

@@ -120,6 +120,7 @@ func newUpdateApplyCmd(options *rootOptions) *cobra.Command {
 					cmd.OutOrStdout(),
 					"lm-semantic-search: update applied and daemon restart requested",
 				)
+
 				return nil
 			}
 

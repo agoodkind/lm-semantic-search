@@ -86,6 +86,7 @@ func PresetFilesInstalled(
 				"err",
 				installedErr,
 			)
+
 			return false, fmt.Errorf(
 				"read or hash preset artifact %s: %w",
 				artifact.path,

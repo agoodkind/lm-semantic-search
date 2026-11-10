@@ -374,6 +374,7 @@ func (manager *Manager) convergeOnePath(
 			"err",
 			statErr,
 		)
+
 		return false, fmt.Errorf("lstat converge path %q: %w", relativePath, statErr)
 	}
 
@@ -459,6 +460,7 @@ func (manager *Manager) convergeUpsert(
 			"err",
 			admissionErr,
 		)
+
 		return false
 	}
 
@@ -701,6 +703,7 @@ func stampInodeForPath(
 			"err",
 			err,
 		)
+
 		return merkle.InodeRef{Device: "", Inode: 0}
 	}
 
@@ -778,6 +781,7 @@ func classifyConvergePathsWithProgress(
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("classify converge path %q: %w", relativePath, err)
 		}
 
@@ -833,6 +837,7 @@ func (manager *Manager) logConvergeReindexErr(
 			"op",
 			op,
 		)
+
 		return
 	}
 

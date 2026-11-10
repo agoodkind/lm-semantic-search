@@ -78,6 +78,7 @@ func NewWithResidencySnapshot(
 						"residency snapshot unavailable",
 						http.StatusInternalServerError,
 					)
+
 					return
 				}
 

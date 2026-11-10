@@ -53,6 +53,7 @@ func (manager *Manager) journalJobProgressLocked(job model.Job) {
 			"err",
 			err,
 		)
+
 		return
 	}
 

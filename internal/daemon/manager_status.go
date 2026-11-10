@@ -24,6 +24,7 @@ func (manager *Manager) GetIndex(
 	canonicalPath, err := manager.resolveCanonicalPath(requestedPath)
 	if err != nil {
 		slog.ErrorContext(ctx, "canonicalize path failed", "path", requestedPath, "err", err)
+
 		return model.Codebase{}, nil, false, nil, fmt.Errorf(
 			"canonicalize path %s: %w",
 			requestedPath,

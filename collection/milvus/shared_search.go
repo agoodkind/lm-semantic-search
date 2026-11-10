@@ -58,6 +58,7 @@ func (store *SharedStore) Rank(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("compile filter for %s: %w", occurrences, err)
 	}
 
@@ -71,6 +72,7 @@ func (store *SharedStore) Rank(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("compile filter for %s: %w", occurrences, err)
 	}
 
@@ -84,6 +86,7 @@ func (store *SharedStore) Rank(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("compile superset filter for %s: %w", occurrences, err)
 	}
 

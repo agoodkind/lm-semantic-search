@@ -111,6 +111,7 @@ func embedSplitRetryPack(
 			"err",
 			err,
 		)
+
 		return splitRetryPackResult{}, fmt.Errorf("split-retry embed batch: %w", err)
 	}
 
@@ -161,6 +162,7 @@ func embedSplitRetryPack(
 					"err",
 					ErrNilEmbeddingVector,
 				)
+
 				return splitRetryPackResult{}, fmt.Errorf(
 					"split-retry chunk %d: %w",
 					index,

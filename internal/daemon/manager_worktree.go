@@ -306,6 +306,7 @@ func (manager *Manager) startAutomaticIndex(
 			"client",
 			client.Name,
 		)
+
 		return automaticStart{
 			job:          noJob,
 			codebase:     noCodebase,
@@ -375,6 +376,7 @@ func (manager *Manager) startAutomaticSync(
 			"client",
 			client.Name,
 		)
+
 		return
 	}
 

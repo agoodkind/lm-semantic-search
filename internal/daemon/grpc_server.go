@@ -723,6 +723,7 @@ func (server *GRPCServer) WatchJobs(
 			Job: toJobWithTokens(job, degraded, server.manager.JobSuccessorID(job)),
 		}); sendErr != nil {
 			slog.ErrorContext(ctx, "send watch jobs event failed", "job_id", jobID, "err", sendErr)
+
 			return status.Error(
 				adapterr.Respond(
 					ctx,

@@ -1194,8 +1194,10 @@ func sameStoredRow(
 
 	left := source.row
 	right := target.row
-	if left.Content != right.Content || left.RelativePath != right.RelativePath || left.StartLine != right.StartLine ||
-		left.EndLine != right.EndLine || left.FileExtension != right.FileExtension ||
+	if left.Content != right.Content || left.RelativePath != right.RelativePath ||
+		left.StartLine != right.StartLine ||
+		left.EndLine != right.EndLine ||
+		left.FileExtension != right.FileExtension ||
 		left.Metadata != right.Metadata ||
 		left.SplitPart != right.SplitPart ||
 		left.SplitPartRecorded != right.SplitPartRecorded {

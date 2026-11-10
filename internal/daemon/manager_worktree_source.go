@@ -64,6 +64,7 @@ func (manager *Manager) resolveWorktreeSourceIntent(
 			"err",
 			err,
 		)
+
 		return emptyIntent, fmt.Errorf(
 			"failed to canonicalize worktree source path %s: %w",
 			requestedSource,

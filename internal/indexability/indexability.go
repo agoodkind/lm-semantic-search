@@ -489,6 +489,7 @@ func addGitignoreFiles(
 				"err",
 				err,
 			)
+
 			return
 		}
 

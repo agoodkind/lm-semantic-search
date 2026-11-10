@@ -150,6 +150,7 @@ type OpenAIOptions struct {
 // matching the zero-disables semantics.
 func NewOpenAICompatible(options OpenAIOptions) (Provider, error) {
 	requestTimeout := max(options.RequestTimeout, 0)
+
 	return newOpenAICompatibleProvider(
 		options.APIKey,
 		options.BaseURL,
@@ -232,6 +233,7 @@ func (provider *openAICompatibleProvider) Health(ctx context.Context) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("%s embedding endpoint health probe: %w", provider.name, err)
 	}
 
@@ -399,6 +401,7 @@ func (provider *openAICompatibleProvider) EmbedBatch(
 					"err",
 					errors.New("vector count mismatch"),
 				)
+
 				return BatchResult{}, fmt.Errorf(
 					"%s embedding provider returned %d vectors for %d texts",
 					provider.name,
@@ -648,6 +651,7 @@ func (provider *openAICompatibleProvider) embedWithRetry(
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+
 			return nil, fmt.Errorf(
 				"wait to retry %s embeddings: %w",
 				provider.name,

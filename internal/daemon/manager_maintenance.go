@@ -150,6 +150,7 @@ func (manager *Manager) loadMaintenance(ctx context.Context) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("read maintenance mode: %w", err)
 	}
 

@@ -448,6 +448,7 @@ func copiedRowAt(
 			"err",
 			err,
 		)
+
 		return copiedRow{}, fmt.Errorf("read id column at %d: %w", rowIndex, err)
 	}
 
@@ -467,6 +468,7 @@ func copiedRowAt(
 			"err",
 			err,
 		)
+
 		return copiedRow{}, fmt.Errorf("read start_line column at %d: %w", rowIndex, err)
 	}
 
@@ -486,6 +488,7 @@ func copiedRowAt(
 			"err",
 			err,
 		)
+
 		return copiedRow{}, fmt.Errorf("read file_extension column at %d: %w", rowIndex, err)
 	}
 

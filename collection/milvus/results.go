@@ -180,6 +180,7 @@ func scalarReadError(declared collection.ScalarColumn, rowIndex int, part string
 		"err",
 		err,
 	)
+
 	return fmt.Errorf("read %s of scalar column %s at %d: %w", part, declared.Name, rowIndex, err)
 }
 
@@ -212,6 +213,7 @@ func ScalarValueAt(
 			"err",
 			err,
 		)
+
 		return value, fmt.Errorf("read null state of %s at %d: %w", declaration.Name, rowIndex, err)
 	}
 
@@ -241,6 +243,7 @@ func ScalarValueAt(
 			"err",
 			err,
 		)
+
 		return value, fmt.Errorf("read %s at %d: %w", declaration.Name, rowIndex, err)
 	}
 

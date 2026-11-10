@@ -357,6 +357,7 @@ func fetchGitHubReleases(
 			"status",
 			response.StatusCode,
 		)
+
 		return nil, fmt.Errorf("query GitHub releases: HTTP %d", response.StatusCode)
 	}
 
@@ -430,6 +431,7 @@ func (check *updateCheck) installOldRelease(ctx context.Context, release githubR
 			"err",
 			installErr,
 		)
+
 		return fmt.Errorf("install old release %s: %w", release.TagName, installErr)
 	}
 
@@ -451,6 +453,7 @@ func (check *updateCheck) installOldRelease(ctx context.Context, release githubR
 				"want",
 				release.TagName,
 			)
+
 			return fmt.Errorf(
 				"installed %s version is %q, expected %q",
 				binary,
@@ -682,6 +685,7 @@ func binaryVersion(ctx context.Context, binary string) (string, error) {
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
 		slog.WarnContext(ctx, "ci.auto_update.version_failed", "binary", binary, "err", err)
+
 		return "", fmt.Errorf(
 			"run %s version: %w: %s",
 			binary,

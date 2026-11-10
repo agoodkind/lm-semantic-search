@@ -169,6 +169,7 @@ func (manager *Manager) applyDeltaRenameCopies(
 			"err",
 			copyErr,
 		)
+
 		return deltaOutcome{fallback: false, handled: false, progressed: false}
 	}
 

@@ -73,6 +73,7 @@ func (manager *Manager) waitForGraphOperations(ctx context.Context) error {
 				"err",
 				err,
 			)
+
 			return fmt.Errorf(
 				"close manager after context ended while graph index operation was still running: %w",
 				err,
@@ -110,6 +111,7 @@ func (manager *Manager) cancelAndWaitForJobs(ctx context.Context) error {
 		for _, done := range doneChannels {
 			if err := waitForJobDone(ctx, done); err != nil {
 				slog.ErrorContext(ctx, "stop active jobs before manager close", "err", err)
+
 				return fmt.Errorf(
 					"stop active jobs before manager close: wait for active job: %w",
 					err,

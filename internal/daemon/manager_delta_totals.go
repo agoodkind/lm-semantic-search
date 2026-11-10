@@ -47,6 +47,7 @@ func (manager *Manager) codebaseTotals(
 			"path",
 			canonicalPath,
 		)
+
 		return fileCount, fallbackChunks
 	}
 

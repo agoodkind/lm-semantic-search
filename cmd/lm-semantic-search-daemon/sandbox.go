@@ -53,6 +53,7 @@ func runSandbox(rootContext context.Context, arguments []string) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("resolve sandbox configuration: %w", err)
 	}
 
@@ -66,6 +67,7 @@ func runSandbox(rootContext context.Context, arguments []string) error {
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("create sandbox directory %s: %w", directory, err)
 		}
 	}

@@ -137,6 +137,7 @@ func (service *Service) DescribeScalarColumns(
 			"err",
 			err,
 		)
+
 		return nil, false, wrapStoreError(ctx, err, "describe Milvus collection "+collectionName)
 	}
 
@@ -202,6 +203,7 @@ func storedScalarColumn(
 				"err",
 				err,
 			)
+
 			return column, fmt.Errorf(
 				"parse max length of field %s in collection %s: %w",
 				field.Name,

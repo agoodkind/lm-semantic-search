@@ -127,6 +127,7 @@ func (manager *Manager) admissionForJob(job model.Job) *admissionState {
 		job.CanonicalPath,
 		job.Config,
 	)
+
 	return newAdmissionState(manager.config, job.Budget, expectedChunks)
 }
 
@@ -138,6 +139,7 @@ func (manager *Manager) admissionForCodebase(codebase model.Codebase) *admission
 		codebase.CanonicalPath,
 		codebase.EffectiveConfig,
 	)
+
 	return newAdmissionState(manager.config, emptyAdmissionBudget, expectedChunks)
 }
 

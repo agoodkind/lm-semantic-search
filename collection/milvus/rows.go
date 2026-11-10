@@ -240,6 +240,7 @@ func NewSplitPartColumn(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("build split part column for %s: %w", collectionName, err)
 	}
 
@@ -489,6 +490,7 @@ func newDeclaredColumn(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf(
 			"build declared column %s for %s: %w",
 			declaration.Name,

@@ -29,6 +29,7 @@ func StatInode(path string) (InodeRef, error) {
 			"path",
 			path,
 		)
+
 		return InodeRef{
 			Device: "",
 			Inode:  0,

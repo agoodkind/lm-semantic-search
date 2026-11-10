@@ -212,6 +212,7 @@ func (service *Service) loadReuseVectorsFiltered(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("open query iterator for %s: %w", collectionName, err)
 	}
 
@@ -230,6 +231,7 @@ func (service *Service) loadReuseVectorsFiltered(
 				"err",
 				nextErr,
 			)
+
 			return fmt.Errorf("iterate %s: %w", collectionName, nextErr)
 		}
 

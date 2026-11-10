@@ -645,6 +645,7 @@ func (manager *Manager) runBootstrap(
 			job.ID,
 			errors.New("bootstrap build could not complete against the semantic backend"),
 		)
+
 		return nil
 	}
 
@@ -1236,6 +1237,7 @@ func (manager *Manager) writeCheckpoint(ctx context.Context, state deltaState, l
 			"err",
 			err,
 		)
+
 		return
 	}
 }

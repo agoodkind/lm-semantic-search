@@ -222,6 +222,7 @@ func (runner *Runner) IndexOne(
 				"path",
 				fullPath,
 			)
+
 			return newProcessedFile(nil, "", false, SkipNone, true), nil
 		}
 
@@ -279,6 +280,7 @@ func (runner *Runner) statEligibility(
 			"bytes",
 			info.Size(),
 		)
+
 		return newProcessedFile(nil, "", true, SkipOversize, false), false, nil
 	case indexability.ReasonNotRegular,
 		indexability.ReasonOutOfScope,
@@ -292,6 +294,7 @@ func (runner *Runner) statEligibility(
 			"reason",
 			string(decision.Reason),
 		)
+
 		return newProcessedFile(nil, "", false, SkipNone, true), false, nil
 	case indexability.Keep, indexability.ReasonNonUTF8:
 		return newProcessedFile(nil, "", false, SkipNone, false), false, fmt.Errorf(
@@ -341,6 +344,7 @@ func (runner *Runner) processFile(
 			"bytes",
 			len(data),
 		)
+
 		return newProcessedFile(nil, "", true, SkipUnreadable, false), nil
 	}
 
@@ -405,6 +409,7 @@ func (runner *Runner) ingestFile(
 				"path",
 				fullPath,
 			)
+
 			return nil
 		}
 
@@ -425,6 +430,7 @@ func (runner *Runner) ingestFile(
 				"path",
 				fullPath,
 			)
+
 			return nil
 		}
 
@@ -435,6 +441,7 @@ func (runner *Runner) ingestFile(
 				"path",
 				fullPath,
 			)
+
 			return nil
 		}
 
@@ -543,6 +550,7 @@ func (runner *Runner) Index(
 				"err",
 				err,
 			)
+
 			return Result{}, fmt.Errorf("compute relative chunk path for %s: %w", path, err)
 		}
 
@@ -648,6 +656,7 @@ func (runner *Runner) IndexFiles(
 				"err",
 				err,
 			)
+
 			return Result{}, fmt.Errorf(
 				"delta indexing cancelled before file read %s: %w",
 				relativePath,

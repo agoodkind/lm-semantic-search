@@ -137,6 +137,7 @@ func (service *Service) deleteByRemoval(
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("delete items from %s: %w", collectionName, err)
 		}
 	}

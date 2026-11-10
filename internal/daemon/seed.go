@@ -136,6 +136,7 @@ func (manager *Manager) canResumeStaging(
 			"err",
 			err,
 		)
+
 		return false, seedReasonStagingCheckFailed
 	}
 

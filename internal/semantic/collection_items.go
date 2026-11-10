@@ -115,6 +115,7 @@ func (service *Service) loadCollectionItemGroup(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("open collection item iterator for %s: %w", collectionName, err)
 	}
 
@@ -133,6 +134,7 @@ func (service *Service) loadCollectionItemGroup(
 				"err",
 				nextErr,
 			)
+
 			return fmt.Errorf("iterate %s for collection items: %w", collectionName, nextErr)
 		}
 
@@ -193,6 +195,7 @@ func (service *Service) appendCollectionItemRows(
 				"err",
 				pathErr,
 			)
+
 			return fmt.Errorf("read relative path column at %d: %w", rowIndex, pathErr)
 		}
 
