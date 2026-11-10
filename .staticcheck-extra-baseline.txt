@@ -1,4 +1,23 @@
-# staticcheck-extra: generated_at=2026-11-10T05:06:06Z
+# staticcheck-extra: generated_at=2026-11-10T05:37:09Z
+internal/networkcost/platform/source.go:3:9: filenameprefix: source.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
+internal/networkcost/platform/source_darwin.go:3:9: filenameprefix: source_darwin.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
+internal/networkcost/platform/source_darwin_nocgo.go:3:9: filenameprefix: source_darwin_nocgo.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
+internal/networkcost/platform/source_darwin_test.go:3:9: filenameprefix: source_darwin_test.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
+internal/networkcost/platform/source_linux.go:3:9: filenameprefix: source_linux.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
+internal/networkcost/platform/source_linux.go:5:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-10T05:37:09Z last_seen=2026-11-10T05:37:09Z
+internal/networkcost/platform/source_other.go:3:9: filenameprefix: source_other.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
+internal/networkcost/platform/source_unknown.go:3:9: filenameprefix: source_unknown.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
+internal/platformactivity/activity.go:2:9: filenameprefix: activity.go repeats prefix "activity"; use directory "activity"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
+internal/platformactivity/activity_other.go:13:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-09T04:57:29Z last_seen=2026-11-10T05:37:09Z
+internal/platformactivity/activity_other.go:1:9: filenameprefix: activity_other.go repeats prefix "activity"; use directory "activity"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
+internal/platformactivity/activity_test.go:1:9: filenameprefix: activity_test.go repeats prefix "activity"; use directory "activity"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
+internal/platformactivity/source_darwin.go:3:9: filenameprefix: source_darwin.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
+internal/platformactivity/source_darwin_nocgo.go:3:9: filenameprefix: source_darwin_nocgo.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
+internal/platformactivity/source_darwin_test.go:3:9: filenameprefix: source_darwin_test.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
+internal/platformactivity/source_linux.go:3:9: filenameprefix: source_linux.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
+internal/platformactivity/source_linux.go:44:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-10T05:37:09Z last_seen=2026-11-10T05:37:09Z
+internal/platformactivity/source_linux_test.go:3:9: filenameprefix: source_linux_test.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
+internal/platformactivity/source_other.go:3:9: filenameprefix: source_other.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:37:09Z
 client/client.go:29:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-09T04:57:29Z last_seen=2026-11-10T05:06:06Z
 cmd/ci-auto-update/main.go:113:1: commandentry: delegate implementation to an importable package [id=96dcfa14dd9a4ced9bcf23bcae7c1860:1]	# staticcheck-extra:first_added=2026-11-09T06:06:39Z last_seen=2026-11-10T05:06:06Z
 cmd/ci-auto-update/main.go:196:1: commandentry: delegate implementation to an importable package [id=34a01aa582310ef3ffe9dab63c0030d4:1]	# staticcheck-extra:first_added=2026-11-09T06:06:39Z last_seen=2026-11-10T05:06:06Z
@@ -539,14 +558,7 @@ internal/model/backend.go:45:1: doc_structure: add an introduction, explanation,
 internal/model/scheduling.go:91:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-09T04:57:29Z last_seen=2026-11-10T05:06:06Z
 internal/modeldownload/download.go:93:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-09T04:57:29Z last_seen=2026-11-10T05:06:06Z
 internal/networkcost/decision.go:51:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-09T04:57:29Z last_seen=2026-11-10T05:06:06Z
-internal/networkcost/platform/source.go:3:9: filenameprefix: source.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
 internal/networkcost/platform/source_darwin.go:20:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-09T04:57:29Z last_seen=2026-11-10T05:06:06Z
-internal/networkcost/platform/source_darwin.go:3:9: filenameprefix: source_darwin.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
-internal/networkcost/platform/source_darwin_nocgo.go:3:9: filenameprefix: source_darwin_nocgo.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
-internal/networkcost/platform/source_darwin_test.go:3:9: filenameprefix: source_darwin_test.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
-internal/networkcost/platform/source_linux.go:3:9: filenameprefix: source_linux.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
-internal/networkcost/platform/source_other.go:3:9: filenameprefix: source_other.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
-internal/networkcost/platform/source_unknown.go:3:9: filenameprefix: source_unknown.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
 internal/offlinemodel/registry.go:185:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-09T04:57:29Z last_seen=2026-11-10T05:06:06Z
 internal/onnxruntimedist/dist.go:84:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-09T04:57:29Z last_seen=2026-11-10T05:06:06Z
 internal/orphanguard/orphan_guard.go:37:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-09T04:57:29Z last_seen=2026-11-10T05:06:06Z
@@ -556,17 +568,7 @@ internal/orphanguard/orphan_guard_linux.go:3:9: filenameprefix: orphan_guard_lin
 internal/orphanguard/orphan_guard_other.go:3:9: filenameprefix: orphan_guard_other.go repeats prefix "orphan"; use directory "orphan"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
 internal/orphanguard/orphan_guard_test.go:1:9: filenameprefix: orphan_guard_test.go repeats prefix "orphan"; use directory "orphan"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
 internal/pbconv/pbconv.go:66:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-09T04:57:29Z last_seen=2026-11-10T05:06:06Z
-internal/platformactivity/activity.go:2:9: filenameprefix: activity.go repeats prefix "activity"; use directory "activity"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
-internal/platformactivity/activity_other.go:13:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-09T04:57:29Z last_seen=2026-11-10T05:06:06Z
-internal/platformactivity/activity_other.go:1:9: filenameprefix: activity_other.go repeats prefix "activity"; use directory "activity"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
-internal/platformactivity/activity_test.go:1:9: filenameprefix: activity_test.go repeats prefix "activity"; use directory "activity"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
 internal/platformactivity/source_darwin.go:37:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-09T04:57:29Z last_seen=2026-11-10T05:06:06Z
-internal/platformactivity/source_darwin.go:3:9: filenameprefix: source_darwin.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
-internal/platformactivity/source_darwin_nocgo.go:3:9: filenameprefix: source_darwin_nocgo.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
-internal/platformactivity/source_darwin_test.go:3:9: filenameprefix: source_darwin_test.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
-internal/platformactivity/source_linux.go:3:9: filenameprefix: source_linux.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
-internal/platformactivity/source_linux_test.go:3:9: filenameprefix: source_linux_test.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
-internal/platformactivity/source_other.go:3:9: filenameprefix: source_other.go repeats prefix "source"; use directory "source"	# staticcheck-extra:first_added=2026-11-09T06:09:47Z last_seen=2026-11-10T05:06:06Z
 internal/releaseproxy/release_proxy.go:25:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-09T04:57:29Z last_seen=2026-11-10T05:06:06Z
 internal/render/banner.go:63:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-09T04:57:29Z last_seen=2026-11-10T05:06:06Z
 internal/render/collection_search.go:45:1: doc_structure: add an introduction, explanation, and example or layout	# staticcheck-extra:first_added=2026-11-09T04:57:29Z last_seen=2026-11-10T05:06:06Z
