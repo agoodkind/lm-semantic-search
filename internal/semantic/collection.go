@@ -61,6 +61,7 @@ func (columnSet StoreColumnSet) DeclaredScalars() []collection.ScalarColumn {
 	if columnSet.kind != storeColumnKindDeclared {
 		return nil
 	}
+
 	return columnSet.scalars
 }
 
@@ -70,16 +71,20 @@ func (columnSet StoreColumnSet) creationScalars() []collection.ScalarColumn {
 	if columnSet.kind == storeColumnKindDeclared {
 		return columnSet.scalars
 	}
+
 	return nil
 }
 
 // rowScalars returns the scalar values an insert of chunk writes for this
 // column set. A declared row stores the chunk's own values, and a code row has
 // none.
-func (columnSet StoreColumnSet) rowScalars(chunk model.StoredChunk) map[string]collection.ScalarValue {
+func (columnSet StoreColumnSet) rowScalars(
+	chunk model.StoredChunk,
+) map[string]collection.ScalarValue {
 	if columnSet.kind == storeColumnKindDeclared {
 		return chunk.Scalars
 	}
+
 	return nil
 }
 
@@ -102,6 +107,7 @@ func (service *Service) DescribeScalarColumns(
 	if !service.Available() {
 		return nil, false, ErrUnavailable
 	}
+
 	peerInfo, _ := peer.FromContext(ctx)
 	hasCollection, err := service.hasCollection(
 		ctx,
@@ -111,41 +117,63 @@ func (service *Service) DescribeScalarColumns(
 	if err != nil {
 		return nil, false, err
 	}
+
 	if !hasCollection {
 		return nil, false, nil
 	}
+
 	described, err := service.milvus.DescribeCollection(
 		ctx,
 		milvusclient.NewDescribeCollectionOption(collectionName),
 	)
 	if err != nil {
-		slog.ErrorContext(ctx, "describe collection for declared scalars failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
+		slog.ErrorContext(
+			ctx,
+			"describe collection for declared scalars failed",
+			"collection",
+			collectionName,
+			"peer",
+			peerInfo.String(),
+			"err",
+			err,
+		)
 		return nil, false, wrapStoreError(ctx, err, "describe Milvus collection "+collectionName)
 	}
+
 	builtin := make(map[string]struct{})
+
 	for _, name := range milvusstore.BuiltinColumnNames() {
 		builtin[name] = struct{}{}
 	}
+
 	columns := make([]collection.ScalarColumn, 0)
 	if described.Schema == nil {
 		return columns, true, nil
 	}
+
 	for _, field := range described.Schema.Fields {
 		if _, isBuiltin := builtin[field.Name]; isBuiltin {
 			continue
 		}
+
 		column, err := storedScalarColumn(ctx, collectionName, field)
 		if err != nil {
 			return nil, false, err
 		}
+
 		columns = append(columns, column)
 	}
+
 	return columns, true, nil
 }
 
 // storedScalarColumn converts one stored Milvus field into the declaration
 // shape a registration compares against.
-func storedScalarColumn(ctx context.Context, collectionName string, field *entity.Field) (collection.ScalarColumn, error) {
+func storedScalarColumn(
+	ctx context.Context,
+	collectionName string,
+	field *entity.Field,
+) (collection.ScalarColumn, error) {
 	column := collection.ScalarColumn{
 		Name:      field.Name,
 		Type:      collection.ScalarType("milvus:" + field.DataType.Name()),
@@ -155,18 +183,36 @@ func storedScalarColumn(ctx context.Context, collectionName string, field *entit
 	if field.DataType == entity.FieldTypeBool {
 		column.Type = collection.ScalarTypeBool
 	}
+
 	if field.DataType == entity.FieldTypeInt64 {
 		column.Type = collection.ScalarTypeInt64
 	}
+
 	if field.DataType == entity.FieldTypeVarChar {
 		column.Type = collection.ScalarTypeString
 		maxLength, err := strconv.ParseInt(field.TypeParams[entity.TypeParamMaxLength], 10, 32)
 		if err != nil {
-			slog.ErrorContext(ctx, "parse stored field max length failed", "collection", collectionName, "field", field.Name, "err", err)
-			return column, fmt.Errorf("parse max length of field %s in collection %s: %w", field.Name, collectionName, err)
+			slog.ErrorContext(
+				ctx,
+				"parse stored field max length failed",
+				"collection",
+				collectionName,
+				"field",
+				field.Name,
+				"err",
+				err,
+			)
+			return column, fmt.Errorf(
+				"parse max length of field %s in collection %s: %w",
+				field.Name,
+				collectionName,
+				err,
+			)
 		}
+
 		column.MaxLength = int32(maxLength)
 	}
+
 	return column, nil
 }
 
@@ -178,6 +224,7 @@ func splitPartFieldsToAdd(schema *entity.Schema) []*entity.Field {
 			}
 		}
 	}
+
 	return []*entity.Field{milvusstore.SplitPartFieldSchema()}
 }
 
@@ -191,23 +238,32 @@ func (service *Service) createCollection(
 	if err != nil {
 		return nil, err
 	}
-	createOption := service.collectionStore().CreateCollectionOption(collectionName, dimension, declaredScalars)
+
+	createOption := service.collectionStore().CreateCollectionOption(
+		collectionName,
+		dimension,
+		declaredScalars,
+	)
 	if err := service.milvus.CreateCollection(ctx, createOption); err != nil {
 		maintenance.ReleaseContext(ctx)
 		return nil, wrapStoreError(ctx, err, "create Milvus collection "+collectionName)
 	}
+
 	service.invalidateCollectionCaches(collectionName)
 	maintenance.ReleaseContext(ctx)
 	if err := service.ensureCreatedCollectionMmapForWrite(ctx, collectionName); err != nil {
 		return nil, err
 	}
+
 	if err := service.PrepareCollection(ctx, collectionName); err != nil {
 		return nil, err
 	}
+
 	lease, err := service.AcquireCollection(ctx, collectionName)
 	if err != nil {
 		return nil, err
 	}
+
 	return lease, nil
 }
 
@@ -237,11 +293,13 @@ func (service *Service) ensureReuseIdentityColumnsOnce(
 			loaded,
 		)
 	}
+
 	migration.once.Do(func() {
 		maintenance, maintainErr := service.residency.Maintain(ctx, collectionName)
 		if maintainErr != nil {
 			migration.err = maintainErr
 			service.ensuredReuseIdentityColumns.CompareAndDelete(collectionName, loaded)
+
 			return
 		}
 		defer maintenance.ReleaseContext(ctx)
@@ -250,6 +308,7 @@ func (service *Service) ensureReuseIdentityColumnsOnce(
 			service.ensuredReuseIdentityColumns.CompareAndDelete(collectionName, loaded)
 		}
 	})
+
 	return migration.err
 }
 
@@ -265,38 +324,50 @@ func (service *Service) ensureReuseIdentityColumns(
 		slog.ErrorContext(
 			ctx,
 			"describe collection for reuse identity failed",
-			"collection", collectionName,
-			"err", err,
+			"collection",
+			collectionName,
+			"err",
+			err,
 		)
+
 		return fmt.Errorf("describe collection %s for reuse identity: %w", collectionName, err)
 	}
+
 	existingFields := make(map[string]struct{}, len(described.Schema.Fields))
 	for _, field := range described.Schema.Fields {
 		existingFields[field.Name] = struct{}{}
 	}
-	for _, field := range []*entity.Field{milvusstore.ContentHashFieldSchema(), milvusstore.EmbeddingModelFieldSchema()} {
+
+	for _, field := range []*entity.Field{
+		milvusstore.ContentHashFieldSchema(),
+		milvusstore.EmbeddingModelFieldSchema(),
+	} {
 		if _, found := existingFields[field.Name]; found {
 			continue
 		}
+
 		if err := service.milvus.AddCollectionField(
 			ctx,
 			milvusclient.NewAddCollectionFieldOption(collectionName, field),
 		); err != nil {
 			return fmt.Errorf("add %s column to %s: %w", field.Name, collectionName, err)
 		}
+
 		service.invalidateMmapPolicy(collectionName)
 	}
+
 	indexes, err := service.milvus.ListIndexes(
 		ctx,
-		milvusclient.NewListIndexOption(collectionName).
-			WithFieldName(contentHashFieldName),
+		milvusclient.NewListIndexOption(collectionName).WithFieldName(contentHashFieldName),
 	)
 	if err != nil {
 		return fmt.Errorf("list content hash indexes on %s: %w", collectionName, err)
 	}
+
 	if len(indexes) > 0 {
 		return nil
 	}
+
 	task, err := service.milvus.CreateIndex(
 		ctx,
 		milvusclient.NewCreateIndexOption(
@@ -308,14 +379,20 @@ func (service *Service) ensureReuseIdentityColumns(
 	if err != nil {
 		return fmt.Errorf("create content hash index on %s: %w", collectionName, err)
 	}
+
 	if err := task.Await(ctx); err != nil {
 		return fmt.Errorf("await content hash index on %s: %w", collectionName, err)
 	}
+
 	service.invalidateMmapPolicy(collectionName)
+
 	return nil
 }
 
-func (service *Service) addMissingSplitPartColumn(ctx context.Context, collectionName string) error {
+func (service *Service) addMissingSplitPartColumn(
+	ctx context.Context,
+	collectionName string,
+) error {
 	described, err := service.milvus.DescribeCollection(
 		ctx,
 		milvusclient.NewDescribeCollectionOption(collectionName),
@@ -329,8 +406,14 @@ func (service *Service) addMissingSplitPartColumn(ctx context.Context, collectio
 			"err",
 			err,
 		)
-		return fmt.Errorf("describe collection %s for split part migration: %w", collectionName, err)
+
+		return fmt.Errorf(
+			"describe collection %s for split part migration: %w",
+			collectionName,
+			err,
+		)
 	}
+
 	fields := splitPartFieldsToAdd(described.Schema)
 	for _, field := range fields {
 		if err := service.milvus.AddCollectionField(
@@ -347,13 +430,17 @@ func (service *Service) addMissingSplitPartColumn(ctx context.Context, collectio
 				"err",
 				err,
 			)
+
 			return fmt.Errorf("add split part column to %s: %w", collectionName, err)
 		}
+
 		service.invalidateMmapPolicy(collectionName)
 	}
+
 	if len(fields) > 0 {
 		slog.InfoContext(ctx, "semantic.split_part_column_added", "collection", collectionName)
 	}
+
 	return nil
 }
 
@@ -373,13 +460,16 @@ func (service *Service) ensureSplitPartColumnOnce(
 			loaded,
 		)
 		slog.ErrorContext(ctx, "split part migration guard invalid", "err", typeErr)
+
 		return typeErr
 	}
+
 	migration.once.Do(func() {
 		maintenance, maintainErr := service.residency.Maintain(ctx, collectionName)
 		if maintainErr != nil {
 			migration.err = maintainErr
 			service.ensuredSplitPartColumns.CompareAndDelete(collectionName, loaded)
+
 			return
 		}
 		defer maintenance.ReleaseContext(ctx)
@@ -388,6 +478,7 @@ func (service *Service) ensureSplitPartColumnOnce(
 			service.ensuredSplitPartColumns.CompareAndDelete(collectionName, loaded)
 		}
 	})
+
 	return migration.err
 }
 
@@ -400,16 +491,20 @@ func (service *Service) PrepareCollection(
 		strings.HasPrefix(collectionName, reuseCatalogCollectionPrefix) {
 		return nil
 	}
+
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
 		if classified := classifyPrepareCollectionError(collectionName, err); classified != nil {
 			return classified
 		}
+
 		return err
 	}
+
 	err := service.ensureReuseIdentityColumnsOnce(ctx, collectionName)
 	if classified := classifyPrepareCollectionError(collectionName, err); classified != nil {
 		return classified
 	}
+
 	return err
 }
 
@@ -417,9 +512,13 @@ func classifyPrepareCollectionError(collectionName string, err error) *adapterr.
 	if err == nil {
 		return nil
 	}
+
 	if storeUnavailable(err) {
-		return adapterr.NewMilvusUnavailable(fmt.Errorf("prepare Milvus collection %s: %w", collectionName, err))
+		return adapterr.NewMilvusUnavailable(
+			fmt.Errorf("prepare Milvus collection %s: %w", collectionName, err),
+		)
 	}
+
 	return nil
 }
 
@@ -472,6 +571,7 @@ func (service *Service) loadCollectionTransition(
 	if err := service.admitCollectionLoad(ctx, collectionName, backoff); err != nil {
 		return err
 	}
+
 	releaseSlot, err := service.collectionLoadSlots().acquire(ctx, collectionName)
 	if err != nil {
 		return err
@@ -480,8 +580,10 @@ func (service *Service) loadCollectionTransition(
 	if err := service.admitCollectionLoad(ctx, collectionName, backoff); err != nil {
 		return err
 	}
+
 	err = service.requestCollectionLoad(ctx, collectionName)
 	backoff.noteLoadOutcome(ctx, collectionName, err)
+
 	return err
 }
 
@@ -495,6 +597,7 @@ func (service *Service) admitCollectionLoad(
 	if err := service.refuseLoadDuringMaintenance(ctx, collectionName); err != nil {
 		return err
 	}
+
 	return backoff.admit(ctx, collectionName)
 }
 
@@ -510,5 +613,6 @@ func (service *Service) requestCollectionLoad(
 	); err != nil {
 		return wrapStoreError(ctx, err, "load Milvus collection "+collectionName)
 	}
+
 	return service.awaitCollectionLoaded(ctx, collectionName)
 }

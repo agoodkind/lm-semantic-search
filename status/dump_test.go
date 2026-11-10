@@ -11,12 +11,14 @@ import (
 // one record without depending on the order of the others.
 func lineFields(text string) map[string]string {
 	fields := map[string]string{}
+
 	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
 		parts := strings.SplitN(line, " ", 2)
 		if len(parts) == 2 {
 			fields[parts[0]] = parts[1]
 		}
 	}
+
 	return fields
 }
 
@@ -40,6 +42,7 @@ func TestDumpPrintsOneRecordPerLine(t *testing.T) {
 	}
 
 	got := lineFields(Dump(snapshot))
+
 	cases := map[string]string{
 		"embed_vectors_total":        "3946 vectors",
 		"dependency_health.degraded": "false",
@@ -82,6 +85,7 @@ func TestDumpIndexesActivityRows(t *testing.T) {
 		},
 	}
 	text := Dump(snapshot)
+
 	for _, want := range []string{
 		"activity.0.job_id job_a",
 		"activity.1.job_id null",
@@ -134,7 +138,9 @@ func TestDumpPrintsValuesAsWritten(t *testing.T) {
 	if len(lines) != 3 {
 		t.Fatalf("records = %d, want 3; a value spanned a line:\n%s", len(lines), text)
 	}
+
 	got := lineFields(text)
+
 	cases := map[string]string{
 		"activity.0.phase":          "Reindexing changed files...",
 		"activity.0.canonical_path": "/Users/a/some project",
@@ -165,6 +171,7 @@ func TestDumpValuesRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Unquote(%q) returned error: %v", rendered, err)
 		}
+
 		if recovered != original {
 			t.Fatalf("round trip of %q produced %q", original, recovered)
 		}
@@ -188,8 +195,13 @@ func TestDumpKeepsCountersAsOneBareField(t *testing.T) {
 	for _, line := range strings.Split(strings.TrimSpace(Dump(snapshot)), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 || len(fields) > 3 {
-			t.Fatalf("record %q has %d fields, want name, value, and optional unit", line, len(fields))
+			t.Fatalf(
+				"record %q has %d fields, want name, value, and optional unit",
+				line,
+				len(fields),
+			)
 		}
+
 		if strings.HasPrefix(fields[1], `"`) {
 			t.Fatalf("record %q quoted a numeric value, breaking awk and cut", line)
 		}
@@ -212,6 +224,7 @@ func TestDumpNewlineValueCannotForgeARecord(t *testing.T) {
 	if lines := strings.Split(strings.TrimSpace(text), "\n"); len(lines) != 1 {
 		t.Fatalf("records = %d, want 1; the newline forged a record:\n%s", len(lines), text)
 	}
+
 	if strings.Contains(text, "\nembed_vectors_total") {
 		t.Fatalf("a forged embed_vectors_total record appears:\n%s", text)
 	}
@@ -231,15 +244,18 @@ func TestDumpEscapesControlRunes(t *testing.T) {
 	if strings.ContainsRune(rendered, '\x1b') {
 		t.Fatalf("a raw escape character survived into the output: %q", rendered)
 	}
+
 	for _, candidate := range rendered {
 		if !unicode.IsPrint(candidate) {
 			t.Fatalf("unprintable rune %q survived into %q", candidate, rendered)
 		}
 	}
+
 	recovered, err := strconv.Unquote(rendered)
 	if err != nil {
 		t.Fatalf("Unquote(%q) returned error: %v", rendered, err)
 	}
+
 	if recovered != hostile {
 		t.Fatalf("round trip produced %q, want the original bytes", recovered)
 	}
@@ -263,6 +279,7 @@ func TestDumpPrintsIdentityBeforeCounters(t *testing.T) {
 	}
 
 	got := lineFields(Dump(snapshot))
+
 	cases := map[string]string{
 		"version": "202607270542-fe-6e0a44c",
 		"commit":  "6e0a44c",
@@ -275,6 +292,7 @@ func TestDumpPrintsIdentityBeforeCounters(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", name, got[name], want)
 		}
 	}
+
 	if got["embed_vectors_total"] != "3946 vectors" {
 		t.Fatalf("identity records displaced the counters: %q", got["embed_vectors_total"])
 	}

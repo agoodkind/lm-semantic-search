@@ -150,7 +150,13 @@ type OpenAIOptions struct {
 // matching the zero-disables semantics.
 func NewOpenAICompatible(options OpenAIOptions) (Provider, error) {
 	requestTimeout := max(options.RequestTimeout, 0)
-	return newOpenAICompatibleProvider(options.APIKey, options.BaseURL, options.Model, options.Dimensions, requestTimeout)
+	return newOpenAICompatibleProvider(
+		options.APIKey,
+		options.BaseURL,
+		options.Model,
+		options.Dimensions,
+		requestTimeout,
+	)
 }
 
 type openAICompatibleProvider struct {
@@ -164,10 +170,17 @@ type openAICompatibleProvider struct {
 	requestTimeout time.Duration
 }
 
-func newOpenAICompatibleProvider(apiKey string, baseURL string, model string, dimensions int32, requestTimeout time.Duration) (Provider, error) {
+func newOpenAICompatibleProvider(
+	apiKey string,
+	baseURL string,
+	model string,
+	dimensions int32,
+	requestTimeout time.Duration,
+) (Provider, error) {
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, fmt.Errorf("%s embedding provider requires an API key", openAIProviderName)
 	}
+
 	if strings.TrimSpace(model) == "" {
 		return nil, fmt.Errorf("%s embedding provider requires a model", openAIProviderName)
 	}
@@ -209,23 +222,42 @@ func (provider *openAICompatibleProvider) Health(ctx context.Context) error {
 	probeCtx, cancel := context.WithTimeout(ctx, healthProbeTimeout)
 	defer cancel()
 	if _, err := provider.client.Models.List(probeCtx); err != nil {
-		slog.WarnContext(ctx, "embedding endpoint health probe failed", "provider", provider.name, "model", provider.model, "err", err)
+		slog.WarnContext(
+			ctx,
+			"embedding endpoint health probe failed",
+			"provider",
+			provider.name,
+			"model",
+			provider.model,
+			"err",
+			err,
+		)
 		return fmt.Errorf("%s embedding endpoint health probe: %w", provider.name, err)
 	}
+
 	return nil
 }
 
-func (provider *openAICompatibleProvider) Embed(ctx context.Context, text string) ([]float32, error) {
+func (provider *openAICompatibleProvider) Embed(
+	ctx context.Context,
+	text string,
+) ([]float32, error) {
 	result, err := provider.EmbedBatch(ctx, []string{text})
 	if err != nil {
 		return nil, err
 	}
+
 	if len(result.Vectors) > 0 && result.Vectors[0] != nil {
 		return result.Vectors[0], nil
 	}
+
 	if len(result.Skipped) == 0 {
-		return nil, fmt.Errorf("%s embedding provider returned no vector for the input", provider.name)
+		return nil, fmt.Errorf(
+			"%s embedding provider returned no vector for the input",
+			provider.name,
+		)
 	}
+
 	// The endpoint rejected this single input as un-embeddable, for example a query
 	// longer than the model's context window. The reason and whatever figures the
 	// endpoint reported travel to the caller so a person can shorten the input,
@@ -234,20 +266,30 @@ func (provider *openAICompatibleProvider) Embed(ctx context.Context, text string
 	slog.WarnContext(
 		ctx,
 		"embedding endpoint refused the input",
-		"provider", provider.name,
-		"model", provider.model,
-		"reason", string(skipped.Reason),
-		"reported_tokens", skipped.ReportedTokens,
-		"model_max_tokens", skipped.MaxTokens,
+		"provider",
+		provider.name,
+		"model",
+		provider.model,
+		"reason",
+		string(skipped.Reason),
+		"reported_tokens",
+		skipped.ReportedTokens,
+		"model_max_tokens",
+		skipped.MaxTokens,
 	)
-	return nil, fmt.Errorf("embed %s input: %w", provider.name, adapterr.NewEmbedInputRejected(
-		hostedInputRejection(skipped.Reason, skipped.ReportedTokens, skipped.MaxTokens),
-		fmt.Errorf(
-			"%s embedding endpoint refused the input as %s",
-			provider.name,
-			string(skipped.Reason),
+
+	return nil, fmt.Errorf(
+		"embed %s input: %w",
+		provider.name,
+		adapterr.NewEmbedInputRejected(
+			hostedInputRejection(skipped.Reason, skipped.ReportedTokens, skipped.MaxTokens),
+			fmt.Errorf(
+				"%s embedding endpoint refused the input as %s",
+				provider.name,
+				string(skipped.Reason),
+			),
 		),
-	))
+	)
 }
 
 // hostedInputRejection renders one endpoint refusal for the client-visible
@@ -272,10 +314,12 @@ func hostedInputRejection(
 			Maximum:  adapterr.UnreportedFigure(),
 		}
 	}
+
 	limit := adapterr.EmbedLimitTokens
 	if !maxTokens.Reported && !reportedTokens.Reported {
 		limit = adapterr.EmbedLimitUnreported
 	}
+
 	return adapterr.EmbedInputRejection{
 		Reason:   reason,
 		Limit:    limit,
@@ -284,7 +328,10 @@ func hostedInputRejection(
 	}
 }
 
-func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts []string) (result BatchResult, err error) {
+func (provider *openAICompatibleProvider) EmbedBatch(
+	ctx context.Context,
+	texts []string,
+) (result BatchResult, err error) {
 	if len(texts) == 0 {
 		return BatchResult{Vectors: nil, Skipped: nil}, nil
 	}
@@ -309,18 +356,24 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 	// reads why, and it holds whether the refusal happened here or upstream.
 	surviving := make([]int, 0, len(texts))
 	var skipped []SkippedInput
+
 	for index, text := range texts {
 		if hasNothingToEmbed(text) {
-			skipped = append(skipped, SkippedInput{
-				Index:          index,
-				Reason:         adapterr.EmbedRejectionEmptyContent,
-				ReportedTokens: adapterr.UnreportedFigure(),
-				MaxTokens:      adapterr.UnreportedFigure(),
-			})
+			skipped = append(
+				skipped,
+				SkippedInput{
+					Index:          index,
+					Reason:         adapterr.EmbedRejectionEmptyContent,
+					ReportedTokens: adapterr.UnreportedFigure(),
+					MaxTokens:      adapterr.UnreportedFigure(),
+				},
+			)
 			continue
 		}
+
 		surviving = append(surviving, index)
 	}
+
 	if refused := len(skipped); refused > 0 {
 		metrics.EmbedInputsRefusedEmpty(refused)
 	}
@@ -334,12 +387,30 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 		response, embedErr := provider.embedWithRetry(ctx, provider.embeddingParams(inputs))
 		if embedErr == nil {
 			if len(response.Data) != len(inputs) {
-				slog.ErrorContext(ctx, "embedding provider returned unexpected vector count", "provider", provider.name, "want", len(inputs), "got", len(response.Data), "err", errors.New("vector count mismatch"))
-				return BatchResult{}, fmt.Errorf("%s embedding provider returned %d vectors for %d texts", provider.name, len(response.Data), len(inputs))
+				slog.ErrorContext(
+					ctx,
+					"embedding provider returned unexpected vector count",
+					"provider",
+					provider.name,
+					"want",
+					len(inputs),
+					"got",
+					len(response.Data),
+					"err",
+					errors.New("vector count mismatch"),
+				)
+				return BatchResult{}, fmt.Errorf(
+					"%s embedding provider returned %d vectors for %d texts",
+					provider.name,
+					len(response.Data),
+					len(inputs),
+				)
 			}
+
 			for position, originalIndex := range surviving {
 				vectors[originalIndex] = toFloat32Vector(response.Data[position].Embedding)
 			}
+
 			return BatchResult{Vectors: vectors, Skipped: skipped}, nil
 		}
 
@@ -356,29 +427,49 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 			// unambiguous even though its message named no index.
 			position = 0
 		}
+
 		if position < 0 || position >= len(surviving) {
 			// The endpoint refused the request as carrying an over-long input but did
 			// not say which one, and several are in flight, so no single input can be
 			// dropped. The fault is still the request's and not the endpoint's, so it
 			// must not read as a rejecting embedder and must not degrade its health.
-			slog.WarnContext(ctx, "embedding endpoint refused a batch without naming the input", "provider", provider.name, "model", provider.model, "inputs", len(surviving), "err", embedErr)
-			return BatchResult{}, fmt.Errorf("embed %s batch: %w", provider.name, adapterr.NewEmbedInputRejected(
-				hostedInputRejection(
-					adapterr.EmbedRejectionContextLengthExceeded,
-					rejection.reportedTokens,
-					rejection.maxTokens,
-				),
+			slog.WarnContext(
+				ctx,
+				"embedding endpoint refused a batch without naming the input",
+				"provider",
+				provider.name,
+				"model",
+				provider.model,
+				"inputs",
+				len(surviving),
+				"err",
 				embedErr,
-			))
+			)
+
+			return BatchResult{}, fmt.Errorf(
+				"embed %s batch: %w",
+				provider.name,
+				adapterr.NewEmbedInputRejected(
+					hostedInputRejection(
+						adapterr.EmbedRejectionContextLengthExceeded,
+						rejection.reportedTokens,
+						rejection.maxTokens,
+					),
+					embedErr,
+				),
+			)
 		}
 
 		originalIndex := surviving[position]
-		skipped = append(skipped, SkippedInput{
-			Index:          originalIndex,
-			Reason:         adapterr.EmbedRejectionContextLengthExceeded,
-			ReportedTokens: rejection.reportedTokens,
-			MaxTokens:      rejection.maxTokens,
-		})
+		skipped = append(
+			skipped,
+			SkippedInput{
+				Index:          originalIndex,
+				Reason:         adapterr.EmbedRejectionContextLengthExceeded,
+				ReportedTokens: rejection.reportedTokens,
+				MaxTokens:      rejection.maxTokens,
+			},
+		)
 		// vectors[originalIndex] stays nil to mark the input as skipped.
 		surviving = append(surviving[:position], surviving[position+1:]...)
 	}
@@ -389,7 +480,9 @@ func (provider *openAICompatibleProvider) EmbedBatch(ctx context.Context, texts 
 }
 
 // embeddingParams builds the embeddings request for one input array.
-func (provider *openAICompatibleProvider) embeddingParams(inputs []string) openai.EmbeddingNewParams {
+func (provider *openAICompatibleProvider) embeddingParams(
+	inputs []string,
+) openai.EmbeddingNewParams {
 	params := openai.EmbeddingNewParams{
 		Input: openai.EmbeddingNewParamsInputUnion{
 			OfArrayOfStrings: inputs,
@@ -400,6 +493,7 @@ func (provider *openAICompatibleProvider) embeddingParams(inputs []string) opena
 	if provider.dimensions > 0 {
 		params.Dimensions = openai.Int(int64(provider.dimensions))
 	}
+
 	return params
 }
 
@@ -409,6 +503,7 @@ func toFloat32Vector(embedding []float64) []float32 {
 	for _, value := range embedding {
 		vector = append(vector, float32(value))
 	}
+
 	return vector
 }
 
@@ -419,8 +514,12 @@ func toFloat32Vector(embedding []float64) []float32 {
 // embedding sentinels stay wrapped inside the cause so callers that branch with
 // [errors.Is] keep working. Order matters: a cancellation is checked before the
 // unreachable default so a cancelled request never reads as a down endpoint.
-func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, params openai.EmbeddingNewParams) (*openai.CreateEmbeddingResponse, error) {
+func (provider *openAICompatibleProvider) embedWithRetry(
+	ctx context.Context,
+	params openai.EmbeddingNewParams,
+) (*openai.CreateEmbeddingResponse, error) {
 	var lastErr error
+
 	for attempt := 1; attempt <= embedMaxAttempts; attempt++ {
 		// Bound the request when a timeout is configured so an unresponsive
 		// endpoint fails the call instead of hanging the goroutine forever. The
@@ -430,79 +529,156 @@ func (provider *openAICompatibleProvider) embedWithRetry(ctx context.Context, pa
 		if provider.requestTimeout > 0 {
 			requestCtx, cancel = context.WithTimeout(ctx, provider.requestTimeout)
 		}
+
 		response, err := provider.client.Embeddings.New(requestCtx, params)
 		if cancel != nil {
 			cancel()
 		}
+
 		if err == nil {
 			return response, nil
 		}
+
 		lastErr = err
 
 		if paused, servicePaused := embedServicePaused(err); servicePaused {
 			slog.WarnContext(
 				ctx,
 				"embedding endpoint reported service paused",
-				"provider", provider.name,
-				"model", provider.model,
-				"status", paused.statusCode,
-				"message", paused.message,
+				"provider",
+				provider.name,
+				"model",
+				provider.model,
+				"status",
+				paused.statusCode,
+				"message",
+				paused.message,
 			)
-			cause := fmt.Errorf(
-				"%w: %w",
-				ErrEmbedderPaused,
-				err,
+			cause := fmt.Errorf("%w: %w", ErrEmbedderPaused, err)
+
+			return nil, fmt.Errorf(
+				"generate %s embeddings: %w",
+				provider.name,
+				adapterr.NewEmbedderPaused(
+					"embedding endpoint reported: "+paused.message,
+					embeddingEndpointServicePausedHint,
+					cause,
+				),
 			)
-			return nil, fmt.Errorf("generate %s embeddings: %w", provider.name, adapterr.NewEmbedderPaused(
-				"embedding endpoint reported: "+paused.message,
-				embeddingEndpointServicePausedHint,
-				cause,
-			))
 		}
 
 		statusCode, transient := transientEmbedStatus(err)
 		if !transient {
-			slog.ErrorContext(ctx, "generate embeddings failed", "provider", provider.name, "model", provider.model, "status", statusCode, "err", err)
+			slog.ErrorContext(
+				ctx,
+				"generate embeddings failed",
+				"provider",
+				provider.name,
+				"model",
+				provider.model,
+				"status",
+				statusCode,
+				"err",
+				err,
+			)
 			var apiErr *openai.Error
 			switch {
 			case ctx.Err() != nil:
 				// The caller's context ended (a job cancel or daemon shutdown), so
 				// report a cancellation, never a down endpoint.
-				return nil, fmt.Errorf("generate %s embeddings: %w", provider.name, adapterr.NewEmbedCancelled(ctx.Err()))
+				return nil, fmt.Errorf(
+					"generate %s embeddings: %w",
+					provider.name,
+					adapterr.NewEmbedCancelled(ctx.Err()),
+				)
 			case errors.Is(err, context.DeadlineExceeded):
 				// The per-request bound fired while the caller's context is still
 				// live: the endpoint accepted the request but did not answer within
 				// requestTimeout. Fail as unreachable so the job fails and retries
 				// later instead of the goroutine hanging forever on a wedged endpoint.
-				return nil, fmt.Errorf("generate %s embeddings: endpoint did not respond within %s: %w", provider.name, provider.requestTimeout, adapterr.NewEmbedderUnreachable(err))
+				return nil, fmt.Errorf(
+					"generate %s embeddings: endpoint did not respond within %s: %w",
+					provider.name,
+					provider.requestTimeout,
+					adapterr.NewEmbedderUnreachable(err),
+				)
 			case errors.Is(err, context.Canceled):
-				return nil, fmt.Errorf("generate %s embeddings: %w", provider.name, adapterr.NewEmbedCancelled(err))
+				return nil, fmt.Errorf(
+					"generate %s embeddings: %w",
+					provider.name,
+					adapterr.NewEmbedCancelled(err),
+				)
 			case errors.As(err, &apiErr):
 				// Reachable endpoint that answered with a non-429 HTTP error.
-				return nil, fmt.Errorf("generate %s embeddings: %w", provider.name, adapterr.NewEmbedderRejected(fmt.Errorf("%w: %w", ErrEmbedderRejected, err)))
+				return nil, fmt.Errorf(
+					"generate %s embeddings: %w",
+					provider.name,
+					adapterr.NewEmbedderRejected(fmt.Errorf("%w: %w", ErrEmbedderRejected, err)),
+				)
 			default:
 				// Network failure: the endpoint is unreachable.
-				return nil, fmt.Errorf("generate %s embeddings: %w", provider.name, adapterr.NewEmbedderUnreachable(err))
+				return nil, fmt.Errorf(
+					"generate %s embeddings: %w",
+					provider.name,
+					adapterr.NewEmbedderUnreachable(err),
+				)
 			}
 		}
+
 		if attempt == embedMaxAttempts {
 			break
 		}
 
 		backoff := embedBackoff(attempt)
-		slog.WarnContext(ctx, "embedding endpoint busy, retrying", "provider", provider.name, "model", provider.model, "status", statusCode, "attempt", attempt, "backoff", backoff)
+		slog.WarnContext(
+			ctx,
+			"embedding endpoint busy, retrying",
+			"provider",
+			provider.name,
+			"model",
+			provider.model,
+			"status",
+			statusCode,
+			"attempt",
+			attempt,
+			"backoff",
+			backoff,
+		)
 		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, fmt.Errorf("wait to retry %s embeddings: %w", provider.name, adapterr.NewEmbedCancelled(ctx.Err()))
+			return nil, fmt.Errorf(
+				"wait to retry %s embeddings: %w",
+				provider.name,
+				adapterr.NewEmbedCancelled(ctx.Err()),
+			)
 		case <-timer.C:
 		}
 	}
 
 	statusCode, _ := transientEmbedStatus(lastErr)
-	slog.ErrorContext(ctx, "embedding endpoint still busy after retries", "provider", provider.name, "model", provider.model, "status", statusCode, "attempts", embedMaxAttempts, "err", lastErr)
-	return nil, fmt.Errorf("generate %s embeddings after %d attempts: %w", provider.name, embedMaxAttempts, adapterr.NewEmbedderBusy(fmt.Errorf("%w: %w", ErrEmbedderBusy, lastErr)))
+	slog.ErrorContext(
+		ctx,
+		"embedding endpoint still busy after retries",
+		"provider",
+		provider.name,
+		"model",
+		provider.model,
+		"status",
+		statusCode,
+		"attempts",
+		embedMaxAttempts,
+		"err",
+		lastErr,
+	)
+
+	return nil, fmt.Errorf(
+		"generate %s embeddings after %d attempts: %w",
+		provider.name,
+		embedMaxAttempts,
+		adapterr.NewEmbedderBusy(fmt.Errorf("%w: %w", ErrEmbedderBusy, lastErr)),
+	)
 }
 
 // servicePausedReport carries what the endpoint actually said when it reported
@@ -519,13 +695,16 @@ func embedServicePaused(err error) (servicePausedReport, bool) {
 	if !errors.As(err, &apiErr) {
 		return servicePausedReport{statusCode: 0, message: ""}, false
 	}
+
 	if embeddingEndpointErrorType(apiErr.Type) != embeddingEndpointErrorTypeServicePaused {
 		return servicePausedReport{statusCode: 0, message: ""}, false
 	}
+
 	message := strings.TrimSpace(apiErr.Message)
 	if message == "" {
 		message = "the embedding service is paused"
 	}
+
 	return servicePausedReport{statusCode: apiErr.StatusCode, message: message}, true
 }
 
@@ -537,6 +716,7 @@ func transientEmbedStatus(err error) (int, bool) {
 	if !errors.As(err, &apiErr) {
 		return 0, false
 	}
+
 	switch apiErr.StatusCode {
 	case http.StatusTooManyRequests, http.StatusServiceUnavailable:
 		return apiErr.StatusCode, true
@@ -576,14 +756,17 @@ func oversizedInputRejection(err error) (perInputRejection, bool) {
 	if !errors.As(err, &apiErr) {
 		return unparsedInputRejection(), false
 	}
+
 	if apiErr.StatusCode != http.StatusBadRequest || apiErr.Code != embedCodeContextLengthExceeded {
 		return unparsedInputRejection(), false
 	}
+
 	message := apiErr.Message
 	index, indexFound := parseFirstSubmatchInt(embedInputIndexPattern, message)
 	if !indexFound {
 		index = embedInputIndexUnnamed
 	}
+
 	return perInputRejection{
 		index:          index,
 		reportedTokens: parseReportedFigure(embedResolvedTokensPattern, message),
@@ -614,6 +797,7 @@ func parseReportedFigure(pattern *regexp.Regexp, text string) adapterr.EmbedFigu
 	if !found {
 		return adapterr.UnreportedFigure()
 	}
+
 	return adapterr.ReportedFigure(value)
 }
 
@@ -624,10 +808,12 @@ func parseFirstSubmatchInt(pattern *regexp.Regexp, text string) (int, bool) {
 	if len(match) < 2 {
 		return 0, false
 	}
+
 	value, convErr := strconv.Atoi(match[1])
 	if convErr != nil {
 		return 0, false
 	}
+
 	return value, true
 }
 

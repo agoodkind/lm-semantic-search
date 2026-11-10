@@ -15,7 +15,9 @@ import (
 //go:embed templates/status/*.md.tmpl
 var statusTemplateFS embed.FS
 
-var statusTemplates = template.Must(template.ParseFS(statusTemplateFS, "templates/status/*.md.tmpl"))
+var statusTemplates = template.Must(
+	template.ParseFS(statusTemplateFS, "templates/status/*.md.tmpl"),
+)
 
 // shellQuote wraps a value in single quotes so a path containing a space or a
 // shell metacharacter survives being pasted onto a command line. An embedded
@@ -46,5 +48,6 @@ func renderStatusTemplate(name string, data statusTemplateData) string {
 	if err := statusTemplates.ExecuteTemplate(&buf, name, data); err != nil {
 		return "📁 " + data.Name
 	}
+
 	return strings.TrimRight(buf.String(), "\n")
 }

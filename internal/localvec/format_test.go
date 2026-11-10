@@ -24,8 +24,19 @@ func TestGenerateRowIDDistinctForSplitChildrenAndStableForUnsplit(t *testing.T) 
 
 	// An unsplit chunk (SplitPart 0) must reproduce the legacy id so the offline
 	// corpus is not re-embedded.
-	unsplit := model.StoredChunk{Content: "hello", RelativePath: "src/file.go", StartLine: 2, EndLine: 4}
-	legacyInput := fmt.Sprintf("%s:%d:%d:%s", unsplit.RelativePath, unsplit.StartLine, unsplit.EndLine, unsplit.Content)
+	unsplit := model.StoredChunk{
+		Content:      "hello",
+		RelativePath: "src/file.go",
+		StartLine:    2,
+		EndLine:      4,
+	}
+	legacyInput := fmt.Sprintf(
+		"%s:%d:%d:%s",
+		unsplit.RelativePath,
+		unsplit.StartLine,
+		unsplit.EndLine,
+		unsplit.Content,
+	)
 	sum := sha256.Sum256([]byte(legacyInput))
 	legacyID := "chunk_" + hex.EncodeToString(sum[:])[:rowIDHashLength]
 	if got := generateRowID(unsplit); got != legacyID {
@@ -47,6 +58,7 @@ func TestLocalRowRoundTripPreservesSplitPartAndUnsplitIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newRow returned error: %v", err)
 	}
+
 	if got := stored.chunk(0).SplitPart; got != split.SplitPart {
 		t.Fatalf("round-tripped SplitPart = %d, want %d", got, split.SplitPart)
 	}
@@ -108,15 +120,19 @@ func TestReadRowsToleratesTornTrailingLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readRows returned error on torn trailing line: %v", err)
 	}
+
 	if !exists {
 		t.Fatal("readRows reported collection absent")
 	}
+
 	if !healed {
 		t.Fatal("readRows did not report the torn line as healed")
 	}
+
 	if len(rows) != 2 {
 		t.Fatalf("rows = %d, want 2 (torn final line dropped)", len(rows))
 	}
+
 	if rows[0].ID != "chunk_a" || rows[1].ID != "chunk_b" {
 		t.Fatalf("unexpected rows: %+v", rows)
 	}
@@ -149,20 +165,25 @@ func TestLoadHealsTornTailOnDisk(t *testing.T) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
+
 	collectionPath := filepath.Join(root, "collection")
 	if err := os.MkdirAll(collectionPath, 0o700); err != nil {
 		t.Fatalf("mkdir collection: %v", err)
 	}
-	rows := []row{{
-		ID:               "chunk_a",
-		RelativePath:     "a.go",
-		Content:          "a",
-		ContentVectorKey: "ka",
-		Vector:           []float32{1, 0},
-	}}
+
+	rows := []row{
+		{
+			ID:               "chunk_a",
+			RelativePath:     "a.go",
+			Content:          "a",
+			ContentVectorKey: "ka",
+			Vector:           []float32{1, 0},
+		},
+	}
 	if err := assignLabels(rows); err != nil {
 		t.Fatalf("assignLabels: %v", err)
 	}
+
 	vectorIndex, err := buildVectorIndex(rows, 2)
 	if err != nil {
 		t.Fatalf("buildVectorIndex: %v", err)
@@ -171,19 +192,23 @@ func TestLoadHealsTornTailOnDisk(t *testing.T) {
 	if err := vectorIndex.Save(filepath.Join(collectionPath, indexFileName)); err != nil {
 		t.Fatalf("save index: %v", err)
 	}
+
 	path := filepath.Join(collectionPath, metadataFileName)
 	if err := rewriteRows(path, rows); err != nil {
 		t.Fatalf("write metadata: %v", err)
 	}
+
 	torn := `{"id":"chunk_b","relativePath":"b.go","conte`
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatalf("open metadata: %v", err)
 	}
+
 	if _, err := file.WriteString(torn); err != nil {
 		file.Close()
 		t.Fatalf("append torn metadata: %v", err)
 	}
+
 	if err := file.Close(); err != nil {
 		t.Fatalf("close metadata: %v", err)
 	}
@@ -194,15 +219,18 @@ func TestLoadHealsTornTailOnDisk(t *testing.T) {
 		loaded.mutex.Unlock()
 		t.Fatalf("loadLocked: %v", err)
 	}
+
 	loaded.mutex.Unlock()
 
 	reread, _, healed, err := readRows(path)
 	if err != nil {
 		t.Fatalf("reread after heal: %v", err)
 	}
+
 	if healed {
 		t.Fatal("torn tail still present on disk after load heal")
 	}
+
 	if len(reread) != 1 || reread[0].ID != "chunk_a" {
 		t.Fatalf("healed file rows = %+v, want only chunk_a", reread)
 	}
@@ -217,11 +245,18 @@ func TestNormalizeVectorLargeNormKeepsDirection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeVector: %v", err)
 	}
+
 	var squaredNorm float64
+
 	for _, value := range normalized {
 		squaredNorm += float64(value) * float64(value)
 	}
+
 	if math.Abs(squaredNorm-1.0) > 1e-3 {
-		t.Fatalf("normalized vector not unit length: squaredNorm=%v components=%v", squaredNorm, normalized)
+		t.Fatalf(
+			"normalized vector not unit length: squaredNorm=%v components=%v",
+			squaredNorm,
+			normalized,
+		)
 	}
 }

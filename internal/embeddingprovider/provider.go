@@ -27,6 +27,7 @@ func New(ctx context.Context, cfg config.Config) (embedding.Provider, error) {
 			slog.ErrorContext(ctx, "create ONNX embedding provider failed", "err", err)
 			return nil, fmt.Errorf("create ONNX embedding provider: %w", err)
 		}
+
 		return provider, nil
 	case model.EmbeddingProviderNone, config.EmbeddingProviderOpenAI:
 		// An unnamed provider builds the OpenAI-compatible adapter.
@@ -39,6 +40,7 @@ func New(ctx context.Context, cfg config.Config) (embedding.Provider, error) {
 			"err",
 			errors.New("only ONNX and OpenAI-compatible adapters are supported"),
 		)
+
 		return nil, fmt.Errorf(
 			"embedding provider %q is not supported; use %q or %q",
 			cfg.EmbeddingProvider,
@@ -46,6 +48,7 @@ func New(ctx context.Context, cfg config.Config) (embedding.Provider, error) {
 			config.EmbeddingProviderOpenAI,
 		)
 	}
+
 	requestTimeout := time.Duration(cfg.EmbeddingRequestTimeoutMS) * time.Millisecond
 	provider, err := embedding.NewOpenAICompatible(embedding.OpenAIOptions{
 		APIKey:         cfg.OpenAIAPIKey,
@@ -58,5 +61,6 @@ func New(ctx context.Context, cfg config.Config) (embedding.Provider, error) {
 		slog.ErrorContext(ctx, "create OpenAI-compatible embedding provider failed", "err", err)
 		return nil, fmt.Errorf("create OpenAI-compatible embedding provider: %w", err)
 	}
+
 	return provider, nil
 }

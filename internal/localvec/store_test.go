@@ -27,6 +27,7 @@ func (provider *fakeEmbeddingProvider) Embed(
 	if !found {
 		return nil, fmt.Errorf("no fake vector for %q", text)
 	}
+
 	return slices.Clone(vector), nil
 }
 
@@ -40,8 +41,10 @@ func (provider *fakeEmbeddingProvider) EmbedBatch(
 		if err != nil {
 			return embedding.BatchResult{}, err
 		}
+
 		vectors = append(vectors, vector)
 	}
+
 	return embedding.BatchResult{Vectors: vectors}, nil
 }
 
@@ -110,25 +113,21 @@ func TestStoreRoundTripSearchDeletePruneAndReuse(t *testing.T) {
 	); err != nil {
 		t.Fatalf("StageReindex returned error: %v", err)
 	}
+
 	if err := store.PromoteStaging(context.Background(), codebasePath); err != nil {
 		t.Fatalf("PromoteStaging returned error: %v", err)
 	}
 
-	results, err := store.Search(
-		context.Background(),
-		codebasePath,
-		"query",
-		2,
-		nil,
-		"",
-	)
+	results, err := store.Search(context.Background(), codebasePath, "query", 2, nil, "")
 	if err != nil {
 		t.Fatalf("Search returned error: %v", err)
 	}
+
 	gotContents := make([]string, 0, len(results))
 	for _, result := range results {
 		gotContents = append(gotContents, result.Content)
 	}
+
 	wantContents := []string{"first", "second"}
 	if !slices.Equal(gotContents, wantContents) {
 		t.Fatalf("Search contents = %v, want %v", gotContents, wantContents)
@@ -138,6 +137,7 @@ func TestStoreRoundTripSearchDeletePruneAndReuse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Count returned error: %v", err)
 	}
+
 	if count != 3 {
 		t.Fatalf("Count = %d, want 3", count)
 	}
@@ -150,10 +150,12 @@ func TestStoreRoundTripSearchDeletePruneAndReuse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadReuseVectorsForPath returned error: %v", err)
 	}
+
 	reusedVector, found := reuse[semantic.ContentVectorKey("second")]
 	if !found {
 		t.Fatal("reuse map is missing the second chunk content key")
 	}
+
 	if !slices.Equal(reusedVector.Vector, []float32{0.8, 0.6}) {
 		t.Fatalf("reused vector = %v, want [0.8 0.6]", reusedVector.Vector)
 	}
@@ -169,10 +171,12 @@ func TestStoreRoundTripSearchDeletePruneAndReuse(t *testing.T) {
 	); err != nil {
 		t.Fatalf("Reindex delete returned error: %v", err)
 	}
+
 	count, err = store.Count(context.Background(), codebasePath)
 	if err != nil {
 		t.Fatalf("Count after delete returned error: %v", err)
 	}
+
 	if count != 2 {
 		t.Fatalf("Count after delete = %d, want 2", count)
 	}
@@ -184,10 +188,12 @@ func TestStoreRoundTripSearchDeletePruneAndReuse(t *testing.T) {
 	); err != nil {
 		t.Fatalf("PruneToCurrent returned error: %v", err)
 	}
+
 	count, err = store.Count(context.Background(), codebasePath)
 	if err != nil {
 		t.Fatalf("Count after prune returned error: %v", err)
 	}
+
 	if count != 1 {
 		t.Fatalf("Count after prune = %d, want 1", count)
 	}
@@ -197,6 +203,7 @@ func TestStoreRecoversInterruptedPromotion(t *testing.T) {
 	t.Parallel()
 
 	const codebasePath = "/tmp/localvec-promotion-recovery"
+
 	testCases := []struct {
 		name            string
 		installStaging  bool
@@ -214,101 +221,115 @@ func TestStoreRecoversInterruptedPromotion(t *testing.T) {
 		},
 	}
 	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			stateRoot := t.TempDir()
-			provider := &fakeEmbeddingProvider{
-				vectors: map[string][]float32{
-					"old":   {1, 0},
-					"new":   {0, 1},
-					"query": {1, 0},
-				},
-			}
-			store, err := newStoreWithProvider(
-				config.Config{StateRoot: stateRoot},
-				provider,
-			)
-			if err != nil {
-				t.Fatalf("newStoreWithProvider returned error: %v", err)
-			}
-			stageAndPromote(
-				t,
-				store,
-				codebasePath,
-				[]model.StoredChunk{{
-					Content:       "old",
-					RelativePath:  "old.go",
-					FileExtension: ".go",
-				}},
-				semantic.CodeColumns(),
-			)
-			if err := store.StageReindex(
-				context.Background(),
-				codebasePath,
-				[]model.StoredChunk{{
-					Content:       "new",
-					RelativePath:  "new.go",
-					FileExtension: ".go",
-				}},
-				semantic.Removal{},
-				nil,
-				nil,
-				semantic.CodeColumns(),
-			); err != nil {
-				t.Fatalf("StageReindex returned error: %v", err)
-			}
-
-			collectionName := store.CollectionName(codebasePath)
-			livePath := filepath.Join(store.root, collectionName)
-			stagingPath := livePath + stagingCollectionSuffix
-			backupPath := livePath + backupCollectionSuffix
-			if err := os.Rename(livePath, backupPath); err != nil {
-				t.Fatalf("rename live collection to backup: %v", err)
-			}
-			if testCase.installStaging {
-				if err := os.Rename(stagingPath, livePath); err != nil {
-					t.Fatalf("rename staging collection to live: %v", err)
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				stateRoot := t.TempDir()
+				provider := &fakeEmbeddingProvider{
+					vectors: map[string][]float32{
+						"old":   {1, 0},
+						"new":   {0, 1},
+						"query": {1, 0},
+					},
 				}
-			}
-
-			reopened, err := newStoreWithProvider(
-				config.Config{StateRoot: stateRoot},
-				provider,
-			)
-			if err != nil {
-				t.Fatalf("reopen local vector store: %v", err)
-			}
-			listed, err := reopened.ListCollections(context.Background())
-			if err != nil {
-				t.Fatalf("ListCollections returned error: %v", err)
-			}
-			if !slices.Equal(listed, []string{collectionName}) {
-				t.Fatalf("ListCollections returned %v, want %q", listed, collectionName)
-			}
-
-			results, err := reopened.Search(
-				context.Background(),
-				codebasePath,
-				"query",
-				1,
-				nil,
-				"",
-			)
-			if err != nil {
-				t.Fatalf("Search after recovery returned error: %v", err)
-			}
-			if len(results) != 1 || results[0].Content != testCase.expectedContent {
-				t.Fatalf(
-					"Search after recovery returned %+v, want %q",
-					results,
-					testCase.expectedContent,
+				store, err := newStoreWithProvider(
+					config.Config{StateRoot: stateRoot},
+					provider,
 				)
-			}
-			if _, err := os.Stat(livePath); err != nil {
-				t.Fatalf("inspect recovered live collection: %v", err)
-			}
-			if _, err := os.Stat(backupPath); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("backup path still exists after recovery: %v", err)
-			}
-		})
+				if err != nil {
+					t.Fatalf("newStoreWithProvider returned error: %v", err)
+				}
+
+				stageAndPromote(
+					t,
+					store,
+					codebasePath,
+					[]model.StoredChunk{
+						{
+							Content:       "old",
+							RelativePath:  "old.go",
+							FileExtension: ".go",
+						},
+					},
+					semantic.CodeColumns(),
+				)
+				if err := store.StageReindex(
+					context.Background(),
+					codebasePath,
+					[]model.StoredChunk{
+						{
+							Content:       "new",
+							RelativePath:  "new.go",
+							FileExtension: ".go",
+						},
+					},
+					semantic.Removal{},
+					nil,
+					nil,
+					semantic.CodeColumns(),
+				); err != nil {
+					t.Fatalf("StageReindex returned error: %v", err)
+				}
+
+				collectionName := store.CollectionName(codebasePath)
+				livePath := filepath.Join(store.root, collectionName)
+				stagingPath := livePath + stagingCollectionSuffix
+				backupPath := livePath + backupCollectionSuffix
+				if err := os.Rename(livePath, backupPath); err != nil {
+					t.Fatalf("rename live collection to backup: %v", err)
+				}
+
+				if testCase.installStaging {
+					if err := os.Rename(stagingPath, livePath); err != nil {
+						t.Fatalf("rename staging collection to live: %v", err)
+					}
+				}
+
+				reopened, err := newStoreWithProvider(
+					config.Config{StateRoot: stateRoot},
+					provider,
+				)
+				if err != nil {
+					t.Fatalf("reopen local vector store: %v", err)
+				}
+
+				listed, err := reopened.ListCollections(context.Background())
+				if err != nil {
+					t.Fatalf("ListCollections returned error: %v", err)
+				}
+
+				if !slices.Equal(listed, []string{collectionName}) {
+					t.Fatalf("ListCollections returned %v, want %q", listed, collectionName)
+				}
+
+				results, err := reopened.Search(
+					context.Background(),
+					codebasePath,
+					"query",
+					1,
+					nil,
+					"",
+				)
+				if err != nil {
+					t.Fatalf("Search after recovery returned error: %v", err)
+				}
+
+				if len(results) != 1 || results[0].Content != testCase.expectedContent {
+					t.Fatalf(
+						"Search after recovery returned %+v, want %q",
+						results,
+						testCase.expectedContent,
+					)
+				}
+
+				if _, err := os.Stat(livePath); err != nil {
+					t.Fatalf("inspect recovered live collection: %v", err)
+				}
+
+				if _, err := os.Stat(backupPath); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("backup path still exists after recovery: %v", err)
+				}
+			},
+		)
 	}
 }

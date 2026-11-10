@@ -24,10 +24,12 @@ import (
 // test dials. It returns the socket path.
 func startMaintenanceTestDaemon(t *testing.T) string {
 	t.Helper()
+
 	root := t.TempDir()
 	for _, variable := range sandbox.Env(root) {
 		t.Setenv(variable.Name, variable.Value)
 	}
+
 	// The standard profile with no store address builds the Milvus-backed
 	// service in its not-configured shape, so the daemon needs neither a store
 	// nor a model download.
@@ -43,6 +45,7 @@ func startMaintenanceTestDaemon(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("MkdirTemp returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
 	socketPath := filepath.Join(socketDir, "d.sock")
 	t.Setenv("CLAUDE_CONTEXTD_SOCKET_PATH", socketPath)
@@ -51,19 +54,32 @@ func startMaintenanceTestDaemon(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("config.Default returned error: %v", err)
 	}
-	for _, directory := range []string{cfg.StateRoot, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.SocketsDir, cfg.ChunksDir, cfg.GraphDir, cfg.ContextRoot} {
+
+	for _, directory := range []string{
+		cfg.StateRoot,
+		cfg.LogsDir,
+		cfg.MerkleDir,
+		cfg.LocksDir,
+		cfg.SocketsDir,
+		cfg.ChunksDir,
+		cfg.GraphDir,
+		cfg.ContextRoot,
+	} {
 		if err := os.MkdirAll(directory, 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s) returned error: %v", directory, err)
 		}
 	}
+
 	manager, err := daemon.NewManager(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("daemon.NewManager returned error: %v", err)
 	}
+
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", socketPath)
 	if err != nil {
 		t.Fatalf("listen on %s returned error: %v", socketPath, err)
 	}
+
 	server := grpc.NewServer(
 		grpc.MaxRecvMsgSize(grpcutil.MaxMessageBytes),
 		grpc.MaxSendMsgSize(grpcutil.MaxMessageBytes),
@@ -81,6 +97,7 @@ func startMaintenanceTestDaemon(t *testing.T) string {
 			t.Errorf("manager.Close returned error: %v", err)
 		}
 	})
+
 	return socketPath
 }
 
@@ -98,6 +115,7 @@ func runCLICapturingStdout(t *testing.T, args []string) string {
 	if err != nil {
 		t.Fatalf("os.Pipe returned error: %v", err)
 	}
+
 	captured := make(chan capturedStdout, 1)
 	go func() {
 		output, readErr := io.ReadAll(reader)
@@ -112,14 +130,17 @@ func runCLICapturingStdout(t *testing.T, args []string) string {
 	if closeErr := writer.Close(); closeErr != nil {
 		t.Fatalf("close pipe writer: %v", closeErr)
 	}
+
 	result := <-captured
 	output, readErr := result.output, result.err
 	if readErr != nil {
 		t.Fatalf("read captured stdout: %v", readErr)
 	}
+
 	if runErr != nil {
 		t.Fatalf("%s returned error: %v\n%s", strings.Join(args, " "), runErr, output)
 	}
+
 	return string(output)
 }
 
@@ -128,8 +149,20 @@ func runCLICapturingStdout(t *testing.T, args []string) string {
 func TestDaemonMaintenanceCommandsSwitchTheRunningDaemon(t *testing.T) {
 	socketPath := startMaintenanceTestDaemon(t)
 
-	onOutput := runCLICapturingStdout(t, []string{"--socket", socketPath, "daemon", "maintenance", "on", "--reason", "milvus backup"})
-	if !strings.Contains(onOutput, "Maintenance mode is on") || !strings.Contains(onOutput, "milvus backup") {
+	onOutput := runCLICapturingStdout(
+		t,
+		[]string{
+			"--socket",
+			socketPath,
+			"daemon",
+			"maintenance",
+			"on",
+			"--reason",
+			"milvus backup",
+		},
+	)
+	if !strings.Contains(onOutput, "Maintenance mode is on") ||
+		!strings.Contains(onOutput, "milvus backup") {
 		t.Fatalf("daemon maintenance on output lacks the banner and reason:\n%s", onOutput)
 	}
 
@@ -143,14 +176,19 @@ func TestDaemonMaintenanceCommandsSwitchTheRunningDaemon(t *testing.T) {
 	if err := json.Unmarshal([]byte(statusOutput), &statusReply); err != nil {
 		t.Fatalf("status JSON did not parse: %v\n%s", err, statusOutput)
 	}
+
 	if !statusReply.Maintenance.Enabled || statusReply.Maintenance.Reason != "milvus backup" {
 		t.Fatalf("status maintenance = %+v, want enabled with the reason", statusReply.Maintenance)
 	}
 
-	offOutput := runCLICapturingStdout(t, []string{"--socket", socketPath, "daemon", "maintenance", "off"})
+	offOutput := runCLICapturingStdout(
+		t,
+		[]string{"--socket", socketPath, "daemon", "maintenance", "off"},
+	)
 	if !strings.Contains(offOutput, "Maintenance mode is off") {
 		t.Fatalf("daemon maintenance off output lacks the acknowledgement:\n%s", offOutput)
 	}
+
 	afterOutput := runCLICapturingStdout(t, []string{"--socket", socketPath, "--json", "status"})
 	if strings.Contains(afterOutput, `"enabled":true`) {
 		t.Fatalf("status still reports maintenance after it was turned off:\n%s", afterOutput)

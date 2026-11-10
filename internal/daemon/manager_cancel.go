@@ -15,19 +15,25 @@ func (manager *Manager) CancelJob(ctx context.Context, jobID string) (model.Job,
 	if !found {
 		manager.mu.Unlock()
 		manager.policyMutationMutex.Unlock()
+
 		return model.Job{}, fmt.Errorf("job not found: %s", jobID)
 	}
+
 	if isTerminalJobState(job.State) {
 		manager.mu.Unlock()
 		manager.policyMutationMutex.Unlock()
 		manager.jobScheduler.DiscardStagedPolicyUpdate(jobID)
+
 		return job, nil
 	}
+
 	if err := manager.pauseAutomaticIndexingLocked(ctx, job); err != nil {
 		manager.mu.Unlock()
 		manager.policyMutationMutex.Unlock()
+
 		return model.Job{}, err
 	}
+
 	cancel := manager.cancels[jobID]
 	jobDone := manager.done[jobID]
 	manager.mu.Unlock()
@@ -48,9 +54,11 @@ func (manager *Manager) CancelJob(ctx context.Context, jobID string) (model.Job,
 		manager.policyMutationMutex.Unlock()
 		return model.Job{}, fmt.Errorf("job not found: %s", jobID)
 	}
+
 	if isTerminalJobState(job.State) {
 		manager.jobScheduler.DiscardStagedPolicyUpdate(jobID)
 		manager.policyMutationMutex.Unlock()
+
 		return job, nil
 	}
 
@@ -61,6 +69,8 @@ func (manager *Manager) CancelJob(ctx context.Context, jobID string) (model.Job,
 	if !found {
 		return model.Job{}, fmt.Errorf("job not found: %s", jobID)
 	}
+
 	manager.runCancellationFollowup(ctx, followup)
+
 	return updated, nil
 }

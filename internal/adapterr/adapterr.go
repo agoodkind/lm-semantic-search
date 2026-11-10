@@ -44,10 +44,12 @@ func (e *AdapterError) Error() string {
 	if e == nil {
 		return "<nil adapter error>"
 	}
+
 	out := string(e.Class) + ": " + e.Message
 	if e.Cause != nil {
 		out += ": " + e.Cause.Error()
 	}
+
 	return out
 }
 
@@ -56,6 +58,7 @@ func (e *AdapterError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
+
 	return e.Cause
 }
 
@@ -65,10 +68,12 @@ func (e *AdapterError) Is(target error) bool {
 	if e == nil {
 		return target == nil
 	}
+
 	other, ok := target.(*AdapterError)
 	if !ok {
 		return false
 	}
+
 	return e.Class == other.Class
 }
 
@@ -88,5 +93,6 @@ func (e *MCPError) Error() string {
 	if e == nil {
 		return "<nil mcp error>"
 	}
+
 	return e.Message
 }

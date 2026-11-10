@@ -44,6 +44,7 @@ var reconnectJitter = func(limit time.Duration) time.Duration {
 	if err != nil {
 		return limit
 	}
+
 	return time.Duration(randomValue.Int64())
 }
 
@@ -53,9 +54,11 @@ var reconnectJitter = func(limit time.Duration) time.Duration {
 func (service *Service) callTimeouts() milvusgrpc.CallTimeouts {
 	configuredMetadata := config.MilvusMetadataCallTimeout(service.cfg.MilvusMetadataCallTimeoutMS)
 	configuredMutation := config.MilvusMutationCallTimeout(service.cfg.MilvusMutationCallTimeoutMS)
-	return milvusgrpc.DefaultCallTimeouts().
-		WithMetadata(configuredMetadata).
-		WithMutation(configuredMutation)
+
+	return milvusgrpc.DefaultCallTimeouts().WithMetadata(configuredMetadata).
+		WithMutation(
+			configuredMutation,
+		)
 }
 
 func (service *Service) dialMilvus(ctx context.Context) (*milvusclient.Client, error) {
@@ -75,6 +78,7 @@ func (service *Service) dialMilvus(ctx context.Context) (*milvusclient.Client, e
 	if err != nil {
 		return nil, milvusDialError{address: service.cfg.MilvusAddress, err: err}
 	}
+
 	return client, nil
 }
 
@@ -99,7 +103,14 @@ func (service *Service) startReconnector(ctx context.Context) {
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(reconnectContext, "Milvus reconnect panic", "err", fmt.Errorf("panic: %v", recovered), "address", service.cfg.MilvusAddress)
+				slog.ErrorContext(
+					reconnectContext,
+					"Milvus reconnect panic",
+					"err",
+					fmt.Errorf("panic: %v", recovered),
+					"address",
+					service.cfg.MilvusAddress,
+				)
 			}
 		}()
 		service.reconnectLoop(reconnectContext)
@@ -110,6 +121,7 @@ func (service *Service) reconnectLoop(ctx context.Context) {
 	defer close(service.reconnectDone)
 
 	backoffLimit := reconnectBackoffBase
+
 	for attempt := 1; ; attempt++ {
 		client, err := service.dialMilvus(ctx)
 		if err == nil {
@@ -118,25 +130,45 @@ func (service *Service) reconnectLoop(ctx context.Context) {
 				service.noteReconnectSucceeded(ctx, attempt)
 				return
 			}
+
 			if closeErr := client.Close(ctx); closeErr != nil {
 				slog.WarnContext(ctx, "close Milvus client after recovery failure", "err", closeErr)
 			}
+
 			service.milvus = nil
 		}
+
 		if attempt == 1 || attempt%10 == 0 {
-			slog.WarnContext(ctx, "Milvus reconnect failed", "address", service.cfg.MilvusAddress, "attempt", attempt, "err", err)
+			slog.WarnContext(
+				ctx,
+				"Milvus reconnect failed",
+				"address",
+				service.cfg.MilvusAddress,
+				"attempt",
+				attempt,
+				"err",
+				err,
+			)
 		}
 
 		sleepDuration := reconnectJitter(backoffLimit)
 		if !reconnectSleep(ctx, sleepDuration) {
 			return
 		}
+
 		backoffLimit = nextReconnectBackoff(backoffLimit)
 	}
 }
 
 func (service *Service) noteReconnectSucceeded(ctx context.Context, attempt int) {
-	slog.InfoContext(ctx, "Milvus reconnect succeeded", "address", service.cfg.MilvusAddress, "attempt", attempt)
+	slog.InfoContext(
+		ctx,
+		"Milvus reconnect succeeded",
+		"address",
+		service.cfg.MilvusAddress,
+		"attempt",
+		attempt,
+	)
 }
 
 func (service *Service) publishClient(
@@ -149,10 +181,13 @@ func (service *Service) publishClient(
 	if err := service.recoverInterruptedPromotions(ctx); err != nil {
 		wrappedErr := fmt.Errorf("recover interrupted collection promotion: %w", err)
 		slog.WarnContext(ctx, "publish Milvus client failed", "err", wrappedErr)
+
 		return wrappedErr
 	}
+
 	service.available.Store(true)
 	service.startResidencyReconciliation(ctx, client)
+
 	return nil
 }
 
@@ -166,6 +201,7 @@ func (service *Service) startResidencyReconciliation(
 	if service.reconciliationCancel != nil {
 		service.reconciliationCancel()
 	}
+
 	service.reconciliationCancel = cancel
 	service.reconciliationWork.Add(1)
 	service.reconciliationMutex.Unlock()
@@ -177,7 +213,8 @@ func (service *Service) startResidencyReconciliation(
 				slog.ErrorContext(
 					reconciliationContext,
 					"Milvus residency reconciliation panic",
-					"err", fmt.Errorf("panic: %v", recovered),
+					"err",
+					fmt.Errorf("panic: %v", recovered),
 				)
 			}
 		}()
@@ -190,24 +227,25 @@ func (service *Service) reconcileResidency(
 	client *milvusclient.Client,
 	generation uint64,
 ) {
-	collections, err := client.ListCollections(
-		ctx,
-		milvusclient.NewListCollectionOption(),
-	)
+	collections, err := client.ListCollections(ctx, milvusclient.NewListCollectionOption())
 	if err != nil {
 		service.handleReconciliationError(ctx, err, "list collections")
 		return
 	}
+
 	loading := make([]string, 0)
+
 	for _, collectionName := range collections {
 		if isRecoveryCollection(collectionName) {
 			continue
 		}
+
 		// Clyde loads and searches document collections; the idle timer here
 		// would unload them.
 		if collection.IsDocumentName(collectionName) {
 			continue
 		}
+
 		loadState, loadStateErr := client.GetLoadState(
 			ctx,
 			milvusclient.NewGetLoadStateOption(collectionName),
@@ -218,8 +256,10 @@ func (service *Service) reconcileResidency(
 				loadStateErr,
 				"get load state for "+collectionName,
 			)
+
 			return
 		}
+
 		state := collectionResidencyUnknown
 		switch loadState.State {
 		case entity.LoadStateLoaded:
@@ -231,16 +271,13 @@ func (service *Service) reconcileResidency(
 		case entity.LoadStateNotLoad:
 			state = collectionResidencyCold
 		}
-		service.residency.applyReconciliation(
-			ctx,
-			generation,
-			collectionName,
-			state,
-		)
+
+		service.residency.applyReconciliation(ctx, generation, collectionName, state)
 		if state == collectionResidencyLoading {
 			loading = append(loading, collectionName)
 		}
 	}
+
 	service.refreshLoadingResidency(ctx, client, generation, loading)
 }
 
@@ -252,7 +289,15 @@ func (service *Service) handleReconciliationError(
 	if storeUnavailable(err) {
 		service.residency.invalidateResidency()
 	}
-	slog.WarnContext(ctx, "Milvus residency reconciliation failed", "operation", operation, "err", err)
+
+	slog.WarnContext(
+		ctx,
+		"Milvus residency reconciliation failed",
+		"operation",
+		operation,
+		"err",
+		err,
+	)
 }
 
 func (service *Service) stopResidencyReconciliation(ctx context.Context) error {
@@ -260,6 +305,7 @@ func (service *Service) stopResidencyReconciliation(ctx context.Context) error {
 	if service.reconciliationCancel != nil {
 		service.reconciliationCancel()
 	}
+
 	service.reconciliationMutex.Unlock()
 	done := make(chan struct{})
 	go func() {
@@ -272,17 +318,16 @@ func (service *Service) stopResidencyReconciliation(ctx context.Context) error {
 					fmt.Errorf("%v", recovered),
 				)
 			}
+
 			close(done)
 		}()
 		service.reconciliationWork.Wait()
 	}()
 	select {
 	case <-ctx.Done():
-		err := fmt.Errorf(
-			"wait for Milvus residency reconciliation shutdown: %w",
-			ctx.Err(),
-		)
+		err := fmt.Errorf("wait for Milvus residency reconciliation shutdown: %w", ctx.Err())
 		slog.WarnContext(ctx, "Milvus residency reconciliation shutdown canceled", "err", err)
+
 		return err
 	case <-done:
 		return nil
@@ -294,5 +339,6 @@ func nextReconnectBackoff(current time.Duration) time.Duration {
 	if next > reconnectBackoffCap {
 		return reconnectBackoffCap
 	}
+
 	return next
 }

@@ -26,7 +26,10 @@ const MaxMessageBytes = 128 << 20
 // socket. Callers should wrap their context with [WithCorrelation]
 // (or call [correlation.NewOutgoingContext] directly) so the daemon
 // receives the trace, span, and request identifiers.
-func DialDaemon(ctx context.Context, socketPath string) (*grpc.ClientConn, pb.SemanticSearchDaemonServiceClient, error) {
+func DialDaemon(
+	ctx context.Context,
+	socketPath string,
+) (*grpc.ClientConn, pb.SemanticSearchDaemonServiceClient, error) {
 	connection, err := grpc.NewClient(
 		"passthrough:///unix",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -43,7 +46,9 @@ func DialDaemon(ctx context.Context, socketPath string) (*grpc.ClientConn, pb.Se
 		slog.ErrorContext(ctx, "create gRPC client failed", "socket_path", socketPath, "err", err)
 		return nil, nil, fmt.Errorf("create gRPC client for %s: %w", socketPath, err)
 	}
+
 	connection.Connect()
+
 	return connection, pb.NewSemanticSearchDaemonServiceClient(connection), nil
 }
 

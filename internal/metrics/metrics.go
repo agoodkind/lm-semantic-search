@@ -136,6 +136,7 @@ func ChunksReused(count int) {
 	if count <= 0 {
 		return
 	}
+
 	embedChunksReusedTotal.Add(int64(count))
 }
 

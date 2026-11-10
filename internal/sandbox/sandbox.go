@@ -65,6 +65,7 @@ func realModelCacheRoot() string {
 	if err != nil {
 		return ""
 	}
+
 	return resolved.ModelCacheRoot
 }
 
@@ -76,16 +77,20 @@ func Apply(dir string) ([]Var, error) {
 		if variable.Value == "" {
 			continue
 		}
+
 		if existing, found := os.LookupEnv(variable.Name); found {
 			effective = append(effective, Var{Name: variable.Name, Value: existing})
 			continue
 		}
+
 		if err := os.Setenv(variable.Name, variable.Value); err != nil {
 			slog.Error("set sandbox environment default failed", "name", variable.Name, "err", err)
 			return nil, fmt.Errorf("set %s: %w", variable.Name, err)
 		}
+
 		effective = append(effective, variable)
 	}
+
 	return effective, nil
 }
 
@@ -96,11 +101,13 @@ func Resolve(dir string) (config.Config, error) {
 	if _, err := Apply(dir); err != nil {
 		return config.Config{}, err
 	}
+
 	resolved, err := config.Default()
 	if err != nil {
 		slog.Error("resolve sandbox config failed", "root", dir, "err", err)
 		return config.Config{}, fmt.Errorf("resolve sandbox config: %w", err)
 	}
+
 	return resolved, nil
 }
 

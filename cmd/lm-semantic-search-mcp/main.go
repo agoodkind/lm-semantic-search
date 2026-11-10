@@ -29,21 +29,37 @@ func main() {
 			_, _ = fmt.Fprintf(os.Stderr, "write version output: %v\n", err)
 			os.Exit(1)
 		}
+
 		return
 	}
+
 	rootContext := installCorrelationLogger("mcp-boot")
-	slog.InfoContext(rootContext, "lm-semantic-search-mcp starting", "pid", os.Getpid(), "parent_pid", os.Getppid())
+	slog.InfoContext(
+		rootContext,
+		"lm-semantic-search-mcp starting",
+		"pid",
+		os.Getpid(),
+		"parent_pid",
+		os.Getppid(),
+	)
 	exitCode := run(rootContext)
 	slog.InfoContext(rootContext, "lm-semantic-search-mcp stopping", "exit_code", exitCode)
 	os.Exit(exitCode)
 }
 
 func writeVersion(writer io.Writer) error {
-	_, err := fmt.Fprintf(writer, "version: %s commit=%s build_time=%s\n", version.String(), version.Commit, version.BuildTime)
+	_, err := fmt.Fprintf(
+		writer,
+		"version: %s commit=%s build_time=%s\n",
+		version.String(),
+		version.Commit,
+		version.BuildTime,
+	)
 	if err != nil {
 		slog.Error("write version output failed", "err", err)
 		return fmt.Errorf("write version output: %w", err)
 	}
+
 	return nil
 }
 
@@ -52,21 +68,31 @@ func writeVersion(writer io.Writer) error {
 // carries the given origin so boot records inherit a trace_id.
 func installCorrelationLogger(origin string) context.Context {
 	jsonHandler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})
-	handler := correlation.SlogHandler(jsonHandler, correlation.HandlerOptions{
-		Strict:   true,
-		Required: []string{"trace_id", "span_id"},
-	})
-	slog.SetDefault(slog.New(handler))
-	rootCorrelation := correlation.New("").WithIdentityAttributes(
-		correlation.IdentityAttribute{Key: "origin", Value: origin},
+	handler := correlation.SlogHandler(
+		jsonHandler,
+		correlation.HandlerOptions{
+			Strict:   true,
+			Required: []string{"trace_id", "span_id"},
+		},
 	)
+	slog.SetDefault(slog.New(handler))
+	rootCorrelation := correlation.New("").WithIdentityAttributes(correlation.IdentityAttribute{
+		Key:   "origin",
+		Value: origin,
+	})
+
 	return correlation.WithContext(context.Background(), rootCorrelation)
 }
 
 func run(rootContext context.Context) (exitCode int) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			slog.ErrorContext(rootContext, "lm-semantic-search-mcp panicked", "err", fmt.Errorf("panic: %v", recovered))
+			slog.ErrorContext(
+				rootContext,
+				"lm-semantic-search-mcp panicked",
+				"err",
+				fmt.Errorf("panic: %v", recovered),
+			)
 			exitCode = 1
 		}
 	}()
@@ -75,5 +101,6 @@ func run(rootContext context.Context) (exitCode int) {
 		slog.ErrorContext(rootContext, "lm-semantic-search-mcp failed", "err", err)
 		return 1
 	}
+
 	return 0
 }

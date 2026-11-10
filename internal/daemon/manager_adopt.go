@@ -23,12 +23,22 @@ import (
 //
 // Adoption happens on use (the resolve path), so the minted id persists and is
 // stable across later calls, unlike the per-call synthesized id it replaces.
-func (manager *Manager) adoptUnregisteredCodebase(ctx context.Context, canonicalPath string) (model.Codebase, bool) {
+func (manager *Manager) adoptUnregisteredCodebase(
+	ctx context.Context,
+	canonicalPath string,
+) (model.Codebase, bool) {
 	indexConfig := manager.enrichIndexConfig(model.IndexConfig{
-		SplitterType: "", SplitterChunkSize: 0, SplitterOverlap: 0,
-		IgnorePatterns: nil, IncludeSubmodules: nil, IgnoreDigest: "",
-		EmbeddingProvider: "", EmbeddingModel: "", EmbeddingDimension: 0,
-		VectorBackend: "", Hybrid: false,
+		SplitterType:       "",
+		SplitterChunkSize:  0,
+		SplitterOverlap:    0,
+		IgnorePatterns:     nil,
+		IncludeSubmodules:  nil,
+		IgnoreDigest:       "",
+		EmbeddingProvider:  "",
+		EmbeddingModel:     "",
+		EmbeddingDimension: 0,
+		VectorBackend:      "",
+		Hybrid:             false,
 	})
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
 
@@ -42,8 +52,10 @@ func (manager *Manager) adoptUnregisteredCodebase(ctx context.Context, canonical
 	if existing, found := manager.findCodebaseByExactRoot(canonicalPath); found {
 		manager.mu.Unlock()
 		manager.policyMutationMutex.Unlock()
+
 		return existing, true
 	}
+
 	record := newCodebaseRecord(canonicalPath)
 	record.Status = model.CodebaseStatusIndexed
 	record.EffectiveConfig = indexConfig
@@ -58,8 +70,10 @@ func (manager *Manager) adoptUnregisteredCodebase(ctx context.Context, canonical
 		manager.policyMutationMutex.Unlock()
 		slog.ErrorContext(ctx, "adopt: persist registry failed", "path", canonicalPath, "err", err)
 		var empty model.Codebase
+
 		return empty, false
 	}
+
 	// The adopted EffectiveConfig may carry custom ignore patterns, so signal the
 	// observer to invalidate any stale cached matcher; the next decision rebuilds
 	// from the registry source of truth.
@@ -68,17 +82,37 @@ func (manager *Manager) adoptUnregisteredCodebase(ctx context.Context, canonical
 	manager.policyMutationMutex.Unlock()
 
 	manager.seedAdoptedMerkle(ctx, record)
-	notifyCtx := correlation.WithContext(context.WithoutCancel(ctx), correlation.FromContext(ctx).Child())
+	notifyCtx := correlation.WithContext(
+		context.WithoutCancel(ctx),
+		correlation.FromContext(ctx).Child(),
+	)
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(notifyCtx, "notify codebase added panic", "codebase_id", record.ID, "err", recovered)
+				slog.ErrorContext(
+					notifyCtx,
+					"notify codebase added panic",
+					"codebase_id",
+					record.ID,
+					"err",
+					recovered,
+				)
 			}
 		}()
 		manager.notifyCodebaseAdded(notifyCtx, record)
 	}()
-	slog.InfoContext(ctx, "adopted unregistered codebase", "codebase_id", record.ID, "path", canonicalPath, "collection", collectionName)
+	slog.InfoContext(
+		ctx,
+		"adopted unregistered codebase",
+		"codebase_id",
+		record.ID,
+		"path",
+		canonicalPath,
+		"collection",
+		collectionName,
+	)
 	manager.enqueueAdoptionSync(ctx, canonicalPath)
+
 	return record, true
 }
 
@@ -87,20 +121,52 @@ func (manager *Manager) adoptUnregisteredCodebase(ctx context.Context, canonical
 // accepts it. It is best effort: a missing TS merkle or a write failure leaves
 // no baseline, and the first sync then re-embeds every file.
 func (manager *Manager) seedAdoptedMerkle(ctx context.Context, codebase model.Codebase) {
-	snapshot, found, err := migrate.LoadTSMerkle(ctx, manager.config.ContextRoot, codebase.CanonicalPath)
+	snapshot, found, err := migrate.LoadTSMerkle(
+		ctx,
+		manager.config.ContextRoot,
+		codebase.CanonicalPath,
+	)
 	if err != nil {
-		slog.WarnContext(ctx, "adopt: load TS merkle failed; first sync will re-embed all files", "path", codebase.CanonicalPath, "err", err)
+		slog.WarnContext(
+			ctx,
+			"adopt: load TS merkle failed; first sync will re-embed all files",
+			"path",
+			codebase.CanonicalPath,
+			"err",
+			err,
+		)
 		return
 	}
+
 	if !found || len(snapshot.Files) == 0 {
 		return
 	}
-	seeded := merkle.Snapshot{ConfigDigest: codebase.EffectiveConfig.IgnoreDigest, Files: snapshot.Files, Inodes: nil}
+
+	seeded := merkle.Snapshot{
+		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
+		Files:        snapshot.Files,
+		Inodes:       nil,
+	}
 	if err := merkle.WriteSnapshot(manager.merklePath(codebase.ID), seeded); err != nil {
-		slog.WarnContext(ctx, "adopt: seed merkle write failed; first sync will re-embed all files", "path", codebase.CanonicalPath, "err", err)
+		slog.WarnContext(
+			ctx,
+			"adopt: seed merkle write failed; first sync will re-embed all files",
+			"path",
+			codebase.CanonicalPath,
+			"err",
+			err,
+		)
 		return
 	}
-	slog.InfoContext(ctx, "adopt: seeded merkle from TS baseline", "codebase_id", codebase.ID, "files", len(snapshot.Files))
+
+	slog.InfoContext(
+		ctx,
+		"adopt: seeded merkle from TS baseline",
+		"codebase_id",
+		codebase.ID,
+		"files",
+		len(snapshot.Files),
+	)
 }
 
 // enqueueAdoptionSync schedules one refresh sync for a freshly adopted codebase
@@ -109,19 +175,44 @@ func (manager *Manager) seedAdoptedMerkle(ctx context.Context, codebase model.Co
 // collection already holds data and is searchable immediately; the deferred sync
 // re-embeds only the files that changed since the seeded baseline.
 func (manager *Manager) enqueueAdoptionSync(ctx context.Context, canonicalPath string) {
-	detached := correlation.WithContext(context.WithoutCancel(ctx), correlation.FromContext(ctx).Child())
+	detached := correlation.WithContext(
+		context.WithoutCancel(ctx),
+		correlation.FromContext(ctx).Child(),
+	)
 	delay := manager.deferredBuildDelay
 	if delay <= 0 {
 		delay = defaultDeferredBuildDelay
 	}
-	time.AfterFunc(delay, func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(detached, "adopt: refresh sync panic", "err", fmt.Errorf("panic: %v", recovered), "path", canonicalPath)
+
+	time.AfterFunc(
+		delay,
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					slog.ErrorContext(
+						detached,
+						"adopt: refresh sync panic",
+						"err",
+						fmt.Errorf("panic: %v", recovered),
+						"path",
+						canonicalPath,
+					)
+				}
+			}()
+			if _, _, _, err := manager.SyncIndex(
+				detached,
+				canonicalPath,
+				model.ClientInfo{Name: "adopt-sync", PID: 0},
+			); err != nil {
+				slog.WarnContext(
+					detached,
+					"adopt: refresh sync enqueue failed",
+					"path",
+					canonicalPath,
+					"err",
+					err,
+				)
 			}
-		}()
-		if _, _, _, err := manager.SyncIndex(detached, canonicalPath, model.ClientInfo{Name: "adopt-sync", PID: 0}); err != nil {
-			slog.WarnContext(detached, "adopt: refresh sync enqueue failed", "path", canonicalPath, "err", err)
-		}
-	})
+		},
+	)
 }

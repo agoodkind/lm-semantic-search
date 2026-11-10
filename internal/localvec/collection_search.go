@@ -38,35 +38,43 @@ func (store *Store) SearchCollection(
 	if err := operationContextError(ctx, "search local collection"); err != nil {
 		return nil, err
 	}
+
 	collectionName := strings.TrimSpace(search.CollectionName)
 	stored, err := store.collectionForName(collectionName, false)
 	if err != nil {
 		return nil, err
 	}
+
 	_, exists, err := stored.vectorCount()
 	if err != nil {
 		return nil, err
 	}
+
 	if !exists {
 		return nil, semantic.ErrCollectionMissing
 	}
+
 	query, err := store.embedQuery(ctx, collectionName, search.Query)
 	if err != nil {
 		return nil, err
 	}
+
 	declared := search.Declaration.Scalars
 	matchesFilter := func(candidate row) bool {
-		return search.Filter == nil || evaluateFilter(*search.Filter, candidate, declared) == truthTrue
+		return search.Filter == nil ||
+			evaluateFilter(*search.Filter, candidate, declared) == truthTrue
 	}
 	candidates, err := stored.rankCandidates(ctx, query, matchesFilter, lmcollection.RankingDepth)
 	if err != nil {
 		return nil, err
 	}
+
 	sortScoredRows(candidates)
 	groupLimit := int32(0)
 	if search.GroupBy != "" && search.PerGroupLimit > 0 {
 		groupLimit = search.PerGroupLimit
 	}
+
 	perGroup := make(map[string]int32)
 	scored := limitScoredRows(
 		candidates,
@@ -75,31 +83,42 @@ func (store *Store) SearchCollection(
 			if search.MinScore > 0 && candidate.score < search.MinScore {
 				return false
 			}
+
 			if !matchesFilter(candidate.stored) {
 				return false
 			}
+
 			if groupLimit <= 0 {
 				return true
 			}
+
 			key := rowScalarCell(candidate.stored, search.GroupBy, declared).GroupKey()
 			if perGroup[key] >= groupLimit {
 				return false
 			}
+
 			perGroup[key]++
+
 			return true
 		},
 	)
+
 	hits := make([]semantic.CollectionHit, 0, len(scored))
 	for _, candidate := range scored {
 		cells := make([]lmcollection.ScalarCell, 0, len(declared))
 		for _, column := range declared {
 			cells = append(cells, rowScalarCell(candidate.stored, column.Name, declared))
 		}
-		hits = append(hits, semantic.CollectionHit{
-			Chunk:   candidate.stored.chunk(candidate.score),
-			Scalars: cells,
-		})
+
+		hits = append(
+			hits,
+			semantic.CollectionHit{
+				Chunk:   candidate.stored.chunk(candidate.score),
+				Scalars: cells,
+			},
+		)
 	}
+
 	return hits, nil
 }
 
@@ -121,19 +140,24 @@ func (stored *collection) rankCandidates(
 	if err := stored.loadLocked(); err != nil {
 		return nil, err
 	}
+
 	if !stored.exists {
 		return nil, semantic.ErrCollectionMissing
 	}
+
 	matching := make([]int, 0, min(len(stored.rows), depth))
 	for rowIndex := range stored.rows {
 		if !keep(stored.rows[rowIndex]) {
 			continue
 		}
+
 		if len(matching) == depth {
 			return stored.nearestCandidatesLocked(query, depth)
 		}
+
 		matching = append(matching, rowIndex)
 	}
+
 	return stored.scoreRowsLocked(ctx, query, matching)
 }
 
@@ -149,15 +173,27 @@ func (stored *collection) scoreRowsLocked(
 		if err := operationContextError(ctx, "score local collection rows"); err != nil {
 			return nil, err
 		}
+
 		candidate := stored.rows[rowIndex]
 		score, err := dotProduct(query, candidate.Vector)
 		if err != nil {
-			slog.ErrorContext(ctx, "score local collection row failed", "collection", stored.name, "row_id", candidate.ID, "err", err)
+			slog.ErrorContext(
+				ctx,
+				"score local collection row failed",
+				"collection",
+				stored.name,
+				"row_id",
+				candidate.ID,
+				"err",
+				err,
+			)
 			return nil, fmt.Errorf("score local collection row %s: %w", candidate.ID, err)
 		}
+
 		candidate.Vector = nil
 		scored = append(scored, scoredRow{stored: candidate, score: score})
 	}
+
 	return scored, nil
 }
 
@@ -166,23 +202,35 @@ func (stored *collection) scoreRowsLocked(
 func (stored *collection) nearestCandidatesLocked(query []float32, depth int) ([]scoredRow, error) {
 	keys, distances, err := stored.index.Search(query, depth)
 	if err != nil {
-		slog.Error("search local collection index failed", "collection", stored.name, "depth", depth, "err", err)
+		slog.Error(
+			"search local collection index failed",
+			"collection",
+			stored.name,
+			"depth",
+			depth,
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("search usearch index for local collection %s: %w", stored.name, err)
 	}
+
 	rowsByLabel := make(map[uint64]int, len(stored.rows))
 	for rowIndex, candidate := range stored.rows {
 		rowsByLabel[candidate.Label] = rowIndex
 	}
+
 	scored := make([]scoredRow, 0, len(keys))
 	for index, key := range keys {
 		rowIndex, found := rowsByLabel[key]
 		if !found {
 			return nil, fmt.Errorf("usearch returned unknown label %d for %s", key, stored.name)
 		}
+
 		candidate := stored.rows[rowIndex]
 		candidate.Vector = nil
 		scored = append(scored, scoredRow{stored: candidate, score: 1 - float64(distances[index])})
 	}
+
 	return scored, nil
 }
 
@@ -190,30 +238,42 @@ func (stored *collection) nearestCandidatesLocked(query []float32, depth int) ([
 // declaration omits, a column the row does not store, and a column stored with
 // a different type than the declaration are absent. A stored null value is a
 // null cell.
-func rowScalarCell(stored row, columnName string, declared []lmcollection.ScalarColumn) lmcollection.ScalarCell {
+func rowScalarCell(
+	stored row,
+	columnName string,
+	declared []lmcollection.ScalarColumn,
+) lmcollection.ScalarCell {
 	declaredType, found := declaredColumnType(declared, columnName)
 	if !found {
 		return lmcollection.AbsentCell(columnName)
 	}
+
 	value, stores := stored.Scalars[columnName]
 	if !stores {
 		return lmcollection.AbsentCell(columnName)
 	}
+
 	if value.Null {
 		return lmcollection.NullCell(columnName)
 	}
+
 	if value.Type != declaredType {
 		return lmcollection.AbsentCell(columnName)
 	}
+
 	return lmcollection.ValueCell(columnName, value)
 }
 
-func declaredColumnType(declared []lmcollection.ScalarColumn, columnName string) (lmcollection.ScalarType, bool) {
+func declaredColumnType(
+	declared []lmcollection.ScalarColumn,
+	columnName string,
+) (lmcollection.ScalarType, bool) {
 	for _, column := range declared {
 		if column.Name == columnName {
 			return column.Type, true
 		}
 	}
+
 	return "", false
 }
 
@@ -221,16 +281,27 @@ func declaredColumnType(declared []lmcollection.ScalarColumn, columnName string)
 // logic. A not node inverts true and false and keeps unknown. An all node is
 // false when any child is false, else unknown when any child is unknown. An any
 // node is true when any child is true, else unknown when any child is unknown.
-func evaluateFilter(filter lmcollection.Filter, stored row, declared []lmcollection.ScalarColumn) filterTruth {
-	return evaluateFilterCells(filter, func(columnName string) lmcollection.ScalarCell {
-		return rowScalarCell(stored, columnName, declared)
-	})
+func evaluateFilter(
+	filter lmcollection.Filter,
+	stored row,
+	declared []lmcollection.ScalarColumn,
+) filterTruth {
+	return evaluateFilterCells(
+		filter,
+		func(columnName string) lmcollection.ScalarCell {
+			return rowScalarCell(stored, columnName, declared)
+		},
+	)
 }
 
-func evaluateFilterCells(filter lmcollection.Filter, cell func(string) lmcollection.ScalarCell) filterTruth {
+func evaluateFilterCells(
+	filter lmcollection.Filter,
+	cell func(string) lmcollection.ScalarCell,
+) filterTruth {
 	switch filter.Kind {
 	case lmcollection.FilterAll:
 		result := truthTrue
+
 		for _, child := range filter.Children {
 			switch evaluateFilterCells(child, cell) {
 			case truthFalse:
@@ -240,9 +311,11 @@ func evaluateFilterCells(filter lmcollection.Filter, cell func(string) lmcollect
 			case truthTrue:
 			}
 		}
+
 		return result
 	case lmcollection.FilterAny:
 		result := truthFalse
+
 		for _, child := range filter.Children {
 			switch evaluateFilterCells(child, cell) {
 			case truthTrue:
@@ -252,11 +325,13 @@ func evaluateFilterCells(filter lmcollection.Filter, cell func(string) lmcollect
 			case truthFalse:
 			}
 		}
+
 		return result
 	case lmcollection.FilterNot:
 		if len(filter.Children) != 1 {
 			return truthFalse
 		}
+
 		switch evaluateFilterCells(filter.Children[0], cell) {
 		case truthTrue:
 			return truthFalse
@@ -276,6 +351,7 @@ func evaluateFilterCells(filter lmcollection.Filter, cell func(string) lmcollect
 		if compared.State != lmcollection.ScalarCellValue {
 			return truthUnknown
 		}
+
 		return truthOf(comparisonMatches(filter, compared.Value))
 	default:
 		return truthFalse
@@ -287,11 +363,14 @@ func comparisonMatches(filter lmcollection.Filter, value lmcollection.ScalarValu
 		if filter.Lower != nil && value.Int64 < *filter.Lower {
 			return false
 		}
+
 		if filter.Upper != nil && value.Int64 >= *filter.Upper {
 			return false
 		}
+
 		return true
 	}
+
 	return slices.Contains(filter.Values, value)
 }
 
@@ -299,5 +378,6 @@ func truthOf(matches bool) filterTruth {
 	if matches {
 		return truthTrue
 	}
+
 	return truthFalse
 }

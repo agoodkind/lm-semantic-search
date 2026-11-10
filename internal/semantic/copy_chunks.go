@@ -36,26 +36,39 @@ type ChunkCopy struct {
 // uncertain.
 // On error, returned counts include acknowledged inserts and do not prove that
 // the flush or source deletion completed.
-func (service *Service) CopyChunks(ctx context.Context, codebasePath string, copies []ChunkCopy) ([]int, error) {
+func (service *Service) CopyChunks(
+	ctx context.Context,
+	codebasePath string,
+	copies []ChunkCopy,
+) ([]int, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	if !service.Available() {
 		return nil, ErrUnavailable
 	}
+
 	copiedRowCounts := make([]int, len(copies))
 	if !hasDistinctChunkCopy(copies) {
 		return copiedRowCounts, nil
 	}
+
 	collectionName := service.CollectionName(codebasePath)
-	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
+	hasCollection, err := service.hasCollection(
+		ctx,
+		collectionName,
+		"check Milvus collection "+collectionName,
+	)
 	if err != nil {
 		return nil, err
 	}
+
 	if !hasCollection {
 		return nil, ErrCollectionMissing
 	}
+
 	if err := service.PrepareCollection(ctx, collectionName); err != nil {
 		return nil, err
 	}
+
 	lease, err := service.AcquireCollection(ctx, collectionName)
 	if err != nil {
 		return nil, err
@@ -67,27 +80,45 @@ func (service *Service) CopyChunks(ctx context.Context, codebasePath string, cop
 		if chunkCopy.Source == chunkCopy.Destination {
 			continue
 		}
+
 		inserted, insertErr := service.insertCopiedRows(ctx, collectionName, chunkCopy)
 		if insertErr != nil {
 			return copiedRowCounts, insertErr
 		}
+
 		copiedRowCounts[index] = inserted
 		if inserted > 0 && !slices.Contains(copiedSources, chunkCopy.Source) {
 			copiedSources = append(copiedSources, chunkCopy.Source)
 		}
 	}
+
 	if len(copiedSources) == 0 {
 		return copiedRowCounts, nil
 	}
+
 	// The flush makes all destination rows durable before any source row deletion.
 	if err := service.flushCollection(ctx, collectionName); err != nil {
 		return copiedRowCounts, err
 	}
+
 	// The delete applies to later queries without another flush.
 	if _, err := service.deleteByRelativePaths(ctx, collectionName, copiedSources); err != nil {
 		return copiedRowCounts, err
 	}
-	slog.InfoContext(ctx, "semantic.copy_chunks", "collection", collectionName, "copies", len(copies), "sources_deleted", len(copiedSources), "peer", peerInfo.String())
+
+	slog.InfoContext(
+		ctx,
+		"semantic.copy_chunks",
+		"collection",
+		collectionName,
+		"copies",
+		len(copies),
+		"sources_deleted",
+		len(copiedSources),
+		"peer",
+		peerInfo.String(),
+	)
+
 	return copiedRowCounts, nil
 }
 
@@ -97,20 +128,30 @@ func hasDistinctChunkCopy(copies []ChunkCopy) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
 // insertCopiedRows derives new row IDs from the destination path. Milvus cannot
 // update a row's primary key in place.
-func (service *Service) insertCopiedRows(ctx context.Context, collectionName string, chunkCopy ChunkCopy) (int, error) {
+func (service *Service) insertCopiedRows(
+	ctx context.Context,
+	collectionName string,
+	chunkCopy ChunkCopy,
+) (int, error) {
 	source, err := service.fetchChunksForPath(ctx, collectionName, chunkCopy.Source)
 	if err != nil {
 		return 0, err
 	}
+
 	if len(source.chunks) == 0 {
 		return 0, nil
 	}
-	rewritten, destinationIDs, splitPartsRecorded := rewriteCopiedRows(source, chunkCopy.Destination)
+
+	rewritten, destinationIDs, splitPartsRecorded := rewriteCopiedRows(
+		source,
+		chunkCopy.Destination,
+	)
 	// The insert reuses stored dense vectors and embedding models without calling
 	// an embedding API. In a hybrid collection, Milvus derives sparse vectors again
 	// from the copied content with its BM25 function.
@@ -126,6 +167,7 @@ func (service *Service) insertCopiedRows(ctx context.Context, collectionName str
 	); err != nil {
 		return 0, err
 	}
+
 	return len(rewritten), nil
 }
 
@@ -144,14 +186,28 @@ func (service *Service) flushCollection(ctx context.Context, collectionName stri
 	startedAt := clock.Now()
 	task, attempts, err := service.requestFlush(ctx, collectionName)
 	if attempts > 1 {
-		slog.InfoContext(ctx, "milvus rate limited the flush request", "collection", collectionName, "attempts", attempts, "waited_ms", clock.Now().Sub(startedAt).Milliseconds(), "peer", peerInfo.String())
+		slog.InfoContext(
+			ctx,
+			"milvus rate limited the flush request",
+			"collection",
+			collectionName,
+			"attempts",
+			attempts,
+			"waited_ms",
+			clock.Now().Sub(startedAt).Milliseconds(),
+			"peer",
+			peerInfo.String(),
+		)
 	}
+
 	if err != nil {
 		return err
 	}
+
 	if err := task.Await(ctx); err != nil {
 		return wrapStoreError(ctx, err, "await Milvus collection flush "+collectionName)
 	}
+
 	return nil
 }
 
@@ -160,23 +216,30 @@ func (service *Service) requestFlush(
 	collectionName string,
 ) (*milvusclient.FlushTask, int, error) {
 	for attempt := 1; ; attempt++ {
-		task, err := service.milvus.Flush(
-			ctx,
-			milvusclient.NewFlushOption(collectionName),
-		)
+		task, err := service.milvus.Flush(ctx, milvusclient.NewFlushOption(collectionName))
 		if err == nil {
 			return task, attempt, nil
 		}
+
 		flushErr := classifyFlushError(err)
 		var rateLimited flushRateLimitError
 		if !errors.As(flushErr, &rateLimited) || attempt >= flushRateLimitMaxAttempts {
-			return nil, attempt, wrapStoreError(ctx, flushErr, "flush Milvus collection "+collectionName)
+			return nil, attempt, wrapStoreError(
+				ctx,
+				flushErr,
+				"flush Milvus collection "+collectionName,
+			)
 		}
+
 		if !reconnectSleep(ctx, flushRateLimitRetryWait) {
 			// When the context ends during the retry wait, the returned error preserves
 			// both the context error and the last Milvus rate limit error. Callers use
 			// errors.Is to distinguish cancellation from a Milvus failure.
-			return nil, attempt, wrapStoreError(ctx, errors.Join(ctx.Err(), flushErr), "flush Milvus collection "+collectionName)
+			return nil, attempt, wrapStoreError(
+				ctx,
+				errors.Join(ctx.Err(), flushErr),
+				"flush Milvus collection "+collectionName,
+			)
 		}
 	}
 }
@@ -230,6 +293,7 @@ func rewriteCopiedRows(
 ) ([]model.StoredChunk, []string, []bool) {
 	rewritten := make([]model.StoredChunk, 0, len(source.chunks))
 	destinationIDs := make([]string, 0, len(source.chunks))
+
 	recorded := make([]bool, 0, len(source.chunks))
 	for index, chunk := range source.chunks {
 		splitPartRecorded := source.splitPartsRecorded[index]
@@ -242,11 +306,10 @@ func rewriteCopiedRows(
 			destinationIDs = append(destinationIDs, generateID(chunkCopy, index))
 			continue
 		}
-		destinationIDs = append(
-			destinationIDs,
-			copiedChunkID(source.ids[index], dstRelativePath),
-		)
+
+		destinationIDs = append(destinationIDs, copiedChunkID(source.ids[index], dstRelativePath))
 	}
+
 	return rewritten, destinationIDs, recorded
 }
 
@@ -262,9 +325,11 @@ func (service *Service) fetchChunksForPath(
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
 		return noCopiedRows(), err
 	}
+
 	if err := service.ensureReuseIdentityColumnsOnce(ctx, collectionName); err != nil {
 		return noCopiedRows(), err
 	}
+
 	expression := relativePathExpression(relativePath)
 	outputFields := []string{
 		idFieldName,
@@ -278,10 +343,26 @@ func (service *Service) fetchChunksForPath(
 		splitPartFieldName,
 		embeddingModelFieldName,
 	}
-	queryOption := milvusclient.NewQueryOption(collectionName).WithFilter(expression).WithOutputFields(outputFields...)
+	queryOption := milvusclient.NewQueryOption(collectionName).WithFilter(
+		expression,
+	).WithOutputFields(
+		outputFields...,
+	)
 	resultSet, err := service.milvus.Query(ctx, queryOption)
 	if err != nil {
-		slog.ErrorContext(ctx, "query chunks for copy failed", "collection", collectionName, "path", relativePath, "peer", peerInfo.String(), "err", err)
+		slog.ErrorContext(
+			ctx,
+			"query chunks for copy failed",
+			"collection",
+			collectionName,
+			"path",
+			relativePath,
+			"peer",
+			peerInfo.String(),
+			"err",
+			err,
+		)
+
 		return noCopiedRows(), fmt.Errorf(
 			"query chunks for %s in %s: %w",
 			relativePath,
@@ -289,6 +370,7 @@ func (service *Service) fetchChunksForPath(
 			err,
 		)
 	}
+
 	if resultSet.ResultCount == 0 {
 		return noCopiedRows(), nil
 	}
@@ -302,24 +384,21 @@ func (service *Service) fetchChunksForPath(
 	ids := make([]string, 0, resultSet.ResultCount)
 	vectors := make([][]float32, 0, resultSet.ResultCount)
 	embeddingModels := make([]string, 0, resultSet.ResultCount)
+
 	splitPartsRecorded := make([]bool, 0, resultSet.ResultCount)
 	for rowIndex := range resultSet.ResultCount {
-		row, rowErr := copiedRowAt(
-			ctx,
-			collectionName,
-			relativePath,
-			columns,
-			rowIndex,
-		)
+		row, rowErr := copiedRowAt(ctx, collectionName, relativePath, columns, rowIndex)
 		if rowErr != nil {
 			return noCopiedRows(), rowErr
 		}
+
 		chunks = append(chunks, row.chunk)
 		ids = append(ids, row.id)
 		vectors = append(vectors, row.vector)
 		embeddingModels = append(embeddingModels, row.embeddingModel)
 		splitPartsRecorded = append(splitPartsRecorded, row.splitPartRecorded)
 	}
+
 	return copiedRows{
 		chunks:             chunks,
 		ids:                ids,
@@ -346,6 +425,7 @@ func copiedColumns(resultSet milvusclient.ResultSet) (copiedRowColumns, error) {
 		columns.vector == nil {
 		return copiedRowColumns{}, ErrSearchResultIncomplete
 	}
+
 	return columns, nil
 }
 
@@ -358,29 +438,57 @@ func copiedRowAt(
 ) (copiedRow, error) {
 	idValue, err := columns.id.GetAsString(rowIndex)
 	if err != nil {
-		slog.ErrorContext(ctx, "read id column for copy failed", "collection", collectionName, "row", rowIndex, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"read id column for copy failed",
+			"collection",
+			collectionName,
+			"row",
+			rowIndex,
+			"err",
+			err,
+		)
 		return copiedRow{}, fmt.Errorf("read id column at %d: %w", rowIndex, err)
 	}
+
 	contentValue, err := columns.content.GetAsString(rowIndex)
 	if err != nil {
 		slog.ErrorContext(ctx, "read content column for copy failed", "row", rowIndex, "err", err)
 		return copiedRow{}, fmt.Errorf("read content column at %d: %w", rowIndex, err)
 	}
+
 	startLineValue, err := columns.startLine.GetAsInt64(rowIndex)
 	if err != nil {
-		slog.ErrorContext(ctx, "read start line column for copy failed", "row", rowIndex, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"read start line column for copy failed",
+			"row",
+			rowIndex,
+			"err",
+			err,
+		)
 		return copiedRow{}, fmt.Errorf("read start_line column at %d: %w", rowIndex, err)
 	}
+
 	endLineValue, err := columns.endLine.GetAsInt64(rowIndex)
 	if err != nil {
 		slog.ErrorContext(ctx, "read end line column for copy failed", "row", rowIndex, "err", err)
 		return copiedRow{}, fmt.Errorf("read end_line column at %d: %w", rowIndex, err)
 	}
+
 	fileExtensionValue, err := columns.fileExtension.GetAsString(rowIndex)
 	if err != nil {
-		slog.ErrorContext(ctx, "read file extension column for copy failed", "row", rowIndex, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"read file extension column for copy failed",
+			"row",
+			rowIndex,
+			"err",
+			err,
+		)
 		return copiedRow{}, fmt.Errorf("read file_extension column at %d: %w", rowIndex, err)
 	}
+
 	languageValue := ""
 	if columns.metadata != nil {
 		metadataValue, metadataErr := columns.metadata.GetAsString(rowIndex)
@@ -388,19 +496,27 @@ func copiedRowAt(
 			languageValue = decodeMetadataLanguage(metadataValue)
 		}
 	}
+
 	vector, err := milvusstore.VectorAt(columns.vector, rowIndex)
 	if err != nil {
 		slog.ErrorContext(ctx, "read vector column for copy failed", "row", rowIndex, "err", err)
 		return copiedRow{}, fmt.Errorf("read vector column at %d: %w", rowIndex, err)
 	}
+
 	splitPartValue, splitPartRecorded, err := milvusstore.SplitPartAt(columns.splitPart, rowIndex)
 	if err != nil {
 		return copiedRow{}, fmt.Errorf("read split part column for copy at %d: %w", rowIndex, err)
 	}
+
 	embeddingModel, err := nullableStringAt(columns.embeddingModel, rowIndex)
 	if err != nil {
-		return copiedRow{}, fmt.Errorf("read embedding model column of copied row %d: %w", rowIndex, err)
+		return copiedRow{}, fmt.Errorf(
+			"read embedding model column of copied row %d: %w",
+			rowIndex,
+			err,
+		)
 	}
+
 	return copiedRow{
 		chunk: model.StoredChunk{
 			Content:           contentValue,

@@ -151,8 +151,10 @@ func (service *Service) initializeResidencyController() {
 
 func (service *Service) initializeResidencyControllerWithLoad(load collectionTransition) {
 	service.residency = newCollectionResidencyController(residencyControllerConfig{
-		clock:       wallResidencyClock{},
-		waitTimeout: time.Duration(service.cfg.MilvusCollectionLoadWaitTimeoutMS) * time.Millisecond,
+		clock: wallResidencyClock{},
+		waitTimeout: time.Duration(
+			service.cfg.MilvusCollectionLoadWaitTimeoutMS,
+		) * time.Millisecond,
 		idleTimeout: time.Duration(service.cfg.MilvusCollectionIdleTimeoutMS) * time.Millisecond,
 		loadCeiling: service.sharedCollectionLoadCeiling(),
 		load:        load,
@@ -160,6 +162,7 @@ func (service *Service) initializeResidencyControllerWithLoad(load collectionTra
 			if err := service.releaseCollection(ctx, collectionName); err != nil {
 				return err
 			}
+
 			return service.awaitCollectionReleased(ctx, collectionName)
 		},
 	})
@@ -173,14 +176,19 @@ func (service *Service) AcquireCollection(
 	peerInfo, _ := peer.FromContext(ctx)
 	lease, err := service.residency.Acquire(ctx, collectionName)
 	if errors.Is(err, ErrCollectionLoadWaitTimeout) {
-		wrappedErr := fmt.Errorf(
-			"acquire collection %s: %w",
-			collectionName,
-			ErrCollectionNotReady,
+		wrappedErr := fmt.Errorf("acquire collection %s: %w", collectionName, ErrCollectionNotReady)
+		slog.WarnContext(
+			ctx,
+			"collection load wait expired",
+			"peer",
+			peerInfo.String(),
+			"err",
+			wrappedErr,
 		)
-		slog.WarnContext(ctx, "collection load wait expired", "peer", peerInfo.String(), "err", wrappedErr)
+
 		return nil, wrappedErr
 	}
+
 	return lease, err
 }
 
@@ -192,6 +200,7 @@ func (service *Service) acquireResidentCollection(
 	if lease == nil {
 		return nil, ready, err
 	}
+
 	return lease, ready, err
 }
 
@@ -201,13 +210,16 @@ func newCollectionResidencyController(
 	if config.clock == nil {
 		config.clock = wallResidencyClock{}
 	}
+
 	if config.waitTimeout <= 0 {
 		config.waitTimeout = defaultCollectionLoadWaitTimeout
 	}
+
 	if config.loadCeiling <= 0 {
 		config.loadCeiling = milvusgrpc.DefaultCallTimeouts().Metadata +
 			3*defaultCollectionLoadBound
 	}
+
 	return &collectionResidencyController{
 		mutex:                    sync.Mutex{},
 		config:                   config,
@@ -224,6 +236,7 @@ func (controller *collectionResidencyController) beginReconciliation() uint64 {
 	controller.mutex.Lock()
 	defer controller.mutex.Unlock()
 	controller.reconciliationGeneration++
+
 	generation := controller.reconciliationGeneration
 	for _, entry := range controller.entries {
 		controller.cancelIdleTimerLocked(entry)
@@ -231,20 +244,25 @@ func (controller *collectionResidencyController) beginReconciliation() uint64 {
 			entry.reconciliation = 0
 			continue
 		}
+
 		entry.state = collectionResidencyUnknown
 		entry.reconciliation = generation
 		if controller.entryHasActivityLocked(entry) {
 			entry.reconciliation = 0
 		}
+
 		controller.notifyLocked(entry)
 	}
+
 	controller.updateStateMetricsLocked()
+
 	return generation
 }
 
 func (controller *collectionResidencyController) invalidateResidency() {
 	controller.mutex.Lock()
 	defer controller.mutex.Unlock()
+
 	controller.reconciliationGeneration++
 	for _, entry := range controller.entries {
 		controller.cancelIdleTimerLocked(entry)
@@ -252,10 +270,12 @@ func (controller *collectionResidencyController) invalidateResidency() {
 			entry.reconciliation = 0
 			continue
 		}
+
 		entry.state = collectionResidencyUnknown
 		entry.reconciliation = 0
 		controller.notifyLocked(entry)
 	}
+
 	controller.updateStateMetricsLocked()
 }
 
@@ -272,20 +292,25 @@ func (controller *collectionResidencyController) applyReconciliation(
 			controller.cancelIdleTimerLocked(entry)
 			entry.reconciliation = 0
 		}
+
 		return
 	}
+
 	if controller.closed || generation != controller.reconciliationGeneration ||
 		controller.reconciliationActivity[collectionName] >= generation {
 		return
 	}
+
 	entry := controller.entries[collectionName]
 	if entry == nil {
 		entry = controller.entryLocked(collectionName)
 		entry.reconciliation = generation
 	}
+
 	if entry.reconciliation != generation {
 		return
 	}
+
 	controller.cancelIdleTimerLocked(entry)
 	entry.state = state
 	entry.reconciliation = 0
@@ -319,13 +344,16 @@ func (controller *collectionResidencyController) Acquire(
 		if err := ctx.Err(); err != nil {
 			wrappedErr := fmt.Errorf("acquire collection residency: %w", err)
 			slog.WarnContext(ctx, "collection residency acquire canceled", "err", wrappedErr)
+
 			return nil, wrappedErr
 		}
+
 		controller.mutex.Lock()
 		if controller.closed {
 			controller.mutex.Unlock()
 			return nil, ErrResidencyControllerClosed
 		}
+
 		entry := controller.entryLocked(collectionName)
 		controller.markReconciliationActivityLocked(collectionName, entry)
 		if entry.maintenance ||
@@ -335,8 +363,10 @@ func (controller *collectionResidencyController) Acquire(
 			if err := controller.waitForChange(ctx, changed); err != nil {
 				return nil, err
 			}
+
 			continue
 		}
+
 		entry.leases++
 		entry.idleResetPending = true
 		metrics.MilvusCollectionLeaseAcquired()
@@ -345,10 +375,12 @@ func (controller *collectionResidencyController) Acquire(
 			controller.mutex.Unlock()
 			return controller.newLease(collectionName), nil
 		}
+
 		flight := entry.load
 		if flight == nil {
 			flight = controller.startLoadLocked(ctx, collectionName, entry)
 		}
+
 		controller.mutex.Unlock()
 
 		err := controller.waitForLoad(ctx, collectionName, flight)
@@ -356,6 +388,7 @@ func (controller *collectionResidencyController) Acquire(
 			controller.releaseLease(ctx, collectionName)
 			return nil, err
 		}
+
 		return controller.newLease(collectionName), nil
 	}
 }
@@ -366,18 +399,18 @@ func (controller *collectionResidencyController) Observe(
 ) (collectionResidencyState, *collectionObservation, error) {
 	for {
 		if err := ctx.Err(); err != nil {
-			wrappedErr := fmt.Errorf(
-				"observe collection residency: %w",
-				err,
-			)
+			wrappedErr := fmt.Errorf("observe collection residency: %w", err)
 			slog.WarnContext(ctx, "collection residency observation canceled", "err", wrappedErr)
+
 			return collectionResidencyUnknown, nil, wrappedErr
 		}
+
 		controller.mutex.Lock()
 		if controller.closed {
 			controller.mutex.Unlock()
 			return collectionResidencyUnknown, nil, ErrResidencyControllerClosed
 		}
+
 		entry := controller.entryLocked(collectionName)
 		if entry.maintenance ||
 			(entry.activeTransition != nil && entry.load == nil) {
@@ -386,8 +419,10 @@ func (controller *collectionResidencyController) Observe(
 			if err := controller.waitForChange(ctx, changed); err != nil {
 				return collectionResidencyUnknown, nil, err
 			}
+
 			continue
 		}
+
 		entry.observations++
 		controller.pauseIdleTimerLocked(entry)
 		observation := &collectionObservation{
@@ -397,6 +432,7 @@ func (controller *collectionResidencyController) Observe(
 		}
 		state := entry.state
 		controller.mutex.Unlock()
+
 		return state, observation, nil
 	}
 }
@@ -410,6 +446,7 @@ func (controller *collectionResidencyController) Pin(
 			controller.mutex.Unlock()
 			return nil, ErrResidencyControllerClosed
 		}
+
 		entry := controller.entryLocked(collectionName)
 		controller.markReconciliationActivityLocked(collectionName, entry)
 		if entry.maintenance ||
@@ -421,11 +458,14 @@ func (controller *collectionResidencyController) Pin(
 				return nil, ErrResidencyControllerClosed
 			case <-changed:
 			}
+
 			continue
 		}
+
 		entry.pins++
 		controller.cancelIdleTimerLocked(entry)
 		controller.mutex.Unlock()
+
 		return &collectionPin{
 			once:       sync.Once{},
 			controller: controller,
@@ -443,12 +483,14 @@ func (controller *collectionResidencyController) Rename(oldName string, newName 
 	if entry == nil || oldName == newName {
 		return
 	}
+
 	entry.reconciliation = 0
 	if replaced := controller.entries[newName]; replaced != nil && replaced != entry {
 		replaced.reconciliation = 0
 		controller.cancelIdleTimerLocked(replaced)
 		controller.notifyLocked(replaced)
 	}
+
 	controller.cancelIdleTimerLocked(entry)
 	controller.notifyLocked(entry)
 	delete(controller.entries, oldName)
@@ -465,14 +507,17 @@ func (controller *collectionResidencyController) Forget(collectionName string) {
 	if entry == nil {
 		return
 	}
+
 	controller.cancelIdleTimerLocked(entry)
 	if entry.leases != 0 || entry.observations != 0 || entry.pins != 0 {
 		entry.state = collectionResidencyUnknown
 		entry.reconciliation = 0
 		controller.notifyLocked(entry)
 		controller.updateStateMetricsLocked()
+
 		return
 	}
+
 	controller.notifyLocked(entry)
 	delete(controller.entries, collectionName)
 	controller.updateStateMetricsLocked()
@@ -483,6 +528,7 @@ func (controller *collectionResidencyController) Maintain(
 	collectionNames ...string,
 ) (*collectionMaintenance, error) {
 	names := sortedUniqueCollectionNames(collectionNames)
+
 	acquired := make([]string, 0, len(names))
 	for _, collectionName := range names {
 		for {
@@ -490,12 +536,15 @@ func (controller *collectionResidencyController) Maintain(
 				controller.releaseMaintenance(ctx, acquired)
 				return nil, collectionMaintenanceContextError(ctx, err)
 			}
+
 			controller.mutex.Lock()
 			if controller.closed {
 				controller.releaseMaintenanceLocked(ctx, acquired)
 				controller.mutex.Unlock()
+
 				return nil, ErrResidencyControllerClosed
 			}
+
 			entry := controller.entryLocked(collectionName)
 			controller.markReconciliationActivityLocked(collectionName, entry)
 			if !entry.maintenance {
@@ -506,6 +555,7 @@ func (controller *collectionResidencyController) Maintain(
 				controller.mutex.Unlock()
 				break
 			}
+
 			changed := entry.changed
 			controller.mutex.Unlock()
 			if err := controller.waitForChange(ctx, changed); err != nil {
@@ -521,6 +571,7 @@ func (controller *collectionResidencyController) Maintain(
 				controller.releaseMaintenance(ctx, acquired)
 				return nil, collectionMaintenanceContextError(ctx, err)
 			}
+
 			controller.mutex.Lock()
 			entry := controller.entries[collectionName]
 			if entry.leases == 0 && entry.observations == 0 &&
@@ -528,6 +579,7 @@ func (controller *collectionResidencyController) Maintain(
 				controller.mutex.Unlock()
 				break
 			}
+
 			changed := entry.changed
 			controller.mutex.Unlock()
 			if err := controller.waitForChange(ctx, changed); err != nil {
@@ -536,10 +588,12 @@ func (controller *collectionResidencyController) Maintain(
 			}
 		}
 	}
+
 	if err := ctx.Err(); err != nil {
 		controller.releaseMaintenance(ctx, acquired)
 		return nil, collectionMaintenanceContextError(ctx, err)
 	}
+
 	return &collectionMaintenance{
 		once:       sync.Once{},
 		controller: controller,
@@ -550,18 +604,21 @@ func (controller *collectionResidencyController) Maintain(
 func collectionMaintenanceContextError(ctx context.Context, err error) error {
 	wrappedErr := fmt.Errorf("acquire collection maintenance: %w", err)
 	slog.WarnContext(ctx, "collection maintenance canceled", "err", wrappedErr)
+
 	return wrappedErr
 }
 
 func sortedUniqueCollectionNames(collectionNames []string) []string {
 	names := append([]string(nil), collectionNames...)
 	sort.Strings(names)
+
 	unique := names[:0]
 	for _, name := range names {
 		if len(unique) == 0 || unique[len(unique)-1] != name {
 			unique = append(unique, name)
 		}
 	}
+
 	return unique
 }
 
@@ -573,6 +630,7 @@ func (controller *collectionResidencyController) waitForChange(
 	case <-ctx.Done():
 		err := fmt.Errorf("wait for collection residency state: %w", ctx.Err())
 		slog.WarnContext(ctx, "collection residency state wait canceled", "err", err)
+
 		return err
 	case <-controller.closedCh:
 		return ErrResidencyControllerClosed
@@ -604,6 +662,7 @@ func (controller *collectionResidencyController) entryLocked(
 		}
 		controller.entries[collectionName] = entry
 	}
+
 	return entry
 }
 
@@ -647,6 +706,7 @@ func (controller *collectionResidencyController) startLoadLocked(
 		}()
 		controller.runLoad(loadCtx, collectionName, entry, flight)
 	}()
+
 	return flight
 }
 
@@ -657,10 +717,7 @@ func (controller *collectionResidencyController) runLoad(
 	flight *collectionResidencyLoad,
 ) {
 	defer controller.transitions.Done()
-	ceilingTimer := controller.config.clock.AfterFunc(
-		controller.config.loadCeiling,
-		flight.cancel,
-	)
+	ceilingTimer := controller.config.clock.AfterFunc(controller.config.loadCeiling, flight.cancel)
 	err := controller.config.load(ctx, collectionName)
 	ceilingTimer.Stop()
 
@@ -679,6 +736,7 @@ func (controller *collectionResidencyController) finishLoad(
 	if entry.load != flight {
 		return
 	}
+
 	flight.err = err
 	elapsed := controller.config.clock.Now().Sub(flight.startedAt)
 	metrics.MilvusCollectionLoadDone(elapsed, err != nil)
@@ -704,6 +762,7 @@ func (controller *collectionResidencyController) finishLoad(
 	} else {
 		entry.state = collectionResidencyUnknown
 	}
+
 	controller.updateStateMetricsLocked()
 	close(flight.done)
 	controller.notifyLocked(entry)
@@ -715,9 +774,12 @@ func (controller *collectionResidencyController) waitForLoad(
 	flight *collectionResidencyLoad,
 ) error {
 	timedOut := make(chan struct{})
-	timer := controller.config.clock.AfterFunc(controller.config.waitTimeout, func() {
-		close(timedOut)
-	})
+	timer := controller.config.clock.AfterFunc(
+		controller.config.waitTimeout,
+		func() {
+			close(timedOut)
+		},
+	)
 	defer timer.Stop()
 
 	select {
@@ -729,9 +791,11 @@ func (controller *collectionResidencyController) waitForLoad(
 		if err := ctx.Err(); err != nil {
 			return collectionLoadWaitContextError(ctx, collectionName, err)
 		}
+
 		if controller.closedNow() {
 			return ErrResidencyControllerClosed
 		}
+
 		err := fmt.Errorf(
 			"wait for collection %s: %w",
 			collectionName,
@@ -748,6 +812,7 @@ func (controller *collectionResidencyController) waitForLoad(
 				elapsed = controller.config.clock.Now().Sub(flight.startedAt)
 			}
 		}
+
 		controller.mutex.Unlock()
 		logCollectionResidencyEvent(
 			ctx,
@@ -761,14 +826,17 @@ func (controller *collectionResidencyController) waitForLoad(
 			0,
 			ErrCollectionNotReady,
 		)
+
 		return err
 	case <-flight.done:
 		if err := ctx.Err(); err != nil {
 			return collectionLoadWaitContextError(ctx, collectionName, err)
 		}
+
 		if controller.closedNow() {
 			return ErrResidencyControllerClosed
 		}
+
 		return flight.err
 	}
 }
@@ -793,6 +861,7 @@ func collectionLoadWaitContextError(
 ) error {
 	wrappedErr := fmt.Errorf("wait for collection %s load: %w", collectionName, err)
 	slog.WarnContext(ctx, "collection load wait canceled", "err", wrappedErr)
+
 	return wrappedErr
 }
 
@@ -814,6 +883,7 @@ func (lease *collectionLease) ReleaseContext(ctx context.Context) {
 	if lease == nil {
 		return
 	}
+
 	lease.once.Do(func() {
 		lease.controller.releaseLease(ctx, lease.name)
 	})
@@ -827,6 +897,7 @@ func (observation *collectionObservation) ReleaseContext(ctx context.Context) {
 	if observation == nil {
 		return
 	}
+
 	observation.once.Do(func() {
 		observation.controller.releaseObservation(ctx, observation.name)
 	})
@@ -840,6 +911,7 @@ func (pin *collectionPin) ReleaseContext(ctx context.Context) {
 	if pin == nil {
 		return
 	}
+
 	pin.once.Do(func() {
 		pin.controller.releasePin(ctx, pin.entry)
 	})
@@ -853,6 +925,7 @@ func (maintenance *collectionMaintenance) ReleaseContext(ctx context.Context) {
 	if maintenance == nil {
 		return
 	}
+
 	maintenance.once.Do(func() {
 		maintenance.controller.releaseMaintenance(ctx, maintenance.names)
 	})
@@ -868,21 +941,25 @@ func (controller *collectionResidencyController) releaseLease(
 	if entry == nil || entry.leases == 0 {
 		return
 	}
+
 	entry.leases--
 	metrics.MilvusCollectionLeaseReleased()
 	controller.notifyLocked(entry)
 	if entry.leases != 0 {
 		return
 	}
+
 	resetsIdle := entry.idleResetPending
 	entry.idleResetPending = false
 	if entry.state != collectionResidencyReady {
 		return
 	}
+
 	if resetsIdle {
 		controller.armIdleTimerLocked(ctx, collectionName, entry)
 		return
 	}
+
 	controller.resumeIdleTimerLocked(ctx, collectionName, entry)
 }
 
@@ -896,6 +973,7 @@ func (controller *collectionResidencyController) releaseObservation(
 	if entry == nil || entry.observations == 0 {
 		return
 	}
+
 	entry.observations--
 	controller.notifyLocked(entry)
 	if entry.observations == 0 && entry.state == collectionResidencyReady {
@@ -912,6 +990,7 @@ func (controller *collectionResidencyController) releasePin(
 	if entry == nil || entry.pins == 0 {
 		return
 	}
+
 	entry.pins--
 	controller.notifyLocked(entry)
 	if entry.pins == 0 && entry.state == collectionResidencyReady {
@@ -937,6 +1016,7 @@ func (controller *collectionResidencyController) releaseMaintenanceLocked(
 		if entry == nil || !entry.maintenance {
 			continue
 		}
+
 		entry.maintenance = false
 		controller.notifyLocked(entry)
 		if entry.state == collectionResidencyReady {
@@ -961,17 +1041,21 @@ func (controller *collectionResidencyController) Close(ctx context.Context) erro
 	if !controller.closed {
 		controller.closed = true
 		close(controller.closedCh)
+
 		for _, entry := range controller.entries {
 			controller.cancelIdleTimerLocked(entry)
 			if entry.load != nil {
 				entry.load.cancel()
 			}
+
 			if entry.activeTransition != nil {
 				entry.activeTransition()
 			}
+
 			controller.notifyLocked(entry)
 		}
 	}
+
 	controller.mutex.Unlock()
 
 	done := make(chan struct{})
@@ -989,6 +1073,7 @@ func (controller *collectionResidencyController) Close(ctx context.Context) erro
 	case <-ctx.Done():
 		err := fmt.Errorf("close collection residency controller: %w", ctx.Err())
 		slog.WarnContext(ctx, "collection residency shutdown canceled", "err", err)
+
 		return err
 	case <-done:
 		return nil

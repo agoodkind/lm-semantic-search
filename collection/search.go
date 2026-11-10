@@ -52,6 +52,7 @@ func (cell ScalarCell) GroupKey() string {
 	if cell.State != ScalarCellValue {
 		return nullGroupKey
 	}
+
 	switch cell.Value.Type {
 	case ScalarTypeBool:
 		return "bool:" + strconv.FormatBool(cell.Value.Bool)

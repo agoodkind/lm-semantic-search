@@ -24,6 +24,7 @@ func (h *captureHandler) Handle(_ context.Context, record slog.Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.records = append(h.records, record.Clone())
+
 	return nil
 }
 
@@ -39,22 +40,26 @@ func (h *captureHandler) countMessage(message string) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	count := 0
+
 	for _, record := range h.records {
 		if record.Message == message {
 			count++
 		}
 	}
+
 	return count
 }
 
 func (h *captureHandler) firstMessage(message string) (slog.Record, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
 	for _, record := range h.records {
 		if record.Message == message {
 			return record, true
 		}
 	}
+
 	return slog.Record{}, false
 }
 
@@ -68,6 +73,7 @@ func withCaptureLogger(t *testing.T) *captureHandler {
 	t.Cleanup(func() {
 		slog.SetDefault(previous)
 	})
+
 	return handler
 }
 
@@ -91,6 +97,7 @@ func TestStartReporterEmitsRecordWithExpectedKeys(t *testing.T) {
 	StartReporter(ctx, 5*time.Millisecond)
 
 	deadline := time.After(2 * time.Second)
+
 	for handler.countMessage(reportMessage) == 0 {
 		select {
 		case <-deadline:
@@ -162,6 +169,7 @@ func TestStartReporterStopsOnContextCancel(t *testing.T) {
 	StartReporter(ctx, 5*time.Millisecond)
 
 	deadline := time.After(2 * time.Second)
+
 	for handler.countMessage(reportMessage) == 0 {
 		select {
 		case <-deadline:

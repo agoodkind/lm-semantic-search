@@ -44,17 +44,29 @@ var ErrWaitCancelled = errors.New("wait cancelled")
 // Terminal nonready means the daemon answered a definite not-searchable
 // verdict outside the discovered, pending, indexing, building, and loading
 // states, with no active indexing job.
-func ForIndexStatus(ctx context.Context, socketPath string, path string, timeout time.Duration) (*pb.GetIndexResponse, error) {
+func ForIndexStatus(
+	ctx context.Context,
+	socketPath string,
+	path string,
+	timeout time.Duration,
+) (*pb.GetIndexResponse, error) {
 	clientInfo, err := response.CurrentClientInfo()
 	if err != nil {
 		slog.ErrorContext(ctx, "resolve client info failed", "path", path, "err", err)
 		return nil, fmt.Errorf("resolve client info: %w", err)
 	}
+
 	return ForIndexStatusWithClientInfo(ctx, socketPath, path, timeout, clientInfo)
 }
 
 // ForIndexStatusWithClientInfo polls GetIndex using the supplied caller metadata.
-func ForIndexStatusWithClientInfo(ctx context.Context, socketPath string, path string, timeout time.Duration, clientInfo *pb.ClientInfo) (*pb.GetIndexResponse, error) {
+func ForIndexStatusWithClientInfo(
+	ctx context.Context,
+	socketPath string,
+	path string,
+	timeout time.Duration,
+	clientInfo *pb.ClientInfo,
+) (*pb.GetIndexResponse, error) {
 	signalCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -71,6 +83,7 @@ func ForIndexStatusWithClientInfo(ctx context.Context, socketPath string, path s
 		slog.ErrorContext(ctx, "dial daemon failed", "socket_path", socketPath, "err", err)
 		return nil, fmt.Errorf("dial daemon: %w", err)
 	}
+
 	defer func() { _ = connection.Close() }()
 
 	return forIndexStatusWithClient(ctx, client, path, clientInfo)
@@ -80,28 +93,40 @@ func ForIndexStatusWithClientInfo(ctx context.Context, socketPath string, path s
 // a mocked client for testing. Every exit path returns the most recent status
 // the daemon answered, so a timeout or an interrupt still shows the caller how
 // far the build got.
-func forIndexStatusWithClient(ctx context.Context, client pb.SemanticSearchDaemonServiceClient, path string, clientInfo *pb.ClientInfo) (*pb.GetIndexResponse, error) {
+func forIndexStatusWithClient(
+	ctx context.Context,
+	client pb.SemanticSearchDaemonServiceClient,
+	path string,
+	clientInfo *pb.ClientInfo,
+) (*pb.GetIndexResponse, error) {
 	ticker := time.NewTicker(watchPollInterval)
 	defer ticker.Stop()
 	var lastResponse *pb.GetIndexResponse
 
 	for {
-		current, getErr := client.GetIndex(ctx, &pb.GetIndexRequest{
-			Path:   path,
-			Client: clientInfo,
-		})
+		current, getErr := client.GetIndex(
+			ctx,
+			&pb.GetIndexRequest{
+				Path:   path,
+				Client: clientInfo,
+			},
+		)
 		if current != nil {
 			lastResponse = current
 		}
+
 		if getErr != nil {
 			// A cancelled or expired context is the reason the RPC failed, so it
 			// owns the error the caller sees rather than the transport message.
 			if stopErr := contextStopError(ctx); stopErr != nil {
 				return lastResponse, stopErr
 			}
+
 			slog.ErrorContext(ctx, "GetIndex failed", "path", path, "err", getErr)
+
 			return nil, fmt.Errorf("GetIndex: %w", getErr)
 		}
+
 		if indexStatusIsFinal(current) {
 			return current, nil
 		}
@@ -120,9 +145,11 @@ func contextStopError(ctx context.Context) error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return ErrWaitTimeout
 	}
+
 	if errors.Is(ctx.Err(), context.Canceled) {
 		return ErrWaitCancelled
 	}
+
 	return nil
 }
 
@@ -137,21 +164,26 @@ func indexStatusIsFinal(current *pb.GetIndexResponse) bool {
 	if current == nil {
 		return false
 	}
+
 	if current.GetSearchable() {
 		return true
 	}
+
 	if current.Searchable == nil {
 		return false
 	}
+
 	codebaseStatus := model.CodebaseStatus(current.GetCodebase().GetStatus())
 	if codebaseStatus == model.CodebaseStatusDiscovered ||
 		codebaseStatus == model.CodebaseStatusPending ||
 		codebaseStatus == model.CodebaseStatusIndexing {
 		return false
 	}
+
 	readiness := current.GetCollectionReadiness()
 	if readiness == readinessBuilding || readiness == readinessLoading {
 		return false
 	}
+
 	return current.GetActiveJob() == nil
 }

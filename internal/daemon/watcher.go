@@ -74,7 +74,17 @@ func (watcher *Watcher) Run(ctx context.Context) {
 	for _, codebase := range watcher.manager.ListIndexes(ctx) {
 		watcher.AddCodebase(ctx, codebase)
 	}
-	slog.InfoContext(ctx, "watcher.started", "component", "daemon", "subcomponent", "watcher", "codebases", watcher.activeRootCount())
+
+	slog.InfoContext(
+		ctx,
+		"watcher.started",
+		"component",
+		"daemon",
+		"subcomponent",
+		"watcher",
+		"codebases",
+		watcher.activeRootCount(),
+	)
 	defer notify.Stop(watcher.events)
 
 	for {
@@ -99,6 +109,7 @@ func (watcher *Watcher) AddCodebase(ctx context.Context, codebase model.Codebase
 		watcher.mu.Unlock()
 		return
 	}
+
 	// WorktreeCommonDir is persisted only for linked worktrees (per
 	// model.Codebase), so it is the source of truth for a linked worktree's
 	// shared git common dir and the watcher reads it rather than recomputing. It
@@ -113,21 +124,57 @@ func (watcher *Watcher) AddCodebase(ctx context.Context, codebase model.Codebase
 	if commonDir == "" {
 		commonDir, _ = gitworktree.CommonDirAt(codebase.CanonicalPath)
 	}
-	watcher.roots[codebase.ID] = watchRoot{codebaseID: codebase.ID, root: codebase.CanonicalPath, commonDir: commonDir}
+
+	watcher.roots[codebase.ID] = watchRoot{
+		codebaseID: codebase.ID,
+		root:       codebase.CanonicalPath,
+		commonDir:  commonDir,
+	}
 	watcher.mu.Unlock()
 
 	recursivePath := filepath.Join(codebase.CanonicalPath, "...")
-	if err := notify.Watch(recursivePath, watcher.events, notify.Create, notify.Remove, notify.Write, notify.Rename); err != nil {
+	if err := notify.Watch(
+		recursivePath,
+		watcher.events,
+		notify.Create,
+		notify.Remove,
+		notify.Write,
+		notify.Rename,
+	); err != nil {
 		// Roll the roots entry back so a failed registration does not leave the
 		// codebase recorded with no OS watch installed, which would make a later
 		// AddCodebase a no-op and block any retry.
 		watcher.mu.Lock()
 		delete(watcher.roots, codebase.ID)
 		watcher.mu.Unlock()
-		slog.ErrorContext(ctx, "watcher.register_failed", "component", "daemon", "subcomponent", "watcher", "root", codebase.CanonicalPath, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"watcher.register_failed",
+			"component",
+			"daemon",
+			"subcomponent",
+			"watcher",
+			"root",
+			codebase.CanonicalPath,
+			"err",
+			err,
+		)
+
 		return
 	}
-	slog.InfoContext(ctx, "watcher.codebase_added", "component", "daemon", "subcomponent", "watcher", "codebase_id", codebase.ID, "root", codebase.CanonicalPath)
+
+	slog.InfoContext(
+		ctx,
+		"watcher.codebase_added",
+		"component",
+		"daemon",
+		"subcomponent",
+		"watcher",
+		"codebase_id",
+		codebase.ID,
+		"root",
+		codebase.CanonicalPath,
+	)
 }
 
 // RemoveCodebase drops a codebase from the dispatch table so events for
@@ -140,8 +187,18 @@ func (watcher *Watcher) RemoveCodebase(ctx context.Context, codebaseID string) {
 	if _, found := watcher.roots[codebaseID]; !found {
 		return
 	}
+
 	delete(watcher.roots, codebaseID)
-	slog.InfoContext(ctx, "watcher.codebase_removed", "component", "daemon", "subcomponent", "watcher", "codebase_id", codebaseID)
+	slog.InfoContext(
+		ctx,
+		"watcher.codebase_removed",
+		"component",
+		"daemon",
+		"subcomponent",
+		"watcher",
+		"codebase_id",
+		codebaseID,
+	)
 }
 
 // IndexReady is a no-op: the watcher does not buffer deferred first-build paths,
@@ -155,19 +212,26 @@ func (watcher *Watcher) IndexStopped(context.Context, string) {}
 func (watcher *Watcher) activeRootCount() int {
 	watcher.mu.Lock()
 	defer watcher.mu.Unlock()
+
 	return len(watcher.roots)
 }
 
 func (watcher *Watcher) snapshotRoots() []watchRoot {
 	watcher.mu.Lock()
 	defer watcher.mu.Unlock()
+
 	roots := make([]watchRoot, 0, len(watcher.roots))
 	for _, root := range watcher.roots {
 		roots = append(roots, root)
 	}
-	sort.Slice(roots, func(first int, second int) bool {
-		return len(roots[first].root) > len(roots[second].root)
-	})
+
+	sort.Slice(
+		roots,
+		func(first int, second int) bool {
+			return len(roots[first].root) > len(roots[second].root)
+		},
+	)
+
 	return roots
 }
 
@@ -178,12 +242,14 @@ func (watcher *Watcher) dispatch(ctx context.Context, event notify.EventInfo) {
 	if len(covers) == 0 {
 		return
 	}
+
 	info, statErr := os.Lstat(path)
 	if statErr == nil && info.IsDir() {
 		// A directory event; the recursive watch already covers its files,
 		// and the contained files raise their own events.
 		return
 	}
+
 	for _, root := range covers {
 		// A changed ignore source re-resolves this covering codebase's rules. The
 		// check is a cheap per-event predicate over the loop's covering root, so
@@ -192,23 +258,33 @@ func (watcher *Watcher) dispatch(ctx context.Context, event notify.EventInfo) {
 		if watcher.manager.indexability.IsIgnoreSourcePath(path, root.commonDir) {
 			watcher.manager.observer.Invalidate(root.codebaseID)
 		}
+
 		relativePath, err := filepath.Rel(root.root, path)
 		if err != nil {
 			continue
 		}
+
 		relativePath = filepath.ToSlash(relativePath)
 		if relativePath == "." || relativePath == "" {
 			continue
 		}
+
 		// Decide scope and ignore without file info, so delete and rename events
 		// (where os.Lstat fails) are filtered too. Otherwise .git lock-file churn
 		// would enqueue on removal. The size gate is left to converge and the
 		// indexer; the watcher only needs the ignore and scope verdict. Directory
 		// events already returned above, so isDir is false here; pathIgnored's
 		// ancestor walk still excludes paths under an ignored directory.
-		if watcher.manager.indexability.Ignored(ctx, root.codebaseID, root.root, relativePath, false) {
+		if watcher.manager.indexability.Ignored(
+			ctx,
+			root.codebaseID,
+			root.root,
+			relativePath,
+			false,
+		) {
 			continue
 		}
+
 		watcher.queue.Enqueue(root.codebaseID, relativePath)
 	}
 }
@@ -220,5 +296,6 @@ func covering(roots []watchRoot, path string) []watchRoot {
 			matches = append(matches, root)
 		}
 	}
+
 	return matches
 }

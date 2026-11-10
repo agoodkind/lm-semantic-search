@@ -42,6 +42,7 @@ func writeGitHubCLI(t *testing.T, token string) string {
 	if err := os.WriteFile(filepath.Join(directory, "gh"), []byte(script), 0o755); err != nil {
 		t.Fatalf("write gh: %v", err)
 	}
+
 	return directory
 }
 
@@ -52,18 +53,25 @@ var updatePaths = []struct {
 	name string
 	run  func(t *testing.T, overrides Overrides)
 }{
-	{name: "check", run: func(t *testing.T, overrides Overrides) {
-		t.Helper()
-		option, err := NetworkCheckOptions(context.Background(), overrides)
-		if err != nil {
-			t.Fatalf("NetworkCheckOptions: %v", err)
-		}
-		_, _ = selfupdate.Check(context.Background(), option)
-	}},
-	{name: "apply", run: func(t *testing.T, overrides Overrides) {
-		t.Helper()
-		_, _ = ApplyAll(context.Background(), overrides)
-	}},
+	{
+		name: "check",
+		run: func(t *testing.T, overrides Overrides) {
+			t.Helper()
+			option, err := NetworkCheckOptions(context.Background(), overrides)
+			if err != nil {
+				t.Fatalf("NetworkCheckOptions: %v", err)
+			}
+
+			_, _ = selfupdate.Check(context.Background(), option)
+		},
+	},
+	{
+		name: "apply",
+		run: func(t *testing.T, overrides Overrides) {
+			t.Helper()
+			_, _ = ApplyAll(context.Background(), overrides)
+		},
+	},
 }
 
 // TestUpdateSendsResolvedGitHubToken runs the update check and ApplyAll
@@ -78,39 +86,67 @@ func TestUpdateSendsResolvedGitHubToken(t *testing.T) {
 		ghCLIToken  string
 		want        string
 	}{
-		{name: "GH_TOKEN wins over GITHUB_TOKEN and gh", ghToken: ghEnvToken, githubToken: githubEnvToken, ghCLIToken: ghCLIToken, want: "Bearer " + ghEnvToken},
-		{name: "GITHUB_TOKEN wins over gh", githubToken: githubEnvToken, ghCLIToken: ghCLIToken, want: "Bearer " + githubEnvToken},
-		{name: "gh auth token when no variable is set", ghCLIToken: ghCLIToken, want: "Bearer " + ghCLIToken},
+		{
+			name:        "GH_TOKEN wins over GITHUB_TOKEN and gh",
+			ghToken:     ghEnvToken,
+			githubToken: githubEnvToken,
+			ghCLIToken:  ghCLIToken,
+			want:        "Bearer " + ghEnvToken,
+		},
+		{
+			name:        "GITHUB_TOKEN wins over gh",
+			githubToken: githubEnvToken,
+			ghCLIToken:  ghCLIToken,
+			want:        "Bearer " + githubEnvToken,
+		},
+		{
+			name:       "gh auth token when no variable is set",
+			ghCLIToken: ghCLIToken,
+			want:       "Bearer " + ghCLIToken,
+		},
 		{name: "no header when nothing resolves", want: ""},
 	}
+
 	for _, path := range updatePaths {
 		for _, testCase := range cases {
-			t.Run(path.name+"/"+testCase.name, func(t *testing.T) {
-				recorder := &releaseQueryRecorder{}
-				server := httptest.NewServer(recorder)
-				t.Cleanup(server.Close)
-				t.Setenv(updateAPIBaseURLEnv, server.URL)
-				t.Setenv("GH_TOKEN", testCase.ghToken)
-				t.Setenv("GITHUB_TOKEN", testCase.githubToken)
-				pathDirectory := t.TempDir()
-				if testCase.ghCLIToken != "" {
-					pathDirectory = writeGitHubCLI(t, testCase.ghCLIToken)
-				}
-				t.Setenv("PATH", pathDirectory)
-
-				path.run(t, Overrides{InstallDir: t.TempDir(), StateRoot: t.TempDir(), CacheDir: t.TempDir()})
-
-				recorder.mutex.Lock()
-				defer recorder.mutex.Unlock()
-				if len(recorder.authorizations) == 0 {
-					t.Fatalf("update %s sent no release query", path.name)
-				}
-				for _, authorization := range recorder.authorizations {
-					if authorization != testCase.want {
-						t.Fatalf("Authorization = %q, want %q", authorization, testCase.want)
+			t.Run(
+				path.name+"/"+testCase.name,
+				func(t *testing.T) {
+					recorder := &releaseQueryRecorder{}
+					server := httptest.NewServer(recorder)
+					t.Cleanup(server.Close)
+					t.Setenv(updateAPIBaseURLEnv, server.URL)
+					t.Setenv("GH_TOKEN", testCase.ghToken)
+					t.Setenv("GITHUB_TOKEN", testCase.githubToken)
+					pathDirectory := t.TempDir()
+					if testCase.ghCLIToken != "" {
+						pathDirectory = writeGitHubCLI(t, testCase.ghCLIToken)
 					}
-				}
-			})
+
+					t.Setenv("PATH", pathDirectory)
+
+					path.run(
+						t,
+						Overrides{
+							InstallDir: t.TempDir(),
+							StateRoot:  t.TempDir(),
+							CacheDir:   t.TempDir(),
+						},
+					)
+
+					recorder.mutex.Lock()
+					defer recorder.mutex.Unlock()
+					if len(recorder.authorizations) == 0 {
+						t.Fatalf("update %s sent no release query", path.name)
+					}
+
+					for _, authorization := range recorder.authorizations {
+						if authorization != testCase.want {
+							t.Fatalf("Authorization = %q, want %q", authorization, testCase.want)
+						}
+					}
+				},
+			)
 		}
 	}
 }

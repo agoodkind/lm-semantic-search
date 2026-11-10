@@ -42,6 +42,7 @@ func TestPlanClassifiesRemovedWorktreeAsCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planMissingCollectionRepairs returned error: %v", err)
 	}
+
 	if !slices.Contains(cleanups, codebase.CanonicalPath) {
 		t.Fatalf("cleanups = %v, want it to contain %s", cleanups, codebase.CanonicalPath)
 	}
@@ -63,17 +64,23 @@ func TestPlanMarksMissingNonWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planMissingCollectionRepairs returned error: %v", err)
 	}
+
 	if len(cleanups) != 0 {
 		t.Fatalf("cleanups = %v, want none for a plain missing directory", cleanups)
 	}
+
 	manager.mu.Lock()
 	got := manager.codebases[codebase.ID]
 	manager.mu.Unlock()
 	if got.Status != model.CodebaseStatusMissing {
 		t.Fatalf("status = %q, want missing", got.Status)
 	}
+
 	if got.LastFailedRun != nil {
-		t.Fatalf("LastFailedRun = %+v, want nil; a missing directory is not a failure", got.LastFailedRun)
+		t.Fatalf(
+			"LastFailedRun = %+v, want nil; a missing directory is not a failure",
+			got.LastFailedRun,
+		)
 	}
 }
 
@@ -101,8 +108,12 @@ func TestRepairAutoCleansRemovedWorktree(t *testing.T) {
 	if stillTracked {
 		t.Fatalf("removed-worktree codebase is still tracked, want it auto-cleaned")
 	}
+
 	if !slices.Contains(semantic.dropped, gonePath) {
-		t.Fatalf("semantic.Drop was not called for the worktree path; dropped = %v", semantic.dropped)
+		t.Fatalf(
+			"semantic.Drop was not called for the worktree path; dropped = %v",
+			semantic.dropped,
+		)
 	}
 }
 
@@ -118,7 +129,11 @@ func TestUpdateJobFailedSourceMissingSetsMissing(t *testing.T) {
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()
 
-	manager.updateJobFailed(context.Background(), job.ID, adapterr.NewInternal("read dir: no such file or directory", errors.New("boom")))
+	manager.updateJobFailed(
+		context.Background(),
+		job.ID,
+		adapterr.NewInternal("read dir: no such file or directory", errors.New("boom")),
+	)
 
 	manager.mu.Lock()
 	got := manager.codebases[codebase.ID]
@@ -126,6 +141,7 @@ func TestUpdateJobFailedSourceMissingSetsMissing(t *testing.T) {
 	if got.Status != model.CodebaseStatusMissing {
 		t.Fatalf("status = %q, want missing for a vanished source directory", got.Status)
 	}
+
 	if got.LastFailedRun != nil {
 		t.Fatalf("LastFailedRun = %+v, want nil for a missing source", got.LastFailedRun)
 	}
@@ -145,8 +161,12 @@ func TestPlanBackfillsWorktreeCommonDir(t *testing.T) {
 	codebase.Status = model.CodebaseStatusIndexed
 	codebase.CollectionName = "wt_coll"
 	if codebase.WorktreeCommonDir != "" {
-		t.Fatalf("precondition: WorktreeCommonDir should start empty, got %q", codebase.WorktreeCommonDir)
+		t.Fatalf(
+			"precondition: WorktreeCommonDir should start empty, got %q",
+			codebase.WorktreeCommonDir,
+		)
 	}
+
 	manager.mu.Lock()
 	manager.codebases[codebase.ID] = codebase
 	manager.mu.Unlock()

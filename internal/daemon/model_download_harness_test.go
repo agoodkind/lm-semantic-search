@@ -47,6 +47,7 @@ func offlineDownloadTestConfig(t *testing.T) config.Config {
 	if err != nil {
 		t.Fatalf("MkdirTemp returned error: %v", err)
 	}
+
 	t.Cleanup(func() {
 		if removeErr := os.RemoveAll(root); removeErr != nil {
 			t.Errorf("remove daemon root %s: %v", root, removeErr)
@@ -56,6 +57,7 @@ func offlineDownloadTestConfig(t *testing.T) config.Config {
 	if err != nil {
 		t.Fatalf("MkdirTemp returned error: %v", err)
 	}
+
 	t.Cleanup(func() { _ = os.RemoveAll(socketDirectory) })
 	t.Setenv("CLAUDE_CONTEXTD_SOCKET_PATH", filepath.Join(socketDirectory, "d.sock"))
 	t.Setenv("CLAUDE_CONTEXTD_MODEL_CACHE_ROOT", filepath.Join(root, "models"))
@@ -64,21 +66,26 @@ func offlineDownloadTestConfig(t *testing.T) config.Config {
 	t.Setenv("CLAUDE_CONTEXT_PROFILE", config.ProfileOffline)
 	t.Setenv("OFFLINE_EMBEDDING_MODEL", "")
 	t.Setenv("EMBEDDING_PROVIDER", "")
+
 	for _, variable := range sandbox.Env(root) {
 		if _, alreadySet := os.LookupEnv(variable.Name); alreadySet {
 			continue
 		}
+
 		t.Setenv(variable.Name, variable.Value)
 	}
+
 	cfg, err := config.Default()
 	if err != nil {
 		t.Fatalf("config.Default returned error: %v", err)
 	}
+
 	for _, directory := range sandbox.Directories(cfg) {
 		if err := os.MkdirAll(directory, 0o755); err != nil {
 			t.Fatalf("MkdirAll(%s) returned error: %v", directory, err)
 		}
 	}
+
 	return cfg
 }
 
@@ -90,16 +97,22 @@ func startModelDownloadDaemon(
 	interval time.Duration,
 ) *modelDownloadHarness {
 	t.Helper()
-	manager, err := daemon.NewManagerWithOptions(context.Background(), cfg, daemon.ManagerOptions{
-		ModelDownload: artifacts.options(classification, interval),
-	})
+	manager, err := daemon.NewManagerWithOptions(
+		context.Background(),
+		cfg,
+		daemon.ManagerOptions{
+			ModelDownload: artifacts.options(classification, interval),
+		},
+	)
 	if err != nil {
 		t.Fatalf("NewManagerWithOptions returned error: %v", err)
 	}
+
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", cfg.SocketPath)
 	if err != nil {
 		t.Fatalf("listen on %s returned error: %v", cfg.SocketPath, err)
 	}
+
 	server := grpc.NewServer(
 		grpc.MaxRecvMsgSize(grpcutil.MaxMessageBytes),
 		grpc.MaxSendMsgSize(grpcutil.MaxMessageBytes),
@@ -113,6 +126,7 @@ func startModelDownloadDaemon(
 		server.Stop()
 		t.Fatalf("DialDaemon returned error: %v", err)
 	}
+
 	var closeOnce sync.Once
 	closeDaemon := func() {
 		closeOnce.Do(func() {
@@ -130,20 +144,28 @@ func startModelDownloadDaemon(
 		artifacts.release()
 		closeDaemon()
 	})
+
 	return &modelDownloadHarness{config: cfg, client: client}
 }
 
 func (harness *modelDownloadHarness) startIndex(t *testing.T, repoPath string) string {
 	t.Helper()
-	startContext, cancel := context.WithTimeout(grpcutil.WithCorrelation(context.Background()), 10*time.Second)
+	startContext, cancel := context.WithTimeout(
+		grpcutil.WithCorrelation(context.Background()),
+		10*time.Second,
+	)
 	defer cancel()
-	started, err := harness.client.StartIndex(startContext, &pb.StartIndexRequest{
-		Path:     repoPath,
-		Splitter: &pb.SplitterConfig{Type: "ast"},
-		Client:   &pb.ClientInfo{Name: "model-download-test"},
-	})
+	started, err := harness.client.StartIndex(
+		startContext,
+		&pb.StartIndexRequest{
+			Path:     repoPath,
+			Splitter: &pb.SplitterConfig{Type: "ast"},
+			Client:   &pb.ClientInfo{Name: "model-download-test"},
+		},
+	)
 	if err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
+
 	return started.GetJobId()
 }

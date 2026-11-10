@@ -49,44 +49,55 @@ func New(target *url.URL, token string, cutoff time.Time) *httputil.ReverseProxy
 // omit releases published after cutoff. It leaves every other response
 // unchanged.
 func dropReleasesPublishedAfter(response *http.Response, cutoff time.Time) error {
-	if response.StatusCode != http.StatusOK || !strings.HasSuffix(response.Request.URL.Path, "/releases") {
+	if response.StatusCode != http.StatusOK ||
+		!strings.HasSuffix(response.Request.URL.Path, "/releases") {
 		return nil
 	}
+
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxReleaseListBytes))
 	_ = response.Body.Close()
 	if err != nil {
 		slog.Warn("ci.auto_update.release_list_read_failed", "err", err)
 		return fmt.Errorf("read release list: %w", err)
 	}
+
 	var entries []json.RawMessage
 	if err := json.Unmarshal(body, &entries); err != nil {
 		slog.Warn("ci.auto_update.release_list_decode_failed", "err", err)
 		return fmt.Errorf("decode release list: %w", err)
 	}
+
 	kept := make([]json.RawMessage, 0, len(entries))
 	hiddenTags := make([]string, 0)
+
 	for _, entry := range entries {
 		var release githubRelease
 		if err := json.Unmarshal(entry, &release); err != nil {
 			slog.Warn("ci.auto_update.release_decode_failed", "err", err)
 			return fmt.Errorf("decode release: %w", err)
 		}
+
 		if release.PublishedAt.After(cutoff) {
 			hiddenTags = append(hiddenTags, release.TagName)
 			continue
 		}
+
 		kept = append(kept, entry)
 	}
+
 	if len(hiddenTags) > 0 {
 		slog.Info("ci.auto_update.releases_hidden", "tags", hiddenTags, "cutoff", cutoff)
 	}
+
 	rewritten, err := json.Marshal(kept)
 	if err != nil {
 		slog.Warn("ci.auto_update.release_list_encode_failed", "err", err)
 		return fmt.Errorf("encode release list: %w", err)
 	}
+
 	response.Body = io.NopCloser(bytes.NewReader(rewritten))
 	response.ContentLength = int64(len(rewritten))
 	response.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
+
 	return nil
 }

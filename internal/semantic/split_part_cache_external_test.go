@@ -37,6 +37,7 @@ func (server *splitPartLifecycleServer) setCollection(exists bool, hasSplitPart 
 func (server *splitPartLifecycleServer) addedSplitPart() bool {
 	server.mu.Lock()
 	defer server.mu.Unlock()
+
 	return server.splitPartAdds == 1 && server.splitPartExists
 }
 
@@ -71,6 +72,7 @@ func (server *splitPartLifecycleServer) DescribeCollection(
 			},
 		}, nil
 	}
+
 	return &milvuspb.DescribeCollectionResponse{
 		Status:         successStatus(),
 		CollectionName: request.GetCollectionName(),
@@ -86,6 +88,7 @@ func (server *splitPartLifecycleServer) AddCollectionField(
 	defer server.mu.Unlock()
 	server.splitPartExists = true
 	server.splitPartAdds++
+
 	return successStatus(), nil
 }
 
@@ -103,6 +106,7 @@ func (server *splitPartLifecycleServer) Search(
 			},
 		}, nil
 	}
+
 	return &milvuspb.SearchResults{
 		Status: successStatus(),
 		Results: &schemapb.SearchResultData{
@@ -121,22 +125,23 @@ func (server *splitPartLifecycleServer) Search(
 func TestSearchRemigratesCollectionAfterInspectObservesAbsence(t *testing.T) {
 	t.Parallel()
 
-	embeddingServer := httptest.NewServer(http.HandlerFunc(
-		func(writer http.ResponseWriter, _ *http.Request) {
+	embeddingServer := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 			writer.Header().Set("Content-Type", "application/json")
 			if err := json.NewEncoder(writer).Encode(map[string][]map[string][]float64{
 				"data": {{"embedding": {0}}},
 			}); err != nil {
 				t.Errorf("encode embedding response: %v", err)
 			}
-		},
-	))
+		}),
+	)
 	t.Cleanup(embeddingServer.Close)
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen for fake Milvus: %v", err)
 	}
+
 	fakeMilvus := &splitPartLifecycleServer{
 		collectionExists: true,
 		splitPartExists:  true,
@@ -151,24 +156,35 @@ func TestSearchRemigratesCollectionAfterInspectObservesAbsence(t *testing.T) {
 	}()
 
 	codebasePath := t.TempDir()
-	service, err := semantic.NewService(context.Background(), config.Config{
-		EmbeddingProvider:  "OpenAI",
-		EmbeddingModel:     "test-model",
-		EmbeddingDimension: 1,
-		OpenAIAPIKey:       "test-key",
-		OpenAIBaseURL:      embeddingServer.URL,
-		MilvusAddress:      listener.Addr().String(),
-	})
+	service, err := semantic.NewService(
+		context.Background(),
+		config.Config{
+			EmbeddingProvider:  "OpenAI",
+			EmbeddingModel:     "test-model",
+			EmbeddingDimension: 1,
+			OpenAIAPIKey:       "test-key",
+			OpenAIBaseURL:      embeddingServer.URL,
+			MilvusAddress:      listener.Addr().String(),
+		},
+	)
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
+
 	t.Cleanup(func() {
 		if closeErr := service.Close(context.Background()); closeErr != nil {
 			t.Errorf("Close returned error: %v", closeErr)
 		}
 	})
 
-	if _, err := service.Search(context.Background(), codebasePath, "first", 1, nil, ""); err != nil {
+	if _, err := service.Search(
+		context.Background(),
+		codebasePath,
+		"first",
+		1,
+		nil,
+		"",
+	); err != nil {
 		t.Fatalf("initial Search returned error: %v", err)
 	}
 
@@ -178,14 +194,23 @@ func TestSearchRemigratesCollectionAfterInspectObservesAbsence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectCollection returned error: %v", err)
 	}
+
 	if facts.Exists {
 		t.Fatal("InspectCollection reported a dropped collection as present")
 	}
 
 	fakeMilvus.setCollection(true, false)
-	if _, err := service.Search(context.Background(), codebasePath, "second", 1, nil, ""); err != nil {
+	if _, err := service.Search(
+		context.Background(),
+		codebasePath,
+		"second",
+		1,
+		nil,
+		"",
+	); err != nil {
 		t.Fatalf("Search after external recreation returned error: %v", err)
 	}
+
 	if !fakeMilvus.addedSplitPart() {
 		t.Fatal("Search did not restore splitPart on the recreated collection")
 	}
@@ -196,26 +221,64 @@ func successStatus() *commonpb.Status {
 }
 
 func splitPartTestSchema(collectionName string, withSplitPart bool) *schemapb.CollectionSchema {
-	schema := entity.NewSchema().
-		WithName(collectionName).
-		WithField(entity.NewField().
-			WithName("id").
-			WithDataType(entity.FieldTypeVarChar).
-			WithMaxLength(512).
-			WithIsPrimaryKey(true)).
-		WithField(entity.NewField().WithName("content").WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535)).
-		WithField(entity.NewField().WithName("relativePath").WithDataType(entity.FieldTypeVarChar).WithMaxLength(1024)).
-		WithField(entity.NewField().WithName("startLine").WithDataType(entity.FieldTypeInt64)).
-		WithField(entity.NewField().WithName("endLine").WithDataType(entity.FieldTypeInt64)).
-		WithField(entity.NewField().WithName("fileExtension").WithDataType(entity.FieldTypeVarChar).WithMaxLength(32)).
-		WithField(entity.NewField().WithName("metadata").WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535))
+	schema := entity.NewSchema().WithName(collectionName).
+		WithField(
+			entity.NewField().WithName("id").WithDataType(entity.FieldTypeVarChar).
+				WithMaxLength(
+					512,
+				).
+				WithIsPrimaryKey(
+					true,
+				),
+		).
+		WithField(
+			entity.NewField().WithName("content").WithDataType(
+				entity.FieldTypeVarChar,
+			).WithMaxLength(
+				65535,
+			),
+		).
+		WithField(
+			entity.NewField().WithName("relativePath").WithDataType(
+				entity.FieldTypeVarChar,
+			).WithMaxLength(
+				1024,
+			),
+		).
+		WithField(
+			entity.NewField().WithName("startLine").WithDataType(entity.FieldTypeInt64),
+		).
+		WithField(
+			entity.NewField().WithName("endLine").WithDataType(entity.FieldTypeInt64),
+		).
+		WithField(
+			entity.NewField().WithName("fileExtension").WithDataType(
+				entity.FieldTypeVarChar,
+			).WithMaxLength(
+				32,
+			),
+		).
+		WithField(
+			entity.NewField().WithName("metadata").WithDataType(
+				entity.FieldTypeVarChar,
+			).WithMaxLength(
+				65535,
+			),
+		)
 	if withSplitPart {
-		schema = schema.WithField(entity.NewField().
-			WithName("splitPart").
-			WithDataType(entity.FieldTypeInt64).
-			WithNullable(true))
+		schema = schema.WithField(
+			entity.NewField().WithName("splitPart").WithDataType(entity.FieldTypeInt64).
+				WithNullable(
+					true,
+				),
+		)
 	}
+
 	return schema.
-		WithField(entity.NewField().WithName("vector").WithDataType(entity.FieldTypeFloatVector).WithDim(1)).
+		WithField(
+			entity.NewField().WithName("vector").WithDataType(entity.FieldTypeFloatVector).WithDim(
+				1,
+			),
+		).
 		ProtoMessage()
 }

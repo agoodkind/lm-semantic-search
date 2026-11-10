@@ -38,18 +38,24 @@ type resumePlan struct {
 }
 
 func sortResumePlans(plans []resumePlan) {
-	sort.Slice(plans, func(first int, second int) bool {
-		if plans[first].queueSequence == 0 {
-			return false
-		}
-		if plans[second].queueSequence == 0 {
-			return true
-		}
-		if plans[first].queueSequence != plans[second].queueSequence {
-			return plans[first].queueSequence < plans[second].queueSequence
-		}
-		return plans[first].codebaseID < plans[second].codebaseID
-	})
+	sort.Slice(
+		plans,
+		func(first int, second int) bool {
+			if plans[first].queueSequence == 0 {
+				return false
+			}
+
+			if plans[second].queueSequence == 0 {
+				return true
+			}
+
+			if plans[first].queueSequence != plans[second].queueSequence {
+				return plans[first].queueSequence < plans[second].queueSequence
+			}
+
+			return plans[first].codebaseID < plans[second].codebaseID
+		},
+	)
 }
 
 // ResumeOrphanedJobs re-queues indexing for every codebase whose previous job
@@ -63,18 +69,22 @@ func sortResumePlans(plans []resumePlan) {
 func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 	manager.mu.Lock()
 	plans := make([]resumePlan, 0)
+
 	for _, codebase := range manager.codebases {
 		if codebase.AutoIndexingPaused {
 			continue
 		}
+
 		if codebase.Kind == model.CodebaseKindDocument {
 			// A conversation codebase recovers through its own ingest trigger;
 			// its chat:// path is not a directory the index runner can walk.
 			continue
 		}
+
 		if codebase.Status != model.CodebaseStatusIndexing {
 			continue
 		}
+
 		effectivePolicy := codebase.SchedulingPolicy
 		override := model.SchedulingPolicyPatch{Priority: nil, Quiet: nil, IdleAfterSeconds: nil}
 		var queueSequence uint64
@@ -83,46 +93,58 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 			override = interrupted.SchedulingOverride
 			queueSequence = interrupted.QueueSequence
 		}
-		plans = append(plans, resumePlan{
-			canonicalPath:             codebase.CanonicalPath,
-			config:                    codebase.EffectiveConfig,
-			codebaseID:                codebase.ID,
-			checkpoint:                resumeCheckpointNone,
-			effectiveSchedulingPolicy: effectivePolicy,
-			schedulingOverride:        override,
-			queueSequence:             queueSequence,
-			converge:                  false,
-			interruptedJobID:          "",
-			codebase:                  codebase,
-		})
+
+		plans = append(
+			plans,
+			resumePlan{
+				canonicalPath:             codebase.CanonicalPath,
+				config:                    codebase.EffectiveConfig,
+				codebaseID:                codebase.ID,
+				checkpoint:                resumeCheckpointNone,
+				effectiveSchedulingPolicy: effectivePolicy,
+				schedulingOverride:        override,
+				queueSequence:             queueSequence,
+				converge:                  false,
+				interruptedJobID:          "",
+				codebase:                  codebase,
+			},
+		)
 	}
+
 	for _, interrupted := range manager.interruptedConvergeJobs {
 		codebase, found := manager.codebases[interrupted.CodebaseID]
 		if !found || codebase.AutoIndexingPaused || codebase.Kind == model.CodebaseKindDocument {
 			continue
 		}
-		plans = append(plans, resumePlan{
-			canonicalPath:             codebase.CanonicalPath,
-			config:                    codebase.EffectiveConfig,
-			codebaseID:                codebase.ID,
-			checkpoint:                resumeCheckpointLive,
-			effectiveSchedulingPolicy: interrupted.EffectiveSchedulingPolicy,
-			schedulingOverride:        interrupted.SchedulingOverride,
-			queueSequence:             interrupted.QueueSequence,
-			converge:                  true,
-			interruptedJobID:          interrupted.ID,
-			codebase:                  codebase,
-		})
+
+		plans = append(
+			plans,
+			resumePlan{
+				canonicalPath:             codebase.CanonicalPath,
+				config:                    codebase.EffectiveConfig,
+				codebaseID:                codebase.ID,
+				checkpoint:                resumeCheckpointLive,
+				effectiveSchedulingPolicy: interrupted.EffectiveSchedulingPolicy,
+				schedulingOverride:        interrupted.SchedulingOverride,
+				queueSequence:             interrupted.QueueSequence,
+				converge:                  true,
+				interruptedJobID:          interrupted.ID,
+				codebase:                  codebase,
+			},
+		)
 	}
+
 	manager.mu.Unlock()
 
 	// A daemon restarted during maintenance leaves its interrupted builds where
 	// they are; the repair pass resumes them on the first sweep after the mode
 	// ends, exactly as it does when resume-on-boot is off.
-	if !manager.config.ResumeIndexingOnBoot || manager.skipForMaintenance(ctx, "resume-orphaned-jobs") {
+	if !manager.config.ResumeIndexingOnBoot ||
+		manager.skipForMaintenance(ctx, "resume-orphaned-jobs") {
 		for _, plan := range plans {
 			manager.logResumeSkipped(ctx, plan.codebaseID, plan.canonicalPath)
 		}
+
 		return
 	}
 
@@ -132,24 +154,41 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 			resumable = append(resumable, plan)
 			continue
 		}
-		plan.checkpoint = manager.resumableCheckpointKind(ctx, plan.codebase, plan.config.IgnoreDigest)
+
+		plan.checkpoint = manager.resumableCheckpointKind(
+			ctx,
+			plan.codebase,
+			plan.config.IgnoreDigest,
+		)
 		if plan.checkpoint != resumeCheckpointNone {
 			resumable = append(resumable, plan)
 			continue
 		}
+
 		manager.logResumeUnresumable(ctx, plan.codebaseID, plan.canonicalPath)
 		manager.parkUnresumableForRetry(ctx, plan.codebaseID)
 	}
+
 	if len(resumable) == 0 {
 		return
 	}
+
 	sortResumePlans(resumable)
 
 	paths := make([]string, 0, len(resumable))
 	for _, plan := range resumable {
 		paths = append(paths, plan.canonicalPath)
 	}
-	slog.InfoContext(ctx, "resuming orphaned indexing jobs", "count", len(resumable), "paths", paths)
+
+	slog.InfoContext(
+		ctx,
+		"resuming orphaned indexing jobs",
+		"count",
+		len(resumable),
+		"paths",
+		paths,
+	)
+
 	for _, plan := range resumable {
 		manager.launchResumePlan(ctx, plan)
 	}
@@ -159,8 +198,10 @@ func (manager *Manager) launchResumePlan(ctx context.Context, plan resumePlan) {
 	if manager.holdForSourceFirstBuild(plan.canonicalPath) {
 		manager.logResumeHeld(ctx, plan.codebaseID, plan.canonicalPath)
 		manager.parkUnresumableForRetry(ctx, plan.codebaseID)
+
 		return
 	}
+
 	client := model.ClientInfo{Name: "daemon-resume", PID: 0}
 	var err error
 	switch {
@@ -171,10 +212,21 @@ func (manager *Manager) launchResumePlan(ctx context.Context, plan resumePlan) {
 	default:
 		err = manager.startRecoveredIndex(ctx, plan, client)
 	}
+
 	if err != nil {
-		slog.ErrorContext(ctx, "resume orphaned job failed", "codebase_id", plan.codebaseID, "path", plan.canonicalPath, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"resume orphaned job failed",
+			"codebase_id",
+			plan.codebaseID,
+			"path",
+			plan.canonicalPath,
+			"err",
+			err,
+		)
 		return
 	}
+
 	manager.recordResumeLaunched(ctx, plan)
 }
 
@@ -184,17 +236,23 @@ func (manager *Manager) recordResumeLaunched(ctx context.Context, plan resumePla
 	if plan.interruptedJobID != "" {
 		delete(manager.interruptedConvergeJobs, plan.interruptedJobID)
 	}
+
 	manager.mu.Unlock()
 	manager.logResumeLaunched(ctx, plan.codebaseID, plan.canonicalPath)
 }
 
-func (manager *Manager) resumeConverge(ctx context.Context, plan resumePlan, client model.ClientInfo) error {
+func (manager *Manager) resumeConverge(
+	ctx context.Context,
+	plan resumePlan,
+	client model.ClientInfo,
+) error {
 	manager.mu.Lock()
 	codebase, found := manager.codebases[plan.codebaseID]
 	if !found {
 		manager.mu.Unlock()
 		return fmt.Errorf("recovered converge codebase %s is missing", plan.codebaseID)
 	}
+
 	indexConfig := manager.enrichIndexConfig(codebase.EffectiveConfig)
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
 	_, resolution, err := manager.activeJobLocked(codebase, indexConfig)
@@ -202,36 +260,46 @@ func (manager *Manager) resumeConverge(ctx context.Context, plan resumePlan, cli
 		manager.mu.Unlock()
 		return err
 	}
+
 	if resolution != activeJobNone {
 		manager.mu.Unlock()
 		return nil
 	}
-	job, err := manager.enqueueCodeSyncJobLocked(codebase, pendingCodeRequest{
-		requestedPath: plan.canonicalPath,
-		canonicalPath: plan.canonicalPath,
-		client:        client,
-		indexConfig:   indexConfig,
-		force:         false,
-		policyPatch:   plan.schedulingOverride,
-	})
+
+	job, err := manager.enqueueCodeSyncJobLocked(
+		codebase,
+		pendingCodeRequest{
+			requestedPath: plan.canonicalPath,
+			canonicalPath: plan.canonicalPath,
+			client:        client,
+			indexConfig:   indexConfig,
+			force:         false,
+			policyPatch:   plan.schedulingOverride,
+		},
+	)
 	if err != nil {
 		manager.mu.Unlock()
 		return err
 	}
+
 	current := manager.jobs[job.ID]
 	current.EffectiveSchedulingPolicy = plan.effectiveSchedulingPolicy
 	current.SchedulingOverride = plan.schedulingOverride
 	if plan.queueSequence != 0 {
 		current.QueueSequence = plan.queueSequence
 	}
+
 	manager.jobs[job.ID] = current
 	if err := manager.appendJobLocked("resume_converge_sync", current); err != nil {
 		manager.mu.Unlock()
 		manager.updateJobCancelled(context.WithoutCancel(ctx), job.ID)
+
 		return err
 	}
+
 	manager.mu.Unlock()
 	manager.runJobAsync(ctx, job.ID)
+
 	return nil
 }
 
@@ -254,20 +322,34 @@ func (manager *Manager) resumeConverge(ctx context.Context, plan resumePlan, cli
 // lives: where no live checkpoint was ever written an absent file is the
 // expected shape and stays quiet, and where one should exist its absence is a
 // real loss and is reported to the operator.
-func (manager *Manager) resumableCheckpointKind(ctx context.Context, codebase model.Codebase, configDigest string) resumeCheckpointKind {
+func (manager *Manager) resumableCheckpointKind(
+	ctx context.Context,
+	codebase model.Codebase,
+	configDigest string,
+) resumeCheckpointKind {
 	legacyDigest := manager.legacyDigestForCodebase(codebase.ID)
-	stagingSnapshot := merkle.LoadOptionalSnapshotForConfig(manager.stagingMerklePath(codebase.ID), configDigest, legacyDigest)
+	stagingSnapshot := merkle.LoadOptionalSnapshotForConfig(
+		manager.stagingMerklePath(codebase.ID),
+		configDigest,
+		legacyDigest,
+	)
 	if len(stagingSnapshot.Files) > 0 {
 		return resumeCheckpointStaging
 	}
+
 	liveCheckpoint := manager.loadLiveCheckpoint(ctx, codebase, configDigest)
 	if len(liveCheckpoint.snapshot.Files) > 0 {
 		return resumeCheckpointLive
 	}
+
 	return resumeCheckpointNone
 }
 
-func (manager *Manager) startStagingResume(ctx context.Context, plan resumePlan, client model.ClientInfo) error {
+func (manager *Manager) startStagingResume(
+	ctx context.Context,
+	plan resumePlan,
+	client model.ClientInfo,
+) error {
 	indexConfig := manager.enrichIndexConfig(plan.config)
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
 
@@ -277,11 +359,13 @@ func (manager *Manager) startStagingResume(ctx context.Context, plan resumePlan,
 		manager.mu.Unlock()
 		return nil
 	}
+
 	_, resolution, err := manager.activeJobLocked(codebase, indexConfig)
 	if err != nil {
 		manager.mu.Unlock()
 		return err
 	}
+
 	// A staging resume is a startup best-effort: if any job is already active for
 	// this codebase (a matching-config dedup or a non-matching coalesce), skip the
 	// resume rather than fight the in-flight run.
@@ -294,35 +378,57 @@ func (manager *Manager) startStagingResume(ctx context.Context, plan resumePlan,
 	if codebase.LastSuccessfulRun != nil {
 		codebase.Status = model.CodebaseStatusIndexing
 	}
+
 	codebase.EffectiveConfig = indexConfig
 	if manager.semantic != nil && manager.semantic.Available() {
 		codebase.CollectionName = manager.semantic.CollectionName(plan.canonicalPath)
 	}
+
 	if info, ok := gitworktree.Resolve(plan.canonicalPath); ok && info.Linked {
 		codebase.WorktreeCommonDir = info.CommonDir
 	}
+
 	codebase.UpdatedAt = clock.Now()
 
-	job := newQueuedJob(codebase.ID, plan.canonicalPath, plan.canonicalPath, client, string(jobOperationIndex), false, indexConfig, emptyAdmissionBudget, clock.Now())
+	job := newQueuedJob(
+		codebase.ID,
+		plan.canonicalPath,
+		plan.canonicalPath,
+		client,
+		string(jobOperationIndex),
+		false,
+		indexConfig,
+		emptyAdmissionBudget,
+		clock.Now(),
+	)
 	queueSequence := plan.queueSequence
 	if queueSequence == 0 {
 		queueSequence = manager.nextQueueSequenceLocked()
 	}
-	applyJobSchedulingPolicy(&job, plan.effectiveSchedulingPolicy, plan.schedulingOverride, queueSequence)
+
+	applyJobSchedulingPolicy(
+		&job,
+		plan.effectiveSchedulingPolicy,
+		plan.schedulingOverride,
+		queueSequence,
+	)
 	codebase.ActiveJobID = job.ID
 	manager.codebases[codebase.ID] = codebase
 	if err := manager.saveLocked(); err != nil {
 		manager.mu.Unlock()
 		return err
 	}
+
 	if err := manager.appendJobLocked("resume_staging_index", job); err != nil {
 		manager.mu.Unlock()
 		return err
 	}
+
 	manager.observer.Invalidate(codebase.ID)
 	manager.mu.Unlock()
 
 	manager.runJobAsync(ctx, job.ID)
+
 	return nil
 }
 
@@ -347,6 +453,7 @@ func (manager *Manager) parkUnresumableForRetry(ctx context.Context, codebaseID 
 	if !found {
 		return
 	}
+
 	if codebase.Status != model.CodebaseStatusIndexing {
 		return
 	}
@@ -355,7 +462,14 @@ func (manager *Manager) parkUnresumableForRetry(ctx context.Context, codebaseID 
 	codebase.UpdatedAt = clock.Now()
 	manager.codebases[codebaseID] = codebase
 	if err := manager.saveLocked(); err != nil {
-		slog.ErrorContext(ctx, "write registry after parking unresumable index failed", "codebase_id", codebaseID, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"write registry after parking unresumable index failed",
+			"codebase_id",
+			codebaseID,
+			"err",
+			err,
+		)
 	}
 }
 
@@ -363,21 +477,46 @@ func (manager *Manager) parkUnresumableForRetry(ctx context.Context, codebaseID 
 // codebase. It exists as a method so the per-codebase line is not emitted
 // lexically inside the ResumeOrphanedJobs loop.
 func (manager *Manager) logResumeSkipped(ctx context.Context, codebaseID string, path string) {
-	slog.InfoContext(ctx, "skipping orphaned indexing job resume", "codebase_id", codebaseID, "path", path, "reason", "resume_on_boot_disabled")
+	slog.InfoContext(
+		ctx,
+		"skipping orphaned indexing job resume",
+		"codebase_id",
+		codebaseID,
+		"path",
+		path,
+		"reason",
+		"resume_on_boot_disabled",
+	)
 }
 
 // logResumeUnresumable records that an interrupted index had no checkpoint to
 // resume from, so the daemon leaves it tracked rather than re-embedding the
 // whole codebase on boot. Re-run index_codebase to finish it.
 func (manager *Manager) logResumeUnresumable(ctx context.Context, codebaseID string, path string) {
-	slog.InfoContext(ctx, "skipping unresumable interrupted index; re-run index_codebase to finish", "codebase_id", codebaseID, "path", path, "reason", "no_checkpoint")
+	slog.InfoContext(
+		ctx,
+		"skipping unresumable interrupted index; re-run index_codebase to finish",
+		"codebase_id",
+		codebaseID,
+		"path",
+		path,
+		"reason",
+		"no_checkpoint",
+	)
 }
 
 // logResumeHeld records that boot resume parked a worktree behind a sibling's
 // first build instead of resuming it. It exists as a method so the per-codebase
 // line is not emitted lexically inside the ResumeOrphanedJobs loop.
 func (manager *Manager) logResumeHeld(ctx context.Context, codebaseID string, path string) {
-	slog.InfoContext(ctx, "holding orphaned indexing job resume for sibling first build", "codebase_id", codebaseID, "path", path)
+	slog.InfoContext(
+		ctx,
+		"holding orphaned indexing job resume for sibling first build",
+		"codebase_id",
+		codebaseID,
+		"path",
+		path,
+	)
 }
 
 // logResumeLaunched records that boot resume re-queued one codebase. It

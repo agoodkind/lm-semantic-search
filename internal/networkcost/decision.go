@@ -60,11 +60,14 @@ func Decide(
 	if override || preference == PreferenceAllow {
 		return DecisionDownload
 	}
+
 	if classification == ClassificationNormal {
 		return DecisionDownload
 	}
+
 	if preference == PreferenceDefer {
 		return DecisionDefer
 	}
+
 	return DecisionDownloadWithWarning
 }

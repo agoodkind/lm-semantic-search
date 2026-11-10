@@ -37,6 +37,7 @@ func TestResolveCanonicalPathAcceptsIDPathAndSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvalSymlinks returned error: %v", err)
 	}
+
 	codebase := newCodebaseRecord(canonical)
 	manager.mu.Lock()
 	manager.codebases[codebase.ID] = codebase
@@ -46,6 +47,7 @@ func TestResolveCanonicalPathAcceptsIDPathAndSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath(id) returned error: %v", err)
 	}
+
 	if byID != canonical {
 		t.Errorf("resolveCanonicalPath(id) = %q, want %q", byID, canonical)
 	}
@@ -54,6 +56,7 @@ func TestResolveCanonicalPathAcceptsIDPathAndSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath(path) returned error: %v", err)
 	}
+
 	if byPath != canonical {
 		t.Errorf("resolveCanonicalPath(path) = %q, want %q", byPath, canonical)
 	}
@@ -62,10 +65,12 @@ func TestResolveCanonicalPathAcceptsIDPathAndSymlink(t *testing.T) {
 	if err := os.Symlink(repoPath, linkPath); err != nil {
 		t.Fatalf("Symlink returned error: %v", err)
 	}
+
 	bySymlink, err := manager.resolveCanonicalPath(linkPath)
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath(symlink) returned error: %v", err)
 	}
+
 	if bySymlink != canonical {
 		t.Errorf("resolveCanonicalPath(symlink) = %q, want %q", bySymlink, canonical)
 	}
@@ -83,9 +88,11 @@ func TestResolveCanonicalPathUnknownIDErrorsClearly(t *testing.T) {
 	if !errors.As(err, &adapterErr) {
 		t.Fatalf("error is not an AdapterError: %v", err)
 	}
+
 	if adapterErr.Class != adapterr.ClassUnknownCodebaseID {
 		t.Errorf("class = %q, want %q", adapterErr.Class, adapterr.ClassUnknownCodebaseID)
 	}
+
 	if !strings.Contains(adapterr.SafeMessage(err), `no codebase with id "cb_does_not_exist"`) {
 		t.Errorf("SafeMessage = %q, want it to name the id", adapterr.SafeMessage(err))
 	}

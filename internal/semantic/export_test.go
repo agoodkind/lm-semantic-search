@@ -15,18 +15,21 @@ import (
 func SetBootDialTimeoutForTest(timeout time.Duration) func() {
 	previous := bootDialTimeout
 	bootDialTimeout = timeout
+
 	return func() { bootDialTimeout = previous }
 }
 
 func SetReconnectSleepForTest(sleep func(context.Context, time.Duration) bool) func() {
 	previous := reconnectSleep
 	reconnectSleep = sleep
+
 	return func() { reconnectSleep = previous }
 }
 
 func SetReconnectJitterForTest(jitter func(time.Duration) time.Duration) func() {
 	previous := reconnectJitter
 	reconnectJitter = jitter
+
 	return func() { reconnectJitter = previous }
 }
 

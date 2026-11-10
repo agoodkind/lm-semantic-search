@@ -24,9 +24,11 @@ func TestToJobWithTokensEmitsResolvedDisplay(t *testing.T) {
 	if got := degraded.GetDisplayState(); got != "failed, retryable" {
 		t.Fatalf("degraded display_state = %q, want %q", got, "failed, retryable")
 	}
+
 	if got := degraded.GetDisplayError(); got != "" {
 		t.Fatalf("degraded display_error = %q, want empty (banner carries the cause)", got)
 	}
+
 	if got := degraded.GetState(); got != string(model.JobStateFailed) {
 		t.Fatalf("raw state = %q, want %q kept for machine parsing", got, model.JobStateFailed)
 	}
@@ -40,9 +42,11 @@ func TestToJobWithTokensEmitsResolvedDisplay(t *testing.T) {
 	if !superseded.GetSuperseded() {
 		t.Fatalf("expected superseded=true when a successor is supplied")
 	}
+
 	if got := superseded.GetSupersededByJobId(); got != "job_next" {
 		t.Fatalf("superseded_by_job_id = %q, want job_next", got)
 	}
+
 	if got := superseded.GetDisplayState(); got != "failed, retryable, superseded by job_next" {
 		t.Fatalf("display_state = %q, want the superseded tag list", got)
 	}

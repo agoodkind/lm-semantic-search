@@ -13,10 +13,12 @@ func (controller *collectionResidencyController) updateStateMetricsLocked() {
 	idle := 0
 	loading := 0
 	ready := 0
+
 	for collectionName, entry := range controller.entries {
 		if isStagingCollection(collectionName) {
 			continue
 		}
+
 		switch entry.state {
 		case collectionResidencyCold:
 			idle++
@@ -27,6 +29,7 @@ func (controller *collectionResidencyController) updateStateMetricsLocked() {
 		case collectionResidencyUnknown:
 		}
 	}
+
 	metrics.SetMilvusCollectionStates(idle, loading, ready)
 }
 
@@ -41,6 +44,7 @@ func collectionResidencyStateName(state collectionResidencyState) string {
 	case collectionResidencyUnknown:
 		return "unknown"
 	}
+
 	return "unknown"
 }
 

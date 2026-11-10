@@ -21,34 +21,67 @@ func modelDownloadMetrics(snapshot modelDownloadSnapshot) []*pb.Metric {
 		stringMetric(statusGroupModelDownload, "model_download.state", string(snapshot.State)),
 	}
 	if snapshot.ProgressKnown {
-		list = append(list,
+		list = append(
+			list,
 			stringMetric(statusGroupModelDownload, "model_download.artifact", snapshot.Artifact),
-			intMetric(statusGroupModelDownload, "model_download.downloaded_bytes", snapshot.DownloadedBytes, unitBytes),
+			intMetric(
+				statusGroupModelDownload,
+				"model_download.downloaded_bytes",
+				snapshot.DownloadedBytes,
+				unitBytes,
+			),
 		)
 	} else {
-		list = append(list,
+		list = append(
+			list,
 			absentMetric(statusGroupModelDownload, "model_download.artifact"),
 			absentMetric(statusGroupModelDownload, "model_download.downloaded_bytes"),
 		)
 	}
+
 	if snapshot.ProgressKnown && snapshot.TotalBytes > 0 {
 		percent := float64(snapshot.DownloadedBytes) / float64(snapshot.TotalBytes) * percentScale
-		list = append(list,
-			intMetric(statusGroupModelDownload, "model_download.total_bytes", snapshot.TotalBytes, unitBytes),
+		list = append(
+			list,
+			intMetric(
+				statusGroupModelDownload,
+				"model_download.total_bytes",
+				snapshot.TotalBytes,
+				unitBytes,
+			),
 			doubleMetric(statusGroupModelDownload, "model_download.percent", percent, unitPercent),
 		)
 	} else {
-		list = append(list,
+		list = append(
+			list,
 			absentMetric(statusGroupModelDownload, "model_download.total_bytes"),
 			absentMetric(statusGroupModelDownload, "model_download.percent"),
 		)
 	}
+
 	if snapshot.DecisionKnown {
-		list = append(list,
-			stringMetric(statusGroupModelDownload, "model_download.network_classification", string(snapshot.Classification)),
-			stringMetric(statusGroupModelDownload, "model_download.network_policy", string(snapshot.Policy)),
-			boolMetric(statusGroupModelDownload, "model_download.network_override", snapshot.Override),
-			stringMetric(statusGroupModelDownload, "model_download.decision", string(snapshot.Decision)),
+		list = append(
+			list,
+			stringMetric(
+				statusGroupModelDownload,
+				"model_download.network_classification",
+				string(snapshot.Classification),
+			),
+			stringMetric(
+				statusGroupModelDownload,
+				"model_download.network_policy",
+				string(snapshot.Policy),
+			),
+			boolMetric(
+				statusGroupModelDownload,
+				"model_download.network_override",
+				snapshot.Override,
+			),
+			stringMetric(
+				statusGroupModelDownload,
+				"model_download.decision",
+				string(snapshot.Decision),
+			),
 			boolMetric(
 				statusGroupModelDownload,
 				"model_download.warning",
@@ -56,7 +89,8 @@ func modelDownloadMetrics(snapshot modelDownloadSnapshot) []*pb.Metric {
 			),
 		)
 	} else {
-		list = append(list,
+		list = append(
+			list,
 			absentMetric(statusGroupModelDownload, "model_download.network_classification"),
 			absentMetric(statusGroupModelDownload, "model_download.network_policy"),
 			absentMetric(statusGroupModelDownload, "model_download.network_override"),
@@ -64,11 +98,16 @@ func modelDownloadMetrics(snapshot modelDownloadSnapshot) []*pb.Metric {
 			absentMetric(statusGroupModelDownload, "model_download.warning"),
 		)
 	}
+
 	if snapshot.State == modelDownloadFailed && snapshot.LastError != "" {
-		list = append(list, stringMetric(statusGroupModelDownload, "model_download.last_error", snapshot.LastError))
+		list = append(
+			list,
+			stringMetric(statusGroupModelDownload, "model_download.last_error", snapshot.LastError),
+		)
 	} else {
 		list = append(list, absentMetric(statusGroupModelDownload, "model_download.last_error"))
 	}
+
 	return list
 }
 
@@ -76,12 +115,15 @@ func (manager *Manager) awaitEmbeddingModel(ctx context.Context, jobID string) b
 	if manager.modelDownload == nil {
 		return true
 	}
+
 	manager.modelDownload.requestRecheck()
+
 	for {
 		snapshot, changed := manager.modelDownload.observe()
 		if snapshot.State == modelDownloadComplete {
 			return true
 		}
+
 		manager.noteJobModelDownload(jobID, snapshot)
 		select {
 		case <-ctx.Done():
@@ -101,6 +143,7 @@ func (manager *Manager) noteJobModelDownload(jobID string, snapshot modelDownloa
 	if !found || job.State != model.JobStateQueued {
 		return
 	}
+
 	now := clock.Now()
 	job.UpdatedAt = now
 	job.Progress.Phase = string(jobPhaseModelDownload)
@@ -114,5 +157,6 @@ func (manager *Manager) noteJobModelDownload(jobID string, snapshot modelDownloa
 			TotalBytes:      snapshot.TotalBytes,
 		}
 	}
+
 	manager.jobs[jobID] = job
 }

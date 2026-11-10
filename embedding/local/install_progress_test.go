@@ -30,13 +30,13 @@ type reportedProgress struct {
 func TestInstallModelWithProgressReportsBytesAndRejectsWrongChecksum(t *testing.T) {
 	var requestCount atomic.Int64
 	served := make([]byte, servedArtifactBytes)
-	server := httptest.NewTLSServer(http.HandlerFunc(
-		func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 			requestCount.Add(1)
 			writer.Header().Set("Content-Length", strconv.Itoa(len(served)))
 			_, _ = writer.Write(served)
-		},
-	))
+		}),
+	)
 	t.Cleanup(server.Close)
 
 	client := server.Client()
@@ -44,6 +44,7 @@ func TestInstallModelWithProgressReportsBytesAndRejectsWrongChecksum(t *testing.
 	if !ok {
 		t.Fatalf("client transport type = %T, want *http.Transport", client.Transport)
 	}
+
 	var dialer net.Dialer
 	serverAddress := server.Listener.Addr().String()
 	transport.DialContext = func(ctx context.Context, network string, _ string) (net.Conn, error) {
@@ -59,22 +60,28 @@ func TestInstallModelWithProgressReportsBytesAndRejectsWrongChecksum(t *testing.
 		cacheRoot,
 		testModel,
 		func(artifact string, downloadedBytes int64, totalBytes int64) {
-			reported = append(reported, reportedProgress{
-				artifact:        artifact,
-				downloadedBytes: downloadedBytes,
-				totalBytes:      totalBytes,
-			})
+			reported = append(
+				reported,
+				reportedProgress{
+					artifact:        artifact,
+					downloadedBytes: downloadedBytes,
+					totalBytes:      totalBytes,
+				},
+			)
 		},
 	)
 	if !errors.Is(err, local.ErrModelUnavailable) {
 		t.Fatalf("InstallModelWithProgress err = %v, want ErrModelUnavailable", err)
 	}
+
 	if requestCount.Load() != 1 {
 		t.Fatalf("requests = %d, want 1", requestCount.Load())
 	}
+
 	if len(reported) == 0 {
 		t.Fatal("progress calls = 0, want at least 1")
 	}
+
 	want := reportedProgress{
 		artifact:        presetModelFilename,
 		downloadedBytes: servedArtifactBytes,
@@ -83,7 +90,9 @@ func TestInstallModelWithProgressReportsBytesAndRejectsWrongChecksum(t *testing.
 	if final := reported[len(reported)-1]; final != want {
 		t.Fatalf("final progress = %+v, want %+v", final, want)
 	}
+
 	modelDirectory := filepath.Join(cacheRoot, "embedding-models", testModel)
+
 	for _, name := range []string{presetModelFilename, presetModelFilename + ".partial"} {
 		_, statErr := os.Stat(filepath.Join(modelDirectory, name))
 		if !errors.Is(statErr, os.ErrNotExist) {

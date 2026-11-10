@@ -30,13 +30,16 @@ func FromStartIndexConfig(request *pb.StartIndexRequest) model.IndexConfig {
 		if request.GetSplitter().GetType() != "" {
 			config.SplitterType = request.GetSplitter().GetType()
 		}
+
 		if request.GetSplitter().GetChunkSize() > 0 {
 			config.SplitterChunkSize = request.GetSplitter().GetChunkSize()
 		}
+
 		if request.GetSplitter().GetOverlap() > 0 {
 			config.SplitterOverlap = request.GetSplitter().GetOverlap()
 		}
 	}
+
 	return config
 }
 
@@ -80,19 +83,24 @@ func FromSchedulingPolicyPatch(
 		if err != nil {
 			return empty, err
 		}
+
 		converted.Priority = &priority
 	}
+
 	if patch.Quiet != nil {
 		quiet := patch.GetQuiet()
 		converted.Quiet = &quiet
 	}
+
 	if patch.IdleAfterSeconds != nil {
 		idleAfterSeconds := patch.GetIdleAfterSeconds()
 		if idleAfterSeconds <= 0 {
 			return empty, fmt.Errorf("idle after seconds must be positive")
 		}
+
 		converted.IdleAfterSeconds = &idleAfterSeconds
 	}
+
 	return converted, nil
 }
 
@@ -126,6 +134,7 @@ func ToCodebase(codebase model.Codebase) *pb.Codebase {
 			SkippedFiles: append([]string{}, codebase.LastSuccessfulRun.SkippedFiles...),
 		}
 	}
+
 	if codebase.LastFailedRun != nil {
 		result.LastFailedRun = &pb.IndexRunFailure{
 			Message:                 codebase.LastFailedRun.Message,
@@ -134,6 +143,7 @@ func ToCodebase(codebase model.Codebase) *pb.Codebase {
 			FailedAt:                ts(codebase.LastFailedRun.FailedAt),
 		}
 	}
+
 	return result
 }
 
@@ -169,6 +179,7 @@ func ToJob(job model.Job) *pb.Job {
 			Retryable: job.Error.Retryable,
 		}
 	}
+
 	return result
 }
 
@@ -222,9 +233,11 @@ func SchedulingFromProto(
 		if err == nil {
 			priority = string(converted)
 		}
+
 		quiet = policy.GetQuiet()
 		idleAfterSeconds = policy.GetIdleAfterSeconds()
 	}
+
 	return view.ResolveScheduling(
 		priority,
 		quiet,
@@ -281,13 +294,16 @@ func ToProgress(p model.Progress) *pb.Progress {
 	if chunksEmbedded == 0 {
 		chunksEmbedded = p.ChunksGenerated
 	}
+
 	chunksProcessed := p.ChunksProcessed
 	if chunksProcessed == 0 {
 		chunksProcessed = chunksEmbedded + p.ChunksReused
 	}
+
 	// Both percents read the same counter snapshot, so they can never describe
 	// two different moments of the same job.
 	counts := ProgressCounts(p)
+
 	return &pb.Progress{
 		Phase:                     p.Phase,
 		PhasePercent:              view.ResolvePhasePercent(counts),
@@ -315,11 +331,13 @@ func modelDownloadProgressToProto(progress *model.DownloadProgress) *pb.ModelDow
 	if progress == nil {
 		return nil
 	}
+
 	var totalBytes *int64
 	if progress.TotalBytes > 0 {
 		knownTotal := progress.TotalBytes
 		totalBytes = &knownTotal
 	}
+
 	return &pb.ModelDownloadProgress{
 		Artifact:        progress.Artifact,
 		DownloadedBytes: progress.DownloadedBytes,
@@ -360,6 +378,7 @@ func ProgressCounts(p model.Progress) view.ProgressCounts {
 // human surfaces render.
 func BreakdownProto(p model.Progress) *pb.OutcomeBreakdown {
 	breakdown := view.ResolveBreakdown(ProgressCounts(p))
+
 	return &pb.OutcomeBreakdown{
 		ScopeLabel:  breakdown.ScopeLabel,
 		Processed:   breakdown.Processed,
@@ -376,6 +395,7 @@ func BreakdownFromProto(breakdown *pb.OutcomeBreakdown) view.OutcomeBreakdown {
 	if breakdown == nil {
 		return view.ZeroBreakdown()
 	}
+
 	return view.OutcomeBreakdown{
 		ScopeLabel:  breakdown.GetScopeLabel(),
 		Processed:   breakdown.GetProcessed(),
@@ -391,6 +411,7 @@ func outcomeRowsToProto(rows []view.OutcomeRow) []*pb.OutcomeRow {
 	for _, row := range rows {
 		out = append(out, &pb.OutcomeRow{Kind: outcomeKindToProto(row.Kind()), Count: row.Count()})
 	}
+
 	return out
 }
 
@@ -398,10 +419,12 @@ func outcomeRowsFromProto(rows []*pb.OutcomeRow) []view.OutcomeRow {
 	if len(rows) == 0 {
 		return nil
 	}
+
 	out := make([]view.OutcomeRow, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, view.NewOutcomeRow(outcomeKindFromProto(row.GetKind()), row.GetCount()))
 	}
+
 	return out
 }
 
@@ -465,7 +488,10 @@ func jobOutcome(state model.JobState) string {
 		return "failed"
 	case model.JobStateCancelled:
 		return "canceled"
-	case model.JobStateQueued, model.JobStateRunning, model.JobStatePaused, model.JobStateCancelling:
+	case model.JobStateQueued,
+		model.JobStateRunning,
+		model.JobStatePaused,
+		model.JobStateCancelling:
 		return ""
 	default:
 		return ""
@@ -489,8 +515,10 @@ func jobTrigger(job model.Job) string {
 		if job.Forced {
 			return triggerForcedReindex
 		}
+
 		return triggerInitialBuild
 	}
+
 	return triggerChangedFiles
 }
 
@@ -517,6 +545,7 @@ func ToPathClassification(classification *model.PathClassification) *pb.PathClas
 	if classification == nil {
 		return nil
 	}
+
 	return &pb.PathClassification{
 		Kind:                pathClassificationKindToProto(classification.Kind),
 		ExcludedByPattern:   classification.ExcludedByPattern,
@@ -546,6 +575,7 @@ func ts(value time.Time) *timestamppb.Timestamp {
 	if value.IsZero() {
 		return nil
 	}
+
 	return timestamppb.New(value)
 }
 
@@ -553,5 +583,6 @@ func tsp(value *time.Time) *timestamppb.Timestamp {
 	if value == nil {
 		return nil
 	}
+
 	return ts(*value)
 }

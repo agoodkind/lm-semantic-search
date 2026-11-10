@@ -24,6 +24,7 @@ type fakeIgnoreResolver struct {
 func (resolver *fakeIgnoreResolver) IgnoreSources(_ context.Context, _ string, _ string) []string {
 	resolver.mu.Lock()
 	defer resolver.mu.Unlock()
+
 	return slices.Clone(resolver.sources)
 }
 
@@ -36,6 +37,7 @@ func (resolver *fakeIgnoreResolver) InvalidateRules(codebaseID string) {
 func (resolver *fakeIgnoreResolver) invalidations() []string {
 	resolver.mu.Lock()
 	defer resolver.mu.Unlock()
+
 	return slices.Clone(resolver.invalidated)
 }
 
@@ -58,7 +60,10 @@ func TestCheckSourcesInvalidatesOnSourceModtimeChange(t *testing.T) {
 
 	observer.CheckSources(context.Background(), "cb", root)
 	if got := resolver.invalidations(); !slices.Equal(got, []string{"cb"}) {
-		t.Fatalf("first CheckSources invalidations = %v, want [cb] to refresh a possibly-stale matcher", got)
+		t.Fatalf(
+			"first CheckSources invalidations = %v, want [cb] to refresh a possibly-stale matcher",
+			got,
+		)
 	}
 
 	observer.CheckSources(context.Background(), "cb", root)
@@ -99,6 +104,7 @@ func TestCheckSourcesInvalidatesWhenSourceAppears(t *testing.T) {
 	if err := os.WriteFile(second, []byte("y\n"), 0o644); err != nil {
 		t.Fatalf("write second source: %v", err)
 	}
+
 	resolver.mu.Lock()
 	resolver.sources = []string{first, second}
 	resolver.mu.Unlock()

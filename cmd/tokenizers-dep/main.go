@@ -72,17 +72,14 @@ func main() {
 
 func runMain() int {
 	slog.Debug("tokenizers dependency command entry")
-	ctx, stop := signal.NotifyContext(
-		context.Background(),
-		os.Interrupt,
-		syscall.SIGTERM,
-	)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	if err := run(ctx); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "%s: %v\n", toolLogPrefix, err)
 		return 1
 	}
+
 	return 0
 }
 
@@ -91,14 +88,17 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
 	targetName, err := resolveTargetName(ctx)
 	if err != nil {
 		return err
 	}
+
 	archive, found := targetArchives[targetName]
 	if !found {
 		return fmt.Errorf("tokenizers does not support build target %s", targetName)
 	}
+
 	prefix := os.Getenv("GO_MK_CGO_PREFIX")
 	if prefix == "" {
 		prefix = filepath.Join(
@@ -124,17 +124,21 @@ func run(ctx context.Context) error {
 			tokenizersVersion,
 			targetName,
 		)
+
 		return nil
 	}
+
 	if err := dependencyInstaller.install(ctx); err != nil {
 		return err
 	}
+
 	fmt.Printf(
 		"%s: installed static tokenizers %s for %s\n",
 		toolLogPrefix,
 		tokenizersVersion,
 		targetName,
 	)
+
 	return nil
 }
 
@@ -143,10 +147,12 @@ func (dependencyInstaller installer) cached() bool {
 	if libraryErr != nil || !libraryInfo.Mode().IsRegular() {
 		return false
 	}
+
 	version, versionErr := os.ReadFile(dependencyInstaller.versionPath())
 	if versionErr != nil {
 		return false
 	}
+
 	return strings.TrimSpace(string(version)) == tokenizersVersion
 }
 
@@ -162,51 +168,45 @@ func (dependencyInstaller installer) install(ctx context.Context) error {
 	if err := os.MkdirAll(dependencyInstaller.prefix, defaultDirectoryMode); err != nil {
 		return wrapError("create tokenizers prefix", err)
 	}
-	temporaryDirectory, err := os.MkdirTemp(
-		dependencyInstaller.prefix,
-		".tokenizers.",
-	)
+
+	temporaryDirectory, err := os.MkdirTemp(dependencyInstaller.prefix, ".tokenizers.")
 	if err != nil {
 		return wrapError("create tokenizers temporary directory", err)
 	}
+
 	defer func() {
 		_ = os.RemoveAll(temporaryDirectory)
 	}()
 
 	archivePath := filepath.Join(temporaryDirectory, "libtokenizers.tar.gz")
 	archiveURL := tokenizersArchivePrefix + dependencyInstaller.archive.filename
-	if err := dependencyInstaller.download(
-		ctx,
-		archiveURL,
-		archivePath,
-	); err != nil {
+	if err := dependencyInstaller.download(ctx, archiveURL, archivePath); err != nil {
 		return err
 	}
-	temporaryLibraryPath := filepath.Join(
-		temporaryDirectory,
-		nativeLibraryArchiveEntry(),
-	)
+
+	temporaryLibraryPath := filepath.Join(temporaryDirectory, nativeLibraryArchiveEntry())
 	if err := extractLibrary(archivePath, temporaryLibraryPath); err != nil {
 		return err
 	}
+
 	if err := os.MkdirAll(
 		filepath.Dir(dependencyInstaller.libraryPath()),
 		defaultDirectoryMode,
 	); err != nil {
 		return wrapError("create tokenizers library directory", err)
 	}
-	if err := os.Rename(
-		temporaryLibraryPath,
-		dependencyInstaller.libraryPath(),
-	); err != nil {
+
+	if err := os.Rename(temporaryLibraryPath, dependencyInstaller.libraryPath()); err != nil {
 		return wrapError("install tokenizers library", err)
 	}
+
 	if err := os.MkdirAll(
 		filepath.Dir(dependencyInstaller.versionPath()),
 		defaultDirectoryMode,
 	); err != nil {
 		return wrapError("create tokenizers version directory", err)
 	}
+
 	if err := os.WriteFile(
 		dependencyInstaller.versionPath(),
 		[]byte(tokenizersVersion+"\n"),
@@ -214,6 +214,7 @@ func (dependencyInstaller installer) install(ctx context.Context) error {
 	); err != nil {
 		return wrapError("write tokenizers version", err)
 	}
+
 	return nil
 }
 
@@ -226,6 +227,7 @@ func (dependencyInstaller installer) download(
 	if err != nil {
 		return wrapError("create tokenizers download request", err)
 	}
+
 	response, err := dependencyInstaller.client.Do(request)
 	if err != nil {
 		return wrapError("download tokenizers archive", err)
@@ -233,10 +235,7 @@ func (dependencyInstaller installer) download(
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK ||
 		response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf(
-			"download tokenizers archive: HTTP status %s",
-			response.Status,
-		)
+		return fmt.Errorf("download tokenizers archive: HTTP status %s", response.Status)
 	}
 
 	destination, err := os.OpenFile(
@@ -247,15 +246,18 @@ func (dependencyInstaller installer) download(
 	if err != nil {
 		return wrapError("create tokenizers archive", err)
 	}
+
 	hash := sha256.New()
 	_, copyErr := io.Copy(io.MultiWriter(destination, hash), response.Body)
 	closeErr := destination.Close()
 	if copyErr != nil {
 		return wrapError("write tokenizers archive", copyErr)
 	}
+
 	if closeErr != nil {
 		return wrapError("close tokenizers archive", closeErr)
 	}
+
 	actualSHA256 := hex.EncodeToString(hash.Sum(nil))
 	if actualSHA256 != dependencyInstaller.archive.sha256 {
 		return fmt.Errorf(
@@ -264,6 +266,7 @@ func (dependencyInstaller installer) download(
 			dependencyInstaller.archive.sha256,
 		)
 	}
+
 	return nil
 }
 
@@ -272,58 +275,72 @@ func extractLibrary(archivePath string, destinationPath string) error {
 	if err != nil {
 		return wrapError("open tokenizers archive", err)
 	}
+
 	gzipReader, err := gzip.NewReader(archive)
 	if err != nil {
 		_ = archive.Close()
 		return wrapError("open tokenizers gzip stream", err)
 	}
+
 	tarReader := tar.NewReader(gzipReader)
 	found := false
+
 	for {
 		header, nextErr := tarReader.Next()
 		if errors.Is(nextErr, io.EOF) {
 			break
 		}
+
 		if nextErr != nil {
 			_ = gzipReader.Close()
 			_ = archive.Close()
+
 			return wrapError("read tokenizers archive", nextErr)
 		}
+
 		if header.Name != nativeLibraryArchiveEntry() {
 			continue
 		}
+
 		if header.Typeflag != tar.TypeReg && header.Typeflag != 0 {
 			_ = gzipReader.Close()
 			_ = archive.Close()
+
 			return errors.New("tokenizers archive library is not a regular file")
 		}
+
 		if header.Size <= 0 || header.Size > maximumLibraryBytes {
 			_ = gzipReader.Close()
 			_ = archive.Close()
-			return fmt.Errorf(
-				"tokenizers library has unsupported size %d",
-				header.Size,
-			)
+
+			return fmt.Errorf("tokenizers library has unsupported size %d", header.Size)
 		}
+
 		if err := writeLibrary(tarReader, destinationPath, header.Size); err != nil {
 			_ = gzipReader.Close()
 			_ = archive.Close()
+
 			return err
 		}
+
 		found = true
 		break
 	}
+
 	gzipCloseErr := gzipReader.Close()
 	archiveCloseErr := archive.Close()
 	if gzipCloseErr != nil {
 		return wrapError("close tokenizers gzip stream", gzipCloseErr)
 	}
+
 	if archiveCloseErr != nil {
 		return wrapError("close tokenizers archive", archiveCloseErr)
 	}
+
 	if !found {
 		return errors.New("tokenizers archive is missing libtokenizers.a")
 	}
+
 	return nil
 }
 
@@ -336,39 +353,30 @@ func writeLibrary(reader io.Reader, destinationPath string, size int64) error {
 	if err != nil {
 		return wrapError("create tokenizers library", err)
 	}
+
 	written, copyErr := io.CopyN(destination, reader, size)
 	closeErr := destination.Close()
 	if copyErr != nil {
 		return wrapError("extract tokenizers library", copyErr)
 	}
+
 	if closeErr != nil {
 		return wrapError("close tokenizers library", closeErr)
 	}
+
 	if written != size {
-		return fmt.Errorf(
-			"tokenizers library size is %d, want %d",
-			written,
-			size,
-		)
+		return fmt.Errorf("tokenizers library size is %d, want %d", written, size)
 	}
+
 	return nil
 }
 
 func (dependencyInstaller installer) libraryPath() string {
-	return filepath.Join(
-		dependencyInstaller.prefix,
-		"lib",
-		nativeLibraryArchiveEntry(),
-	)
+	return filepath.Join(dependencyInstaller.prefix, "lib", nativeLibraryArchiveEntry())
 }
 
 func (dependencyInstaller installer) versionPath() string {
-	return filepath.Join(
-		dependencyInstaller.prefix,
-		"share",
-		"tokenizers",
-		"version",
-	)
+	return filepath.Join(dependencyInstaller.prefix, "share", "tokenizers", "version")
 }
 
 func resolveTargetName(ctx context.Context) (string, error) {
@@ -378,16 +386,20 @@ func resolveTargetName(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", err
 		}
+
 		targetGOOS = value
 	}
+
 	targetGOARCH := os.Getenv("GO_MK_TARGET_GOARCH")
 	if targetGOARCH == "" {
 		value, err := readGoEnvironment(ctx, "GOARCH")
 		if err != nil {
 			return "", err
 		}
+
 		targetGOARCH = value
 	}
+
 	return targetGOOS + "/" + targetGOARCH, nil
 }
 
@@ -398,10 +410,12 @@ func readGoEnvironment(ctx context.Context, name string) (string, error) {
 	if err != nil {
 		return "", wrapError("read go env "+name, err)
 	}
+
 	value := strings.TrimSpace(string(output))
 	if value == "" {
 		return "", fmt.Errorf("read go env %s: empty value", name)
 	}
+
 	return value, nil
 }
 
@@ -411,19 +425,23 @@ func findModuleRoot() (string, error) {
 	if err != nil {
 		return "", wrapError("get current directory", err)
 	}
+
 	for {
 		modulePath := filepath.Join(currentDirectory, "go.mod")
 		fileInfo, statErr := os.Stat(modulePath)
 		if statErr == nil && fileInfo.Mode().IsRegular() {
 			return currentDirectory, nil
 		}
+
 		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 			return "", wrapError("inspect "+modulePath, statErr)
 		}
+
 		parentDirectory := filepath.Dir(currentDirectory)
 		if parentDirectory == currentDirectory {
 			return "", errors.New("find module root: go.mod is missing")
 		}
+
 		currentDirectory = parentDirectory
 	}
 }

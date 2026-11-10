@@ -35,6 +35,7 @@ func TestPathPrefixIsHexLowercase(t *testing.T) {
 	if len(got) != 8 {
 		t.Fatalf("length = %d, want 8", len(got))
 	}
+
 	if _, err := hex.DecodeString(got); err != nil {
 		t.Fatalf("PathPrefix output is not hex: %q (%v)", got, err)
 	}

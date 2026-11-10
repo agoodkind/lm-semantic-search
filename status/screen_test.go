@@ -55,8 +55,13 @@ func TestDeltaTextSignsTheChange(t *testing.T) {
 	for _, testCase := range cases {
 		got := deltaText(testCase.delta, testCase.hasPrevious)
 		if got != testCase.want {
-			t.Fatalf("deltaText(%d, %t) = %q, want %q",
-				testCase.delta, testCase.hasPrevious, got, testCase.want)
+			t.Fatalf(
+				"deltaText(%d, %t) = %q, want %q",
+				testCase.delta,
+				testCase.hasPrevious,
+				got,
+				testCase.want,
+			)
 		}
 	}
 }
@@ -75,6 +80,7 @@ func TestStatusCounterBlockRendersAbsentAndGroupedValues(t *testing.T) {
 		},
 	}
 	body := statusCounterBlock(snapshot, nil, 100)
+
 	for _, want := range []string{"null", `""`, "3,946", "vectors"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %q in:\n%s", want, body)
@@ -100,6 +106,7 @@ func TestStatusCounterBlockReportsTheChange(t *testing.T) {
 	if !strings.Contains(body, "+72") {
 		t.Fatalf("rising counter did not report its change:\n%s", body)
 	}
+
 	if !strings.Contains(body, "-1") {
 		t.Fatalf("falling counter did not report its change:\n%s", body)
 	}
@@ -115,6 +122,7 @@ func TestStatusCounterBlockOmitsADeltaForAnUnseenCounter(t *testing.T) {
 	if got := statusDeltaText(field, map[string]int64{"other": 1}); got != "" {
 		t.Fatalf("delta for an unseen counter = %q, want empty", got)
 	}
+
 	if got := statusDeltaText(field, nil); got != "" {
 		t.Fatalf("delta with no previous read = %q, want empty", got)
 	}
@@ -132,6 +140,7 @@ func TestStatusActivityRowNamesTheAbsentJob(t *testing.T) {
 		testField("", "pending_paths", "paths", Int(8)),
 	}
 	body := strings.Join(statusActivityRow(1, row, 100), "\n")
+
 	for _, want := range []string{"[1] job_id=null", "source=watcher", "pending_paths=8"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %q in:\n%s", want, body)
@@ -157,6 +166,7 @@ func TestIntegerValuesByNameKeepsOnlyIntegers(t *testing.T) {
 	if len(values) != 1 {
 		t.Fatalf("baseline has %d values, want 1: %+v", len(values), values)
 	}
+
 	if values["embed_vectors_total"] != 3946 {
 		t.Fatalf("embed_vectors_total = %d, want 3946", values["embed_vectors_total"])
 	}
@@ -204,25 +214,38 @@ func TestApplyRefreshDropsTheBaselineAfterAResumedPause(t *testing.T) {
 	t.Parallel()
 
 	model := newStatusModel(unusedSource, time.Second, time.Now, vectorSnapshot("7342@1", 3946))
-	paused, _ := model.handleKey(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	paused, _ := model.handleKey(tea.KeyPressMsg{
+		Code: 'p',
+		Text: "p",
+	})
 	pausedModel, ok := paused.(statusModel)
 	if !ok || !pausedModel.paused {
 		t.Fatal("p did not pause the screen")
 	}
-	resumed, _ := pausedModel.handleKey(tea.KeyPressMsg{Code: 'p', Text: "p"})
+
+	resumed, _ := pausedModel.handleKey(tea.KeyPressMsg{
+		Code: 'p',
+		Text: "p",
+	})
 	resumedModel, ok := resumed.(statusModel)
 	if !ok || resumedModel.paused {
 		t.Fatal("p did not resume the screen")
 	}
 
-	afterResume := resumedModel.applyRefresh(statusRefreshedMsg{snapshot: vectorSnapshot("7342@1", 9999)})
+	afterResume := resumedModel.applyRefresh(statusRefreshedMsg{
+		snapshot: vectorSnapshot("7342@1", 9999),
+	})
 	if afterResume.previous != nil {
 		t.Fatalf("baseline survived a resumed pause: %+v", afterResume.previous)
 	}
+
 	// The read after that compares normally again.
 	next := afterResume.applyRefresh(statusRefreshedMsg{snapshot: vectorSnapshot("7342@1", 10004)})
 	if next.previous["embed_vectors_total"] != 9999 {
-		t.Fatalf("baseline after one post-resume read = %d, want 9999", next.previous["embed_vectors_total"])
+		t.Fatalf(
+			"baseline after one post-resume read = %d, want 9999",
+			next.previous["embed_vectors_total"],
+		)
 	}
 }
 
@@ -233,17 +256,23 @@ func TestViewFitsTheTerminalHeight(t *testing.T) {
 	t.Parallel()
 
 	counters := make([]Field, 0, 40)
+
 	for index := range 40 {
-		counters = append(counters,
-			testField("embed", "counter_"+strconv.Itoa(index), "things", Int(int64(index))))
+		counters = append(
+			counters,
+			testField("embed", "counter_"+strconv.Itoa(index), "things", Int(int64(index))),
+		)
 	}
+
 	snapshot := Snapshot{
 		Title:    "lm-semantic-search  version=test  pid=7342",
 		Counters: counters,
-		Activity: [][]Field{{
-			testField("", "job_id", "", Value{}),
-			testField("", "state", "", Text("running")),
-		}},
+		Activity: [][]Field{
+			{
+				testField("", "job_id", "", Value{}),
+				testField("", "state", "", Text("running")),
+			},
+		},
 	}
 
 	for _, height := range []int{10, 24, 40} {
@@ -252,9 +281,13 @@ func TestViewFitsTheTerminalHeight(t *testing.T) {
 		model.height = height
 		lines := strings.Split(strings.TrimRight(model.View().Content, "\n"), "\n")
 		if len(lines) > height {
-			t.Fatalf("frame is %d lines on a %d-row terminal and the header is clipped",
-				len(lines), height)
+			t.Fatalf(
+				"frame is %d lines on a %d-row terminal and the header is clipped",
+				len(lines),
+				height,
+			)
 		}
+
 		if !strings.Contains(lines[0], "lm-semantic-search") {
 			t.Fatalf("first line is not the header at height %d: %q", height, lines[0])
 		}
@@ -272,6 +305,7 @@ func TestStatusActivityRowSurvivesAnEmptyRow(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("lines = %d, want 1 for a row with no fields: %v", len(lines), lines)
 	}
+
 	if !strings.Contains(lines[0], "[0]") {
 		t.Fatalf("empty row lost its index: %q", lines[0])
 	}
@@ -293,9 +327,14 @@ func TestStatusCounterBlockSurvivesAnEmptyReply(t *testing.T) {
 func TestViewSurvivesAnEmptyReply(t *testing.T) {
 	t.Parallel()
 
-	model := newStatusModel(unusedSource, time.Second, time.Now, Snapshot{
-		Title: "lm-semantic-search  version=test  pid=7342",
-	})
+	model := newStatusModel(
+		unusedSource,
+		time.Second,
+		time.Now,
+		Snapshot{
+			Title: "lm-semantic-search  version=test  pid=7342",
+		},
+	)
 	model.width = 100
 	model.height = 24
 
@@ -303,6 +342,7 @@ func TestViewSurvivesAnEmptyReply(t *testing.T) {
 	if !strings.Contains(frame, "lm-semantic-search") {
 		t.Fatalf("frame lost its header on an empty snapshot:\n%s", frame)
 	}
+
 	if !strings.Contains(frame, "none running, none queued") {
 		t.Fatalf("frame does not state nothing is running:\n%s", frame)
 	}
@@ -328,10 +368,12 @@ func TestScrollDownStopsAtTheLastLine(t *testing.T) {
 
 	ceiling := model.maxOffset()
 	current := tea.Model(model)
+
 	for range 500 {
 		next, _ := current.(statusModel).handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 		current = next
 	}
+
 	if got := current.(statusModel).offset; got != ceiling {
 		t.Fatalf("offset after 500 Down presses = %d, want the ceiling %d", got, ceiling)
 	}
@@ -357,6 +399,7 @@ func TestNoDeltaFieldShowsNoDelta(t *testing.T) {
 	if got := statusDeltaText(constant, previous); got != "" {
 		t.Fatalf("constant field delta = %q, want empty", got)
 	}
+
 	if got := statusDeltaText(changing, previous); got != "+0" {
 		t.Fatalf("changing field delta = %q, want \"+0\"", got)
 	}
@@ -376,10 +419,12 @@ func TestTimestampsRenderInTheHostZone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rendered %q does not parse as a timestamp with offset: %v", rendered, err)
 	}
+
 	expected, err := time.Parse(time.RFC3339Nano, instant)
 	if err != nil {
 		t.Fatalf("parse the source instant: %v", err)
 	}
+
 	if !parsed.Equal(expected) {
 		t.Fatalf("rendered %q is a different instant from %q", rendered, instant)
 	}
@@ -388,6 +433,7 @@ func TestTimestampsRenderInTheHostZone(t *testing.T) {
 	if got := displayTimeText("/Users/a/code"); got != "/Users/a/code" {
 		t.Fatalf("a path was rewritten to %q", got)
 	}
+
 	// So must a phase name.
 	if got := displayTimeText("embedding"); got != "embedding" {
 		t.Fatalf("a phase name was rewritten to %q", got)

@@ -17,5 +17,6 @@ func InLocalZone(value time.Time) time.Time {
 	if err != nil {
 		return value
 	}
+
 	return value.In(location)
 }

@@ -22,10 +22,12 @@ func forcedItemsSet(forced []string) map[string]struct{} {
 	if len(forced) == 0 {
 		return nil
 	}
+
 	set := make(map[string]struct{}, len(forced))
 	for _, itemID := range forced {
 		set[itemID] = struct{}{}
 	}
+
 	return set
 }
 
@@ -42,28 +44,36 @@ func unionForcedItems(diff merkle.Diff, forced []string, captured merkle.Snapsho
 	if len(forced) == 0 {
 		return diff
 	}
+
 	already := make(map[string]struct{}, len(diff.Added)+len(diff.Modified))
 	for _, itemID := range diff.Added {
 		already[itemID] = struct{}{}
 	}
+
 	for _, itemID := range diff.Modified {
 		already[itemID] = struct{}{}
 	}
+
 	added := false
+
 	for _, itemID := range forced {
 		if _, present := captured.Files[itemID]; !present {
 			continue
 		}
+
 		if _, seen := already[itemID]; seen {
 			continue
 		}
+
 		already[itemID] = struct{}{}
 		diff.Modified = append(diff.Modified, itemID)
 		added = true
 	}
+
 	if added {
 		sort.Strings(diff.Modified)
 	}
+
 	return diff
 }
 
@@ -167,11 +177,21 @@ type codeItemSource struct {
 	config         model.IndexConfig
 }
 
-func newCodeItemSource(runner indexingRunner, resolver *indexability.Resolver, codebaseID string, canonicalPath string, config model.IndexConfig) codeItemSource {
+func newCodeItemSource(
+	runner indexingRunner,
+	resolver *indexability.Resolver,
+	codebaseID string,
+	canonicalPath string,
+	config model.IndexConfig,
+) codeItemSource {
 	return codeItemSource{
-		runner: runner, resolver: resolver, codebaseID: codebaseID, canonicalPath: canonicalPath, collectionName: "",
-		contentReuse: jobContentReusePlan{lookup: contentReuseLookupStoreWide, source: nil},
-		config:       config,
+		runner:         runner,
+		resolver:       resolver,
+		codebaseID:     codebaseID,
+		canonicalPath:  canonicalPath,
+		collectionName: "",
+		contentReuse:   jobContentReusePlan{lookup: contentReuseLookupStoreWide, source: nil},
+		config:         config,
 	}
 }
 
@@ -199,15 +219,36 @@ func (source codeItemSource) columnSet() semantic.StoreColumnSet {
 }
 
 func (source codeItemSource) capture(ctx context.Context) (merkle.Snapshot, error) {
-	snapshot, err := merkle.Capture(ctx, source.resolver, source.codebaseID, source.canonicalPath, source.config)
+	snapshot, err := merkle.Capture(
+		ctx,
+		source.resolver,
+		source.codebaseID,
+		source.canonicalPath,
+		source.config,
+	)
 	if err != nil {
-		slog.ErrorContext(ctx, "capture code snapshot failed", "path", source.canonicalPath, "err", err)
-		return merkle.Snapshot{}, fmt.Errorf("capture code snapshot for %s: %w", source.canonicalPath, err)
+		slog.ErrorContext(
+			ctx,
+			"capture code snapshot failed",
+			"path",
+			source.canonicalPath,
+			"err",
+			err,
+		)
+		return merkle.Snapshot{}, fmt.Errorf(
+			"capture code snapshot for %s: %w",
+			source.canonicalPath,
+			err,
+		)
 	}
+
 	return snapshot, nil
 }
 
-func (source codeItemSource) indexOne(ctx context.Context, relativePath string) (indexer.OneFileResult, error) {
+func (source codeItemSource) indexOne(
+	ctx context.Context,
+	relativePath string,
+) (indexer.OneFileResult, error) {
 	type indexOneOutcome struct {
 		result indexer.OneFileResult
 		err    error
@@ -217,22 +258,42 @@ func (source codeItemSource) indexOne(ctx context.Context, relativePath string) 
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				var empty indexer.OneFileResult
-				done <- indexOneOutcome{result: empty, err: fmt.Errorf("index code file panic: %v", recovered)}
+				done <- indexOneOutcome{
+					result: empty,
+					err:    fmt.Errorf("index code file panic: %v", recovered),
+				}
 			}
 		}()
-		result, err := source.runner.IndexOne(ctx, source.resolver, source.codebaseID, source.canonicalPath, relativePath, source.config)
+		result, err := source.runner.IndexOne(
+			ctx,
+			source.resolver,
+			source.codebaseID,
+			source.canonicalPath,
+			relativePath,
+			source.config,
+		)
 		done <- indexOneOutcome{result: result, err: err}
 	}()
 
 	select {
 	case <-ctx.Done():
-		return indexer.OneFileResult{}, fmt.Errorf("index code file %s cancelled: %w", relativePath, ctx.Err())
+		return indexer.OneFileResult{}, fmt.Errorf(
+			"index code file %s cancelled: %w",
+			relativePath,
+			ctx.Err(),
+		)
 	case outcome := <-done:
 		if outcome.err == nil {
 			return outcome.result, nil
 		}
+
 		slog.ErrorContext(ctx, "index code file failed", "path", relativePath, "err", outcome.err)
-		return indexer.OneFileResult{}, fmt.Errorf("index code file %s: %w", relativePath, outcome.err)
+
+		return indexer.OneFileResult{}, fmt.Errorf(
+			"index code file %s: %w",
+			relativePath,
+			outcome.err,
+		)
 	}
 }
 
@@ -258,6 +319,7 @@ func (source codeItemSource) reuseSource(relativePath string) itemReuseSource {
 			ContentReuse:   jobContentReusePlan{lookup: contentReuseLookupStoreWide, source: nil},
 		}
 	}
+
 	return itemReuseSource{
 		CollectionName: source.collectionName,
 		RelativePath:   relativePath,

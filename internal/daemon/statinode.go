@@ -13,5 +13,6 @@ func statInode(path string) (inodeIdentity, error) {
 		slog.Warn("stat inode for daemon identity failed", "path", path, "err", err)
 		return inodeIdentity{device: "", inode: 0}, fmt.Errorf("stat inode for %s: %w", path, err)
 	}
+
 	return inodeIdentity{device: ref.Device, inode: ref.Inode}, nil
 }

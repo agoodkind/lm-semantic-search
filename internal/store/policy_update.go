@@ -34,7 +34,9 @@ func ReadPolicyUpdate(path string) (model.PolicyUpdateTransaction, error) {
 				err,
 			)
 		}
+
 		slog.Error("read policy update marker failed", "path", path, "err", err)
+
 		return model.PolicyUpdateTransaction{}, fmt.Errorf(
 			"read policy update marker %s: %w",
 			path,
@@ -45,12 +47,14 @@ func ReadPolicyUpdate(path string) (model.PolicyUpdateTransaction, error) {
 	var transaction model.PolicyUpdateTransaction
 	if err := json.Unmarshal(data, &transaction); err != nil {
 		slog.Error("unmarshal policy update marker failed", "path", path, "err", err)
+
 		return model.PolicyUpdateTransaction{}, fmt.Errorf(
 			"unmarshal policy update marker %s: %w",
 			path,
 			err,
 		)
 	}
+
 	return transaction, nil
 }
 
@@ -60,8 +64,10 @@ func WritePolicyUpdate(path string, transaction model.PolicyUpdateTransaction) e
 	if err != nil {
 		wrappedErr := fmt.Errorf("marshal policy update marker %s: %w", path, err)
 		slog.Error("marshal policy update marker failed", "path", path, "err", wrappedErr)
+
 		return wrappedErr
 	}
+
 	replaceErr := replaceFileAtomically(
 		path,
 		"policy update marker",
@@ -69,19 +75,23 @@ func WritePolicyUpdate(path string, transaction model.PolicyUpdateTransaction) e
 			if _, writeErr := file.Write(data); writeErr != nil {
 				return fmt.Errorf("write policy update marker bytes: %w", writeErr)
 			}
+
 			return nil
 		},
 	)
 	if replaceErr == nil {
 		return nil
 	}
+
 	currentData, readErr := os.ReadFile(path)
 	if errors.Is(readErr, os.ErrNotExist) {
 		return replaceErr
 	}
+
 	if readErr == nil && bytes.Equal(currentData, data) {
 		return errors.Join(ErrPolicyUpdateMarkerMayExist, replaceErr)
 	}
+
 	if readErr != nil {
 		return errors.Join(
 			ErrPolicyUpdateMarkerMayExist,
@@ -89,6 +99,7 @@ func WritePolicyUpdate(path string, transaction model.PolicyUpdateTransaction) e
 			fmt.Errorf("inspect policy update marker %s: %w", path, readErr),
 		)
 	}
+
 	return errors.Join(
 		ErrPolicyUpdateMarkerMayExist,
 		replaceErr,
@@ -102,8 +113,11 @@ func RemovePolicyUpdate(path string) error {
 		if errors.Is(err, os.ErrNotExist) {
 			return syncFileDirectory(filepath.Dir(path), "policy update marker removal")
 		}
+
 		slog.Error("remove policy update marker failed", "path", path, "err", err)
+
 		return fmt.Errorf("remove policy update marker %s: %w", path, err)
 	}
+
 	return syncFileDirectory(filepath.Dir(path), "policy update marker removal")
 }

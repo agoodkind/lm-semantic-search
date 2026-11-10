@@ -12,13 +12,17 @@ func TestEventQueueCoalescesBurst(t *testing.T) {
 	t.Parallel()
 
 	drained := make(chan []string, 4)
-	queue := NewEventQueue(30*time.Millisecond, func(_ string, relativePaths []string) {
-		drained <- relativePaths
-	})
+	queue := NewEventQueue(
+		30*time.Millisecond,
+		func(_ string, relativePaths []string) {
+			drained <- relativePaths
+		},
+	)
 
 	for range 10 {
 		queue.Enqueue("cb1", "a.go")
 	}
+
 	queue.Enqueue("cb1", "b.go")
 
 	select {
@@ -42,14 +46,18 @@ func TestEventQueueSeparatesCodebases(t *testing.T) {
 		paths      []string
 	}
 	drained := make(chan drain, 4)
-	queue := NewEventQueue(30*time.Millisecond, func(codebaseID string, relativePaths []string) {
-		drained <- drain{codebaseID: codebaseID, paths: relativePaths}
-	})
+	queue := NewEventQueue(
+		30*time.Millisecond,
+		func(codebaseID string, relativePaths []string) {
+			drained <- drain{codebaseID: codebaseID, paths: relativePaths}
+		},
+	)
 
 	queue.Enqueue("cb1", "a.go")
 	queue.Enqueue("cb2", "x.go")
 
 	seen := map[string]int{}
+
 	for range 2 {
 		select {
 		case event := <-drained:
@@ -58,6 +66,7 @@ func TestEventQueueSeparatesCodebases(t *testing.T) {
 			t.Fatal("expected two independent drains")
 		}
 	}
+
 	if seen["cb1"] != 1 || seen["cb2"] != 1 {
 		t.Fatalf("per-codebase drains = %v, want cb1:1 cb2:1", seen)
 	}
@@ -79,9 +88,11 @@ func TestEventQueuePendingCountsReportsWaitingPaths(t *testing.T) {
 	if counts["cb1"] != 2 {
 		t.Fatalf("cb1 pending = %d, want 2 (a.go and b.go, coalesced)", counts["cb1"])
 	}
+
 	if counts["cb2"] != 1 {
 		t.Fatalf("cb2 pending = %d, want 1", counts["cb2"])
 	}
+
 	if len(counts) != 2 {
 		t.Fatalf("codebases with pending paths = %d, want 2", len(counts))
 	}

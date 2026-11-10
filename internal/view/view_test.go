@@ -4,12 +4,15 @@ import "testing"
 
 func findTestRow(t *testing.T, rows []OutcomeRow, kind OutcomeKind) OutcomeRow {
 	t.Helper()
+
 	for _, row := range rows {
 		if row.Kind() == kind {
 			return row
 		}
 	}
+
 	t.Fatalf("row %q not found in %+v", kind, rows)
+
 	return OutcomeRow{}
 }
 
@@ -19,6 +22,7 @@ func hasTestRow(rows []OutcomeRow, kind OutcomeKind) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -37,64 +41,76 @@ func TestViewHasNoModelDependency(t *testing.T) {
 func TestResolveBreakdownFirstBuildReusePresentation(t *testing.T) {
 	t.Parallel()
 
-	t.Run("cold first build keeps full build label and omits reused row", func(t *testing.T) {
-		t.Parallel()
-		breakdown := ResolveBreakdown(ProgressCounts{
-			RunMode:        string(RunModeFirstBuild),
-			FilesTotal:     100,
-			FilesProcessed: 10,
-			FilesEmbedded:  10,
-			ChunksEmbedded: 55,
-		})
+	t.Run(
+		"cold first build keeps full build label and omits reused row",
+		func(t *testing.T) {
+			t.Parallel()
+			breakdown := ResolveBreakdown(ProgressCounts{
+				RunMode:        string(RunModeFirstBuild),
+				FilesTotal:     100,
+				FilesProcessed: 10,
+				FilesEmbedded:  10,
+				ChunksEmbedded: 55,
+			})
 
-		if breakdown.ScopeLabel != "files (full build)" {
-			t.Fatalf("scope label = %q, want %q", breakdown.ScopeLabel, "files (full build)")
-		}
-		if hasTestRow(breakdown.ChunkRows, KindReused) {
-			t.Fatalf("cold first build should omit reused row: %+v", breakdown.ChunkRows)
-		}
-	})
+			if breakdown.ScopeLabel != "files (full build)" {
+				t.Fatalf("scope label = %q, want %q", breakdown.ScopeLabel, "files (full build)")
+			}
 
-	t.Run("seeded first build names reuse and shows reused row", func(t *testing.T) {
-		t.Parallel()
-		breakdown := ResolveBreakdown(ProgressCounts{
-			RunMode:            string(RunModeFirstBuild),
-			FilesTotal:         100,
-			FilesProcessed:     1,
-			FilesEmbedded:      1,
-			ChunksProcessed:    678,
-			ChunksReused:       623,
-			ChunksEmbedded:     55,
-			ReuseVectorsLoaded: 2316,
-		})
+			if hasTestRow(breakdown.ChunkRows, KindReused) {
+				t.Fatalf("cold first build should omit reused row: %+v", breakdown.ChunkRows)
+			}
+		},
+	)
 
-		if breakdown.ScopeLabel != "files (first build, reusing prior vectors)" {
-			t.Fatalf("scope label = %q, want seeded first build label", breakdown.ScopeLabel)
-		}
-		if reused := findTestRow(t, breakdown.ChunkRows, KindReused).Count(); reused != 623 {
-			t.Fatalf("reused chunks = %d, want 623", reused)
-		}
-	})
+	t.Run(
+		"seeded first build names reuse and shows reused row",
+		func(t *testing.T) {
+			t.Parallel()
+			breakdown := ResolveBreakdown(ProgressCounts{
+				RunMode:            string(RunModeFirstBuild),
+				FilesTotal:         100,
+				FilesProcessed:     1,
+				FilesEmbedded:      1,
+				ChunksProcessed:    678,
+				ChunksReused:       623,
+				ChunksEmbedded:     55,
+				ReuseVectorsLoaded: 2316,
+			})
 
-	t.Run("first build with served reuse still shows reused row", func(t *testing.T) {
-		t.Parallel()
-		breakdown := ResolveBreakdown(ProgressCounts{
-			RunMode:         string(RunModeFirstBuild),
-			FilesTotal:      100,
-			FilesProcessed:  1,
-			FilesEmbedded:   1,
-			ChunksProcessed: 678,
-			ChunksReused:    623,
-			ChunksEmbedded:  55,
-		})
+			if breakdown.ScopeLabel != "files (first build, reusing prior vectors)" {
+				t.Fatalf("scope label = %q, want seeded first build label", breakdown.ScopeLabel)
+			}
 
-		if breakdown.ScopeLabel != "files (full build)" {
-			t.Fatalf("scope label = %q, want %q", breakdown.ScopeLabel, "files (full build)")
-		}
-		if reused := findTestRow(t, breakdown.ChunkRows, KindReused).Count(); reused != 623 {
-			t.Fatalf("reused chunks = %d, want 623", reused)
-		}
-	})
+			if reused := findTestRow(t, breakdown.ChunkRows, KindReused).Count(); reused != 623 {
+				t.Fatalf("reused chunks = %d, want 623", reused)
+			}
+		},
+	)
+
+	t.Run(
+		"first build with served reuse still shows reused row",
+		func(t *testing.T) {
+			t.Parallel()
+			breakdown := ResolveBreakdown(ProgressCounts{
+				RunMode:         string(RunModeFirstBuild),
+				FilesTotal:      100,
+				FilesProcessed:  1,
+				FilesEmbedded:   1,
+				ChunksProcessed: 678,
+				ChunksReused:    623,
+				ChunksEmbedded:  55,
+			})
+
+			if breakdown.ScopeLabel != "files (full build)" {
+				t.Fatalf("scope label = %q, want %q", breakdown.ScopeLabel, "files (full build)")
+			}
+
+			if reused := findTestRow(t, breakdown.ChunkRows, KindReused).Count(); reused != 623 {
+				t.Fatalf("reused chunks = %d, want 623", reused)
+			}
+		},
+	)
 }
 
 // TestResolveOverallPercentCountsReusedWork proves the headline percent reads by
@@ -102,6 +118,7 @@ func TestResolveBreakdownFirstBuildReusePresentation(t *testing.T) {
 // only ever raises the run's file-cursor percent, never lowers it.
 func TestResolveOverallPercentCountsReusedWork(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		name       string
 		counts     ProgressCounts
@@ -114,7 +131,9 @@ func TestResolveOverallPercentCountsReusedWork(t *testing.T) {
 			// done rather than near-zero.
 			name: "restart with large reuse reads mostly done",
 			counts: ProgressCounts{
-				ChunksReused: 37800, ChunksEmbedded: 200, ChunksTotal: 40000,
+				ChunksReused:   37800,
+				ChunksEmbedded: 200,
+				ChunksTotal:    40000,
 			},
 			runPercent: 2.3,
 			want:       95.0,
@@ -124,7 +143,9 @@ func TestResolveOverallPercentCountsReusedWork(t *testing.T) {
 			// corpus, so the reused work counts as done in the top line.
 			name: "reuse heavy reexamine reads by reused work",
 			counts: ProgressCounts{
-				ChunksReused: 30000, ChunksEmbedded: 1000, ChunksTotal: 40000,
+				ChunksReused:   30000,
+				ChunksEmbedded: 1000,
+				ChunksTotal:    40000,
 			},
 			runPercent: 5.0,
 			want:       77.5,
@@ -134,7 +155,8 @@ func TestResolveOverallPercentCountsReusedWork(t *testing.T) {
 			// sum, so the file-cursor percent stands.
 			name: "cold first build keeps file cursor percent",
 			counts: ProgressCounts{
-				ChunksEmbedded: 71, ChunksTotal: 0,
+				ChunksEmbedded: 71,
+				ChunksTotal:    0,
 			},
 			runPercent: 42.0,
 			want:       42.0,
@@ -144,7 +166,10 @@ func TestResolveOverallPercentCountsReusedWork(t *testing.T) {
 			// running sum, so it is not a corpus denominator and the percent holds.
 			name: "seeded first build keeps file cursor percent",
 			counts: ProgressCounts{
-				ChunksProcessed: 678, ChunksReused: 623, ChunksEmbedded: 55, ChunksTotal: 678,
+				ChunksProcessed: 678,
+				ChunksReused:    623,
+				ChunksEmbedded:  55,
+				ChunksTotal:     678,
 			},
 			runPercent: 10.0,
 			want:       10.0,
@@ -154,7 +179,8 @@ func TestResolveOverallPercentCountsReusedWork(t *testing.T) {
 			// higher file-cursor reading; the corpus figure never lowers it.
 			name: "corpus figure never lowers a higher file percent",
 			counts: ProgressCounts{
-				ChunksGenerated: 1043, ChunksTotal: 57240,
+				ChunksGenerated: 1043,
+				ChunksTotal:     57240,
 			},
 			runPercent: 37.0,
 			want:       37.0,
@@ -167,13 +193,16 @@ func TestResolveOverallPercentCountsReusedWork(t *testing.T) {
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			got := ResolveOverallPercent(testCase.counts, testCase.runPercent)
-			if got != testCase.want {
-				t.Fatalf("ResolveOverallPercent = %.4f, want %.4f", got, testCase.want)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				t.Parallel()
+				got := ResolveOverallPercent(testCase.counts, testCase.runPercent)
+				if got != testCase.want {
+					t.Fatalf("ResolveOverallPercent = %.4f, want %.4f", got, testCase.want)
+				}
+			},
+		)
 	}
 }
 
@@ -191,6 +220,7 @@ func TestResolveBreakdownChangedModeKeepsReusePresentation(t *testing.T) {
 	if breakdown.ScopeLabel != "changed files" {
 		t.Fatalf("scope label = %q, want %q", breakdown.ScopeLabel, "changed files")
 	}
+
 	if reused := findTestRow(t, breakdown.ChunkRows, KindReused).Count(); reused != 0 {
 		t.Fatalf("reused chunks = %d, want 0 for unchanged changed-mode behavior", reused)
 	}
@@ -203,6 +233,7 @@ func TestResolveBreakdownChangedModeKeepsReusePresentation(t *testing.T) {
 // items, so reading it while files are in flight would saw-tooth.
 func TestResolvePhasePercentReadsTheCurrentScope(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		name   string
 		counts ProgressCounts
@@ -218,8 +249,10 @@ func TestResolvePhasePercentReadsTheCurrentScope(t *testing.T) {
 			// multi-item run climbs once rather than resetting per item.
 			name: "file scope wins over the embed batch cursor",
 			counts: ProgressCounts{
-				FilesTotal: 100, FilesProcessed: 25,
-				EmbeddingBatchesTotal: 10, EmbeddingBatchesCompleted: 9,
+				FilesTotal:                100,
+				FilesProcessed:            25,
+				EmbeddingBatchesTotal:     10,
+				EmbeddingBatchesCompleted: 9,
 			},
 			want: 25.0,
 		},
@@ -249,12 +282,15 @@ func TestResolvePhasePercentReadsTheCurrentScope(t *testing.T) {
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			got := ResolvePhasePercent(testCase.counts)
-			if got != testCase.want {
-				t.Fatalf("ResolvePhasePercent = %.4f, want %.4f", got, testCase.want)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				t.Parallel()
+				got := ResolvePhasePercent(testCase.counts)
+				if got != testCase.want {
+					t.Fatalf("ResolvePhasePercent = %.4f, want %.4f", got, testCase.want)
+				}
+			},
+		)
 	}
 }

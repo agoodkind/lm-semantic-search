@@ -23,15 +23,33 @@ func sourceDirMissing(canonicalPath string) bool {
 // registry and snapshot files; the resulting feedback loop is hard to
 // reason about, so we hard-reject at the boundary.
 func (manager *Manager) guardStateRoot(canonicalPath string) error {
-	stateRoot := strings.TrimRight(filepath.Clean(manager.config.StateRoot), string(filepath.Separator))
+	stateRoot := strings.TrimRight(
+		filepath.Clean(manager.config.StateRoot),
+		string(filepath.Separator),
+	)
 	if stateRoot == "" {
 		return nil
 	}
+
 	if pathCovers(canonicalPath, stateRoot) {
-		err := fmt.Errorf("refusing to index %s because it covers daemon state root %s", canonicalPath, stateRoot)
-		slog.Error("state-root guard rejected registration", "path", canonicalPath, "state_root", stateRoot, "err", err)
+		err := fmt.Errorf(
+			"refusing to index %s because it covers daemon state root %s",
+			canonicalPath,
+			stateRoot,
+		)
+		slog.Error(
+			"state-root guard rejected registration",
+			"path",
+			canonicalPath,
+			"state_root",
+			stateRoot,
+			"err",
+			err,
+		)
+
 		return err
 	}
+
 	return nil
 }
 
@@ -43,8 +61,10 @@ func (manager *Manager) guardFilesystemRoot(canonicalPath string) error {
 	if filepath.Clean(canonicalPath) == string(filepath.Separator) {
 		err := fmt.Errorf("refusing to index filesystem root %s", canonicalPath)
 		slog.Error("filesystem-root guard rejected registration", "path", canonicalPath, "err", err)
+
 		return err
 	}
+
 	return nil
 }
 
@@ -59,14 +79,19 @@ func (manager *Manager) guardDirectory(canonicalPath string) error {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
+
 		slog.Error("stat codebase root failed", "path", canonicalPath, "err", err)
+
 		return fmt.Errorf("stat codebase root %s: %w", canonicalPath, err)
 	}
+
 	if !info.IsDir() {
 		err := fmt.Errorf("codebase root %s is not a directory", canonicalPath)
 		slog.Error("directory guard rejected registration", "path", canonicalPath, "err", err)
+
 		return err
 	}
+
 	return nil
 }
 
@@ -79,18 +104,40 @@ func (manager *Manager) guardDirectory(canonicalPath string) error {
 func detectInodeTrackingDisabled(ctx context.Context, canonicalPath string) bool {
 	first, err := statInode(canonicalPath)
 	if err != nil {
-		slog.WarnContext(ctx, "stat codebase root for inode check failed", "path", canonicalPath, "err", err)
+		slog.WarnContext(
+			ctx,
+			"stat codebase root for inode check failed",
+			"path",
+			canonicalPath,
+			"err",
+			err,
+		)
 		return true
 	}
+
 	second, err := statInode(canonicalPath)
 	if err != nil {
-		slog.WarnContext(ctx, "second stat for inode stability failed", "path", canonicalPath, "err", err)
+		slog.WarnContext(
+			ctx,
+			"second stat for inode stability failed",
+			"path",
+			canonicalPath,
+			"err",
+			err,
+		)
 		return true
 	}
+
 	if first != second {
-		slog.WarnContext(ctx, "inode unstable across consecutive stats; disabling inode tracking", "path", canonicalPath)
+		slog.WarnContext(
+			ctx,
+			"inode unstable across consecutive stats; disabling inode tracking",
+			"path",
+			canonicalPath,
+		)
 		return true
 	}
+
 	return false
 }
 

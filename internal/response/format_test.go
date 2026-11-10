@@ -15,6 +15,7 @@ func TestFormatProtoHumanUsesDisplayText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FormatProto returned error: %v", err)
 	}
+
 	if formatted != "line one\nline two" {
 		t.Fatalf("FormatProto returned %q", formatted)
 	}
@@ -28,6 +29,7 @@ func TestFormatProtoSingleLineUsesFirstLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FormatProto returned error: %v", err)
 	}
+
 	if formatted != "line one" {
 		t.Fatalf("FormatProto returned %q", formatted)
 	}
@@ -41,9 +43,11 @@ func TestFormatProtoJSONUsesCompactJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FormatProto returned error: %v", err)
 	}
+
 	if strings.Contains(formatted, "\n") {
 		t.Fatalf("FormatProto returned multiline JSON: %q", formatted)
 	}
+
 	if !strings.Contains(formatted, "\"displayText\":\"line one\"") {
 		t.Fatalf("FormatProto returned unexpected JSON: %q", formatted)
 	}
@@ -62,6 +66,7 @@ func TestMarshalCompactJSONOmitsUnsetSearchable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalCompactJSON returned error: %v", err)
 	}
+
 	if strings.Contains(formatted, "searchable") {
 		t.Fatalf("MarshalCompactJSON carried a searchable key for an unset field: %q", formatted)
 	}

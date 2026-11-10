@@ -84,14 +84,7 @@ func NewProviderForModel(
 		)
 		return nil, fmt.Errorf("resolve offline embedding model: %w", err)
 	}
-	files, err := ensureModelFiles(
-		ctx,
-		http.DefaultClient,
-		cacheRoot,
-		preset,
-		nil,
-		nil,
-	)
+	files, err := ensureModelFiles(ctx, http.DefaultClient, cacheRoot, preset, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -122,10 +115,7 @@ func initializeONNXRuntime(
 	files cachedModelFiles,
 	preset offlinemodel.Preset,
 ) (*inProcessONNXRuntime, error) {
-	tokenizer, err := newGenericTokenizer(
-		files.tokenizerPath,
-		preset.MaximumTokens,
-	)
+	tokenizer, err := newGenericTokenizer(files.tokenizerPath, preset.MaximumTokens)
 	if err != nil {
 		return nil, err
 	}
@@ -133,10 +123,7 @@ func initializeONNXRuntime(
 	modelPath := C.CString(files.modelPath)
 	defer C.free(unsafe.Pointer(modelPath))
 	errorBuffer := make([]byte, onnxErrorBufferBytes)
-	session := C.lms_onnx_session_create(
-		modelPath,
-		(*C.char)(unsafe.Pointer(&errorBuffer[0])),
-	)
+	session := C.lms_onnx_session_create(modelPath, (*C.char)(unsafe.Pointer(&errorBuffer[0])))
 	if session == nil {
 		sessionErr := fmt.Errorf(
 			"initialize ONNX Runtime for %q: %s",
@@ -202,17 +189,27 @@ func (provider *onnxProvider) Embed(
 		slog.WarnContext(
 			ctx,
 			"ONNX embedding input rejected without embedding",
-			"model", preset.Name,
-			"reason", string(outcome.rejection),
-			"input_bytes", len(text),
-			"reported_tokens", outcome.tokenCount,
-			"model_max_tokens", preset.MaximumTokens,
-			"err", rejectionErr,
-		)
-		return nil, fmt.Errorf("generate ONNX embedding for %q: %w", preset.Name, adapterr.NewEmbedInputRejected(
-			provider.clientRejection(outcome, len(text)),
+			"model",
+			preset.Name,
+			"reason",
+			string(outcome.rejection),
+			"input_bytes",
+			len(text),
+			"reported_tokens",
+			outcome.tokenCount,
+			"model_max_tokens",
+			preset.MaximumTokens,
+			"err",
 			rejectionErr,
-		))
+		)
+		return nil, fmt.Errorf(
+			"generate ONNX embedding for %q: %w",
+			preset.Name,
+			adapterr.NewEmbedInputRejected(
+				provider.clientRejection(outcome, len(text)),
+				rejectionErr,
+			),
+		)
 	}
 	return outcome.vector, nil
 }
@@ -341,12 +338,7 @@ func (provider *onnxProvider) embedOne(
 	defer provider.runtime.mutex.Unlock()
 
 	if err := ctx.Err(); err != nil {
-		slog.WarnContext(
-			ctx,
-			"ONNX embedding cancelled while waiting for runtime",
-			"err",
-			err,
-		)
+		slog.WarnContext(ctx, "ONNX embedding cancelled while waiting for runtime", "err", err)
 		return failedONNXEmbedOutcome(), fmt.Errorf("generate ONNX embedding: %w", err)
 	}
 
@@ -363,10 +355,7 @@ func (provider *onnxProvider) embedOne(
 	}
 	preset := provider.runtime.preset
 	embeddingDimension := int(preset.Dimension)
-	tokenEmbeddings := make(
-		[]float32,
-		len(encoded.inputIDs)*embeddingDimension,
-	)
+	tokenEmbeddings := make([]float32, len(encoded.inputIDs)*embeddingDimension)
 	var outputCount C.size_t
 	errorBuffer := make([]byte, onnxErrorBufferBytes)
 	useTokenTypeIDs := C.int(0)

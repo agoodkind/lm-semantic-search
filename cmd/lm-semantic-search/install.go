@@ -30,8 +30,10 @@ func newInstallCmd() *cobra.Command {
 					slog.Error("resolve executable path failed", "err", err)
 					return fmt.Errorf("resolve executable path: %w", err)
 				}
+
 				binDir = filepath.Dir(executablePath)
 			}
+
 			// A release CLI installs its own release, so the daemon it installs
 			// matches the ONNX Runtime pin compiled into this binary.
 			if releaseVersion == "" {
@@ -39,21 +41,42 @@ func newInstallCmd() *cobra.Command {
 					releaseVersion = runningTag
 				}
 			}
-			if err := installer.Run(commandContext(cmd), installer.Options{
-				BinDir:         binDir,
-				Version:        releaseVersion,
-				InstallService: !noService,
-				Stdout:         cmd.OutOrStdout(),
-			}); err != nil {
+
+			if err := installer.Run(
+				commandContext(cmd),
+				installer.Options{
+					BinDir:         binDir,
+					Version:        releaseVersion,
+					InstallService: !noService,
+					Stdout:         cmd.OutOrStdout(),
+				},
+			); err != nil {
 				slog.Error("install failed", "err", err)
 				return fmt.Errorf("install: %w", err)
 			}
+
 			return nil
 		},
 	}
-	install.Flags().StringVar(&binDir, "bin-dir", "", "install dir (default: the directory of this executable)")
-	install.Flags().BoolVar(&noService, "no-service", false, "skip launchd/systemd user service setup")
+	install.Flags().StringVar(
+		&binDir,
+		"bin-dir",
+		"",
+		"install dir (default: the directory of this executable)",
+	)
+	install.Flags().BoolVar(
+		&noService,
+		"no-service",
+		false,
+		"skip launchd/systemd user service setup",
+	)
 	install.Flags().BoolVar(&noService, "bin-only", false, "alias for --no-service")
-	install.Flags().StringVar(&releaseVersion, "version", "", "exact release tag to install (default: this CLI's release, or the latest release for a dev build)")
+	install.Flags().StringVar(
+		&releaseVersion,
+		"version",
+		"",
+		"exact release tag to install (default: this CLI's release, or the latest release for a dev build)",
+	)
+
 	return install
 }

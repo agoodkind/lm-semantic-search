@@ -60,6 +60,7 @@ func ParseEmbeddingProvider(name string) (EmbeddingProvider, error) {
 	if trimmed == "" {
 		return EmbeddingProviderNone, nil
 	}
+
 	for _, candidate := range []EmbeddingProvider{
 		EmbeddingProviderOpenAI,
 		EmbeddingProviderONNX,
@@ -68,6 +69,7 @@ func ParseEmbeddingProvider(name string) (EmbeddingProvider, error) {
 			return candidate, nil
 		}
 	}
+
 	return "", fmt.Errorf(
 		"embedding provider %q is not supported; use %q or %q",
 		trimmed,

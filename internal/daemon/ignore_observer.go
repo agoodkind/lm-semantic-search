@@ -80,6 +80,7 @@ func (observer *ignoreObserver) Invalidate(codebaseID string) {
 // disabled, which is the watcher-off staleness fix.
 func (observer *ignoreObserver) CheckSources(ctx context.Context, codebaseID string, root string) {
 	sources := observer.resolver.IgnoreSources(ctx, codebaseID, root)
+
 	current := make(map[string]sourceStamp, len(sources))
 	for _, source := range sources {
 		current[source] = stampForSource(source)
@@ -93,6 +94,7 @@ func (observer *ignoreObserver) CheckSources(ctx context.Context, codebaseID str
 	if hadPrevious && sameStamps(previous, current) {
 		return
 	}
+
 	// Invalidate on the first observation as well as on any later change. The
 	// first sweep cannot tell whether a matcher was built before the baseline
 	// existed, so an ignore-source edit between that build and this sweep would
@@ -109,6 +111,7 @@ func stampForSource(path string) sourceStamp {
 	if err != nil {
 		return sourceStamp{exists: false, modTime: time.Time{}}
 	}
+
 	return sourceStamp{exists: true, modTime: info.ModTime()}
 }
 
@@ -119,17 +122,21 @@ func sameStamps(previous map[string]sourceStamp, current map[string]sourceStamp)
 	if len(previous) != len(current) {
 		return false
 	}
+
 	for path, previousStamp := range previous {
 		currentStamp, found := current[path]
 		if !found {
 			return false
 		}
+
 		if previousStamp.exists != currentStamp.exists {
 			return false
 		}
+
 		if !previousStamp.modTime.Equal(currentStamp.modTime) {
 			return false
 		}
 	}
+
 	return true
 }

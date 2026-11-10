@@ -81,6 +81,7 @@ func (service *Service) mmapPolicyComplete(collectionName string) bool {
 	service.mmapPolicyMutex.Lock()
 	defer service.mmapPolicyMutex.Unlock()
 	version, found := service.mmapPolicyVersions[collectionName]
+
 	return found && version == mmapPolicyVersion
 }
 
@@ -91,17 +92,21 @@ func (service *Service) consumeMmapBackoffSweep(
 	if mode != mmapExistingCollection {
 		return false
 	}
+
 	service.mmapPolicyMutex.Lock()
 	defer service.mmapPolicyMutex.Unlock()
 	if service.mmapPolicyFailures == nil {
 		service.mmapPolicyFailures = make(map[string]mmapPolicyFailure)
 	}
+
 	failure := service.mmapPolicyFailures[collectionName]
 	if failure.skipSweeps == 0 {
 		return false
 	}
+
 	failure.skipSweeps--
 	service.mmapPolicyFailures[collectionName] = failure
+
 	return true
 }
 
@@ -111,11 +116,13 @@ func (service *Service) recordMmapNonConvergence(collectionName string) {
 	if service.mmapPolicyFailures == nil {
 		service.mmapPolicyFailures = make(map[string]mmapPolicyFailure)
 	}
+
 	failure := service.mmapPolicyFailures[collectionName]
 	failure.consecutive++
 	if failure.consecutive >= mmapFailureThreshold {
 		failure.skipSweeps = mmapFailureBackoffSweeps
 	}
+
 	service.mmapPolicyFailures[collectionName] = failure
 }
 
@@ -132,6 +139,7 @@ func (service *Service) releaseCollection(ctx context.Context, collectionName st
 	); err != nil {
 		return wrapStoreError(ctx, err, "release Milvus collection "+collectionName)
 	}
+
 	return nil
 }
 
@@ -141,6 +149,7 @@ func (service *Service) awaitCollectionReleased(
 ) error {
 	pollCtx, cancel := context.WithTimeout(ctx, releasePollTimeout)
 	defer cancel()
+
 	for {
 		state, err := service.milvus.GetLoadState(
 			pollCtx,
@@ -149,13 +158,16 @@ func (service *Service) awaitCollectionReleased(
 		if err != nil {
 			return wrapStoreError(ctx, err, "poll release state for "+collectionName)
 		}
+
 		if state.State == entity.LoadStateNotLoad {
 			return nil
 		}
+
 		select {
 		case <-pollCtx.Done():
 			err := fmt.Errorf("await release of %s: %w", collectionName, pollCtx.Err())
 			slog.ErrorContext(ctx, "await collection release failed", "err", err)
+
 			return err
 		case <-time.After(releasePollInterval):
 		}
@@ -177,6 +189,7 @@ func (service *Service) inspectMmapPolicy(
 			"describe collection for mmap "+collectionName,
 		)
 	}
+
 	if described.Schema == nil {
 		return mmapInspection{}, fmt.Errorf(
 			"describe collection for mmap %s: missing schema",
@@ -189,11 +202,15 @@ func (service *Service) inspectMmapPolicy(
 		if !mmapFieldSupported(field) {
 			continue
 		}
+
 		if field.TypeParams[mmapEnabledKey] != mmapEnabledValue {
-			missingTargets = append(missingTargets, mmapTarget{
-				kind: mmapFieldTarget,
-				name: field.Name,
-			})
+			missingTargets = append(
+				missingTargets,
+				mmapTarget{
+					kind: mmapFieldTarget,
+					name: field.Name,
+				},
+			)
 		}
 	}
 
@@ -204,6 +221,7 @@ func (service *Service) inspectMmapPolicy(
 		contentHashPresent: false,
 		sparseIndexPresent: false,
 	}
+
 	indexFields := []string{
 		denseVectorFieldName,
 		contentHashFieldName,
@@ -221,7 +239,9 @@ func (service *Service) inspectMmapPolicy(
 				"list indexes on "+fieldName+" for "+collectionName,
 			)
 		}
+
 		slices.Sort(indexNames)
+
 		for _, indexName := range indexNames {
 			description, describeErr := service.milvus.DescribeIndex(
 				ctx,
@@ -234,21 +254,30 @@ func (service *Service) inspectMmapPolicy(
 					"describe index "+indexName+" on "+collectionName,
 				)
 			}
+
 			params := description.Params()
 			if !noteMmapIndexPresence(&inspection, fieldName, params["index_type"]) {
 				continue
 			}
+
 			if params[mmapEnabledKey] != mmapEnabledValue {
-				inspection.missingTargets = append(inspection.missingTargets, mmapTarget{
-					kind: mmapIndexTarget,
-					name: indexName,
-				})
+				inspection.missingTargets = append(
+					inspection.missingTargets,
+					mmapTarget{
+						kind: mmapIndexTarget,
+						name: indexName,
+					},
+				)
 			}
+
 			if catalogDenseIndexNeedsWarmupDisabled(collectionName, fieldName, params) {
-				inspection.missingTargets = append(inspection.missingTargets, mmapTarget{
-					kind: indexWarmupTarget,
-					name: indexName,
-				})
+				inspection.missingTargets = append(
+					inspection.missingTargets,
+					mmapTarget{
+						kind: indexWarmupTarget,
+						name: indexName,
+					},
+				)
 			}
 		}
 	}
@@ -260,7 +289,9 @@ func (service *Service) inspectMmapPolicy(
 	if err != nil {
 		return mmapInspection{}, wrapStoreError(ctx, err, "get load state for "+collectionName)
 	}
+
 	inspection.loadState = loadState.State
+
 	return inspection, nil
 }
 
@@ -278,9 +309,11 @@ func catalogDenseIndexNeedsWarmupDisabled(
 	if fieldName != denseVectorFieldName {
 		return false
 	}
+
 	if !strings.HasPrefix(collectionName, reuseCatalogCollectionPrefix) {
 		return false
 	}
+
 	return params[indexWarmupKey] != indexWarmupDisabled
 }
 
@@ -288,9 +321,11 @@ func mmapFieldSupported(field *entity.Field) bool {
 	if field.PrimaryKey || field.Name == idFieldName || field.Name == sparseVectorFieldName {
 		return false
 	}
+
 	if field.Name == denseVectorFieldName {
 		return true
 	}
+
 	return !field.DataType.IsVectorType()
 }
 
@@ -321,15 +356,19 @@ func (service *Service) mmapInspectionComplete(
 	if len(inspection.missingTargets) != 0 || !inspection.denseIndexPresent {
 		return false
 	}
+
 	if mode == mmapExistingCollection {
 		return true
 	}
+
 	if !inspection.contentHashPresent {
 		return false
 	}
+
 	if mode == mmapCreatedReuseCatalog {
 		return true
 	}
+
 	return !service.cfg.HybridMode || inspection.sparseIndexPresent
 }
 
@@ -345,16 +384,19 @@ func (service *Service) waitForCreatedMmapTargets(
 	peerInfo, _ := peer.FromContext(ctx)
 	pollCtx, cancel := context.WithTimeout(ctx, service.callTimeouts().Metadata)
 	defer cancel()
+
 	for {
 		inspection, err := service.inspectMmapPolicy(pollCtx, collectionName)
 		if err != nil {
 			return mmapInspection{}, err
 		}
+
 		sparseRequired := mode != mmapCreatedReuseCatalog && service.cfg.HybridMode
 		if inspection.denseIndexPresent && inspection.contentHashPresent &&
 			(!sparseRequired || inspection.sparseIndexPresent) {
 			return inspection, nil
 		}
+
 		select {
 		case <-pollCtx.Done():
 			err := fmt.Errorf(
@@ -362,7 +404,15 @@ func (service *Service) waitForCreatedMmapTargets(
 				collectionName,
 				pollCtx.Err(),
 			)
-			slog.ErrorContext(ctx, "wait for required mmap indexes failed", "peer", peerInfo.String(), "err", err)
+			slog.ErrorContext(
+				ctx,
+				"wait for required mmap indexes failed",
+				"peer",
+				peerInfo.String(),
+				"err",
+				err,
+			)
+
 			return mmapInspection{}, err
 		case <-time.After(indexVisibilityPollInterval):
 		}
@@ -377,13 +427,18 @@ func (service *Service) ensureCreatedCollectionMmapForWrite(
 	if err == nil || !errors.Is(err, errMmapPolicyIncomplete) {
 		return err
 	}
+
 	slog.WarnContext(
 		ctx,
 		"semantic.mmap_created_collection_nonconvergent",
-		"collection", collectionName,
-		"policy_version", mmapPolicyVersion,
-		"err", err,
+		"collection",
+		collectionName,
+		"policy_version",
+		mmapPolicyVersion,
+		"err",
+		err,
 	)
+
 	return nil
 }
 
@@ -394,8 +449,10 @@ func (service *Service) ensureCreatedCollectionMmap(
 	if service.mmapPolicyComplete(collectionName) {
 		return nil
 	}
+
 	pollCtx, cancel := context.WithTimeout(ctx, service.callTimeouts().Metadata)
 	defer cancel()
+
 	for {
 		outcome, err := service.ensureMmapEnabledOnce(
 			pollCtx,
@@ -405,9 +462,11 @@ func (service *Service) ensureCreatedCollectionMmap(
 		if err != nil {
 			return err
 		}
+
 		if outcome != mmapOutcomeSkipped {
 			return nil
 		}
+
 		select {
 		case <-pollCtx.Done():
 			err := fmt.Errorf(
@@ -417,6 +476,7 @@ func (service *Service) ensureCreatedCollectionMmap(
 				pollCtx.Err(),
 			)
 			slog.ErrorContext(ctx, "wait for created collection mmap policy failed", "err", err)
+
 			return err
 		case <-time.After(indexVisibilityPollInterval):
 		}
@@ -436,9 +496,16 @@ func (service *Service) alterMmapTargets(
 				milvusclient.NewAlterCollectionFieldPropertiesOption(
 					collectionName,
 					target.name,
-				).WithProperty(mmapEnabledKey, mmapEnabledValue),
+				).WithProperty(
+					mmapEnabledKey,
+					mmapEnabledValue,
+				),
 			); err != nil {
-				return wrapStoreError(ctx, err, "enable mmap on field "+target.name+" of "+collectionName)
+				return wrapStoreError(
+					ctx,
+					err,
+					"enable mmap on field "+target.name+" of "+collectionName,
+				)
 			}
 		case mmapIndexTarget:
 			if err := service.milvus.AlterIndexProperties(
@@ -446,9 +513,16 @@ func (service *Service) alterMmapTargets(
 				milvusclient.NewAlterIndexPropertiesOption(
 					collectionName,
 					target.name,
-				).WithProperty(mmapEnabledKey, mmapEnabledValue),
+				).WithProperty(
+					mmapEnabledKey,
+					mmapEnabledValue,
+				),
 			); err != nil {
-				return wrapStoreError(ctx, err, "enable mmap on index "+target.name+" of "+collectionName)
+				return wrapStoreError(
+					ctx,
+					err,
+					"enable mmap on index "+target.name+" of "+collectionName,
+				)
 			}
 		case indexWarmupTarget:
 			if err := service.milvus.AlterIndexProperties(
@@ -456,12 +530,20 @@ func (service *Service) alterMmapTargets(
 				milvusclient.NewAlterIndexPropertiesOption(
 					collectionName,
 					target.name,
-				).WithProperty(indexWarmupKey, indexWarmupDisabled),
+				).WithProperty(
+					indexWarmupKey,
+					indexWarmupDisabled,
+				),
 			); err != nil {
-				return wrapStoreError(ctx, err, "disable warmup on index "+target.name+" of "+collectionName)
+				return wrapStoreError(
+					ctx,
+					err,
+					"disable warmup on index "+target.name+" of "+collectionName,
+				)
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -479,11 +561,17 @@ func (service *Service) restoreMmapReadyState(
 	if restoreErr == nil {
 		return operationErr
 	}
+
 	joinedErr := errors.Join(
 		operationErr,
-		fmt.Errorf("restore ready collection %s after mmap failure: %w", collectionName, restoreErr),
+		fmt.Errorf(
+			"restore ready collection %s after mmap failure: %w",
+			collectionName,
+			restoreErr,
+		),
 	)
 	slog.ErrorContext(ctx, "restore ready collection after mmap failure failed", "err", joinedErr)
+
 	return joinedErr
 }
 
@@ -500,6 +588,7 @@ func (service *Service) ensureMmapEnabledOnCollection(
 	if err != nil {
 		return mmapOutcomeUnknown, err
 	}
+
 	if !hasCollection {
 		return mmapOutcomeSkipped, nil
 	}
@@ -508,18 +597,22 @@ func (service *Service) ensureMmapEnabledOnCollection(
 	if err != nil {
 		return mmapOutcomeUnknown, err
 	}
+
 	inspection, err := service.inspectMmapPolicy(ctx, collectionName)
 	observation.ReleaseContext(ctx)
 	if err != nil {
 		return mmapOutcomeUnknown, err
 	}
+
 	if observedState == collectionResidencyLoading ||
 		!mmapLoadStateStable(inspection.loadState) {
 		return mmapOutcomeSkipped, nil
 	}
+
 	if !inspection.denseIndexPresent && mode == mmapExistingCollection {
 		return mmapOutcomeSkipped, nil
 	}
+
 	if service.mmapInspectionComplete(inspection, mode) {
 		return mmapOutcomeAlready, nil
 	}
@@ -529,6 +622,7 @@ func (service *Service) ensureMmapEnabledOnCollection(
 		return mmapOutcomeUnknown, err
 	}
 	defer maintenance.ReleaseContext(ctx)
+
 	return service.migrateMmapUnderMaintenance(ctx, collectionName, mode)
 }
 
@@ -546,15 +640,19 @@ func (service *Service) migrateMmapUnderMaintenance(
 	} else {
 		inspection, err = service.inspectMmapPolicy(ctx, collectionName)
 	}
+
 	if err != nil {
 		return mmapOutcomeUnknown, err
 	}
+
 	if !inspection.denseIndexPresent && mode == mmapExistingCollection {
 		return mmapOutcomeSkipped, nil
 	}
+
 	if service.mmapInspectionComplete(inspection, mode) {
 		return mmapOutcomeAlready, nil
 	}
+
 	if !mmapLoadStateStable(inspection.loadState) {
 		return mmapOutcomeSkipped, nil
 	}
@@ -566,6 +664,7 @@ func (service *Service) migrateMmapUnderMaintenance(
 		if err := service.releaseCollection(ctx, collectionName); err != nil {
 			return mmapOutcomeUnknown, service.restoreMmapReadyState(ctx, collectionName, err)
 		}
+
 		if err := service.awaitCollectionReleased(ctx, collectionName); err != nil {
 			return mmapOutcomeUnknown, service.restoreMmapReadyState(ctx, collectionName, err)
 		}
@@ -575,8 +674,10 @@ func (service *Service) migrateMmapUnderMaintenance(
 		if releaseStarted {
 			err = service.restoreMmapReadyState(ctx, collectionName, err)
 		}
+
 		return mmapOutcomeUnknown, err
 	}
+
 	rechecked, err := service.inspectMmapPolicy(ctx, collectionName)
 	if err == nil && !service.mmapInspectionComplete(rechecked, mode) {
 		err = fmt.Errorf(
@@ -586,25 +687,34 @@ func (service *Service) migrateMmapUnderMaintenance(
 			errMmapPolicyIncomplete,
 		)
 	}
+
 	if err != nil {
 		if releaseStarted {
 			err = service.restoreMmapReadyState(ctx, collectionName, err)
 		}
+
 		return mmapOutcomeUnknown, err
 	}
+
 	if priorReady {
 		if err := service.loadCollection(ctx, collectionName); err != nil {
 			return mmapOutcomeUnknown, service.restoreMmapReadyState(ctx, collectionName, err)
 		}
 	}
+
 	slog.InfoContext(
 		ctx,
 		"semantic.mmap_enabled",
-		"collection", collectionName,
-		"policy_version", mmapPolicyVersion,
-		"was_loaded", priorReady,
-		"peer", peerInfo.String(),
+		"collection",
+		collectionName,
+		"policy_version",
+		mmapPolicyVersion,
+		"was_loaded",
+		priorReady,
+		"peer",
+		peerInfo.String(),
 	)
+
 	return mmapOutcomeMigrated, nil
 }
 
@@ -616,6 +726,7 @@ func (service *Service) ensureMmapEnabledOnce(
 	if service.consumeMmapBackoffSweep(collectionName, mode) {
 		return mmapOutcomeBackoff, nil
 	}
+
 	service.mmapPolicyMutex.Lock()
 	generation := service.mmapPolicyGeneration[collectionName]
 	version, done := service.mmapPolicyVersions[collectionName]
@@ -623,17 +734,22 @@ func (service *Service) ensureMmapEnabledOnce(
 	if done && version == mmapPolicyVersion {
 		return mmapOutcomeAlready, nil
 	}
+
 	outcome, err := service.ensureMmapEnabledOnCollection(ctx, collectionName, mode)
 	if err != nil {
 		if errors.Is(err, errMmapPolicyIncomplete) {
 			service.recordMmapNonConvergence(collectionName)
 		}
+
 		metrics.MilvusMmapMigrationDone(true)
+
 		return mmapOutcomeUnknown, err
 	}
+
 	if outcome == mmapOutcomeMigrated {
 		metrics.MilvusMmapMigrationDone(false)
 	}
+
 	if outcome == mmapOutcomeMigrated || outcome == mmapOutcomeAlready {
 		service.clearMmapNonConvergence(collectionName)
 		service.mmapPolicyMutex.Lock()
@@ -641,10 +757,13 @@ func (service *Service) ensureMmapEnabledOnce(
 			if service.mmapPolicyVersions == nil {
 				service.mmapPolicyVersions = make(map[string]int)
 			}
+
 			service.mmapPolicyVersions[collectionName] = mmapPolicyVersion
 		}
+
 		service.mmapPolicyMutex.Unlock()
 	}
+
 	return outcome, nil
 }
 
@@ -654,6 +773,7 @@ func (service *Service) EnsureMmapEnabledAllCollections(ctx context.Context) {
 	if !service.Available() {
 		return
 	}
+
 	collections, err := service.ListCollections(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "semantic.mmap_sweep_list_failed", "err", err)
@@ -665,11 +785,13 @@ func (service *Service) EnsureMmapEnabledAllCollections(ctx context.Context) {
 	skipped := 0
 	backoff := 0
 	failed := 0
+
 	for _, collectionName := range collections {
 		if isStagingCollection(collectionName) {
 			skipped++
 			continue
 		}
+
 		outcome, ensureErr := service.ensureMmapEnabledOnce(
 			ctx,
 			collectionName,
@@ -679,6 +801,7 @@ func (service *Service) EnsureMmapEnabledAllCollections(ctx context.Context) {
 			failed++
 			continue
 		}
+
 		switch outcome {
 		case mmapOutcomeMigrated:
 			migrated++
@@ -709,5 +832,6 @@ func (service *Service) EnsureMmapEnabledAllCollections(ctx context.Context) {
 	case migrated > 0:
 		level = slog.LevelInfo
 	}
+
 	slog.LogAttrs(ctx, level, message, attrs...)
 }

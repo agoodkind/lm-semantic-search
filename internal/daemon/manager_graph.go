@@ -44,7 +44,12 @@ var allowedGraphTools = map[string]struct{}{
 }
 
 // GraphTool calls a cbm graph engine tool for a tracked codebase.
-func (manager *Manager) GraphTool(ctx context.Context, codebaseID string, toolName string, argsJSON string) (string, error) {
+func (manager *Manager) GraphTool(
+	ctx context.Context,
+	codebaseID string,
+	toolName string,
+	argsJSON string,
+) (string, error) {
 	if err := validateGraphToolName(toolName); err != nil {
 		return "", err
 	}
@@ -55,7 +60,9 @@ func (manager *Manager) GraphTool(ctx context.Context, codebaseID string, toolNa
 		if errors.As(err, &adapterErr) {
 			return "", err
 		}
+
 		slog.ErrorContext(ctx, "open graph engine failed", "codebase_id", codebaseID, "err", err)
+
 		return "", fmt.Errorf("open graph engine for %s: %w", codebaseID, err)
 	}
 	defer release()
@@ -64,11 +71,22 @@ func (manager *Manager) GraphTool(ctx context.Context, codebaseID string, toolNa
 	if err != nil {
 		return "", err
 	}
+
 	resultJSON, err := engine.Tool(toolName, enrichedArgs)
 	if err != nil {
-		slog.ErrorContext(ctx, "graph tool call failed", "codebase_id", codebaseID, "tool_name", toolName, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"graph tool call failed",
+			"codebase_id",
+			codebaseID,
+			"tool_name",
+			toolName,
+			"err",
+			err,
+		)
 		return "", fmt.Errorf("call graph tool %s for %s: %w", toolName, codebaseID, err)
 	}
+
 	return resultJSON, nil
 }
 
@@ -76,10 +94,16 @@ func validateGraphToolName(toolName string) *adapterr.AdapterError {
 	if _, found := allowedGraphTools[toolName]; found {
 		return nil
 	}
+
 	return adapterr.NewInvalidArgument(fmt.Sprintf("unsupported graph tool_name %q", toolName))
 }
 
-func newGraphIndexTask(codebaseID string, canonicalPath string, snapshotHash string, complete func(context.Context)) *graphIndexTask {
+func newGraphIndexTask(
+	codebaseID string,
+	canonicalPath string,
+	snapshotHash string,
+	complete func(context.Context),
+) *graphIndexTask {
 	return &graphIndexTask{
 		codebaseID:    codebaseID,
 		canonicalPath: canonicalPath,
@@ -92,6 +116,7 @@ func (manager *Manager) runGraphIndexTask(ctx context.Context, task *graphIndexT
 	if task == nil {
 		return
 	}
+
 	manager.recordGraphIndexNonFatal(ctx, task.codebaseID, task.canonicalPath, task.snapshotHash)
 	if task.complete != nil {
 		task.complete(ctx)
@@ -103,6 +128,7 @@ func (manager *Manager) graphLifecycleStateLocked(codebaseID string) *graphLifec
 	if found {
 		return state
 	}
+
 	state = &graphLifecycleState{
 		clearing: false,
 		indexing: false,
@@ -110,6 +136,7 @@ func (manager *Manager) graphLifecycleStateLocked(codebaseID string) *graphLifec
 		idle:     sync.NewCond(&manager.graphMutex),
 	}
 	manager.graphLifecycle[codebaseID] = state
+
 	return state
 }
 
@@ -117,10 +144,12 @@ func (manager *Manager) graphIndexing(codebaseID string) bool {
 	if codebaseID == "" {
 		return false
 	}
+
 	manager.graphMutex.Lock()
 	defer manager.graphMutex.Unlock()
 
 	state := manager.graphLifecycle[codebaseID]
+
 	return state != nil && state.indexing
 }
 
@@ -139,6 +168,7 @@ func (manager *Manager) beginGraphIndex(codebaseID string) (func(), bool) {
 	if state.indexing {
 		return nil, false
 	}
+
 	state.indexing = true
 
 	return func() {
@@ -154,8 +184,12 @@ func (manager *Manager) beginGraphOperation(codebaseID string) (func(), *adapter
 
 	state := manager.graphLifecycleStateLocked(codebaseID)
 	if state.clearing {
-		return nil, adapterr.NewConflictingJob("graph cache for "+codebaseID+" is being cleared", nil)
+		return nil, adapterr.NewConflictingJob(
+			"graph cache for "+codebaseID+" is being cleared",
+			nil,
+		)
 	}
+
 	state.active++
 
 	return func() {
@@ -169,7 +203,10 @@ func (manager *Manager) beginGraphOperation(codebaseID string) (func(), *adapter
 	}, nil
 }
 
-func (manager *Manager) graphEngine(ctx context.Context, codebaseID string) (*cbm.Engine, func(), error) {
+func (manager *Manager) graphEngine(
+	ctx context.Context,
+	codebaseID string,
+) (*cbm.Engine, func(), error) {
 	release, operationErr := manager.beginGraphOperation(codebaseID)
 	if operationErr != nil {
 		return nil, nil, operationErr
@@ -188,9 +225,12 @@ func (manager *Manager) graphEngine(ctx context.Context, codebaseID string) (*cb
 		release()
 		manager.graphMutex.Lock()
 		slog.ErrorContext(ctx, "open cbm engine failed", "codebase_id", codebaseID, "err", err)
+
 		return nil, nil, fmt.Errorf("open cbm engine: %w", err)
 	}
+
 	manager.graphEngines[codebaseID] = engine
+
 	return engine, release, nil
 }
 
@@ -205,33 +245,49 @@ func (manager *Manager) CloseGraphEngines() {
 	defer manager.graphMutex.Unlock()
 
 	active := false
+
 	for codebaseID, state := range manager.graphLifecycle {
 		state.clearing = true
 		if state.active > 0 {
 			active = true
-			slog.Warn("graph handles remain open at shutdown; graph operation still active", "codebase_id", codebaseID, "active", state.active)
+			slog.Warn(
+				"graph handles remain open at shutdown; graph operation still active",
+				"codebase_id",
+				codebaseID,
+				"active",
+				state.active,
+			)
 		}
 	}
+
 	if active {
 		return
 	}
+
 	for codebaseID, engine := range manager.graphEngines {
 		engine.Close()
 		delete(manager.graphEngines, codebaseID)
 	}
 }
 
-func defaultGraphIndex(ctx context.Context, engine *cbm.Engine, canonicalPath string, mode string) error {
+func defaultGraphIndex(
+	ctx context.Context,
+	engine *cbm.Engine,
+	canonicalPath string,
+	mode string,
+) error {
 	if err := engine.Index(ctx, canonicalPath, mode); err != nil {
 		slog.WarnContext(ctx, "cbm graph index failed", "path", canonicalPath, "err", err)
 		return fmt.Errorf("cbm index graph: %w", err)
 	}
+
 	return nil
 }
 
 func (manager *Manager) clearGraphCache(ctx context.Context, codebaseID string) error {
 	manager.graphMutex.Lock()
 	state := manager.graphLifecycleStateLocked(codebaseID)
+
 	state.clearing = true
 	for state.active > 0 {
 		state.idle.Wait()
@@ -241,17 +297,30 @@ func (manager *Manager) clearGraphCache(ctx context.Context, codebaseID string) 
 		engine.Close()
 		delete(manager.graphEngines, codebaseID)
 	}
+
 	var removeErr error
+
 	for _, path := range manager.graphPaths(codebaseID) {
 		if err := store.RemoveFile(path); err != nil {
-			slog.ErrorContext(ctx, "remove graph file failed", "codebase_id", codebaseID, "path", path, "err", err)
+			slog.ErrorContext(
+				ctx,
+				"remove graph file failed",
+				"codebase_id",
+				codebaseID,
+				"path",
+				path,
+				"err",
+				err,
+			)
 			if removeErr == nil {
 				removeErr = fmt.Errorf("remove graph file %s: %w", path, err)
 			}
 		}
 	}
+
 	delete(manager.graphLifecycle, codebaseID)
 	manager.graphMutex.Unlock()
+
 	return removeErr
 }
 
@@ -260,20 +329,44 @@ func (manager *Manager) clearGraphCache(ctx context.Context, codebaseID string) 
 // not when this function returns: a cancel or timeout detaches from the
 // blocking C call, and the slot must stay held until that call actually
 // finishes so a new trigger cannot start a second parse alongside it.
-func (manager *Manager) indexGraphNonFatal(ctx context.Context, codebaseID string, canonicalPath string, releaseIndex func()) error {
+func (manager *Manager) indexGraphNonFatal(
+	ctx context.Context,
+	codebaseID string,
+	canonicalPath string,
+	releaseIndex func(),
+) error {
 	if releaseIndex == nil {
 		releaseIndex = func() {}
 	}
+
 	if err := ctx.Err(); err != nil {
 		releaseIndex()
-		slog.WarnContext(ctx, "graph indexing skipped because job is cancelled", "codebase_id", codebaseID, "path", canonicalPath, "err", err)
+		slog.WarnContext(
+			ctx,
+			"graph indexing skipped because job is cancelled",
+			"codebase_id",
+			codebaseID,
+			"path",
+			canonicalPath,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("index graph cancelled before start: %w", err)
 	}
 
 	engine, release, err := manager.graphEngine(ctx, codebaseID)
 	if err != nil {
 		releaseIndex()
-		slog.WarnContext(ctx, "open graph engine failed; continuing without graph index", "codebase_id", codebaseID, "err", err)
+		slog.WarnContext(
+			ctx,
+			"open graph engine failed; continuing without graph index",
+			"codebase_id",
+			codebaseID,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("open graph engine: %w", err)
 	}
 
@@ -281,7 +374,14 @@ func (manager *Manager) indexGraphNonFatal(ctx context.Context, codebaseID strin
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(ctx, "graph index worker panicked", "codebase_id", codebaseID, "err", recovered)
+				slog.ErrorContext(
+					ctx,
+					"graph index worker panicked",
+					"codebase_id",
+					codebaseID,
+					"err",
+					recovered,
+				)
 				result <- fmt.Errorf("graph index worker panicked: %v", recovered)
 			}
 		}()
@@ -300,32 +400,62 @@ func (manager *Manager) indexGraphNonFatal(ctx context.Context, codebaseID strin
 	case <-timer.C:
 		err = fmt.Errorf("index graph timed out after %s", defaultGraphIndexTimeout)
 	}
+
 	if err != nil {
-		slog.WarnContext(ctx, "graph indexing failed; continuing with semantic index", "codebase_id", codebaseID, "path", canonicalPath, "err", err)
+		slog.WarnContext(
+			ctx,
+			"graph indexing failed; continuing with semantic index",
+			"codebase_id",
+			codebaseID,
+			"path",
+			canonicalPath,
+			"err",
+			err,
+		)
 		return fmt.Errorf("index graph: %w", err)
 	}
+
 	return nil
 }
 
-func (manager *Manager) recordGraphIndexNonFatal(ctx context.Context, codebaseID string, canonicalPath string, snapshotHash string) {
+func (manager *Manager) recordGraphIndexNonFatal(
+	ctx context.Context,
+	codebaseID string,
+	canonicalPath string,
+	snapshotHash string,
+) {
 	releaseIndex, ok := manager.beginGraphIndex(codebaseID)
 	if !ok {
-		slog.InfoContext(ctx, "graph index already in flight; skipping duplicate", "codebase_id", codebaseID, "path", canonicalPath)
+		slog.InfoContext(
+			ctx,
+			"graph index already in flight; skipping duplicate",
+			"codebase_id",
+			codebaseID,
+			"path",
+			canonicalPath,
+		)
 		return
 	}
 
 	if manager.graphIndexHook != nil {
 		manager.graphIndexHook()
 	}
+
 	err := manager.indexGraphNonFatal(ctx, codebaseID, canonicalPath, releaseIndex)
 	if err == nil {
 		manager.updateGraphState(ctx, codebaseID, model.GraphStateReady, snapshotHash)
 		return
 	}
+
 	manager.updateGraphState(ctx, codebaseID, model.GraphStateStale, "")
 }
 
-func (manager *Manager) updateGraphState(ctx context.Context, codebaseID string, graphState model.GraphState, snapshotHash string) {
+func (manager *Manager) updateGraphState(
+	ctx context.Context,
+	codebaseID string,
+	graphState model.GraphState,
+	snapshotHash string,
+) {
 	manager.policyMutationMutex.Lock()
 	defer manager.policyMutationMutex.Unlock()
 
@@ -336,6 +466,7 @@ func (manager *Manager) updateGraphState(ctx context.Context, codebaseID string,
 	if !found {
 		return
 	}
+
 	now := clock.Now()
 	codebase.GraphState = graphState
 	if graphState != model.GraphStateReady {
@@ -343,17 +474,30 @@ func (manager *Manager) updateGraphState(ctx context.Context, codebaseID string,
 	} else if snapshotHash != "" {
 		codebase.GraphSnapshotHash = snapshotHash
 	}
+
 	if graphState == model.GraphStateReady {
 		codebase.GraphUpdatedAt = now
 	}
+
 	codebase.UpdatedAt = now
 	manager.codebases[codebaseID] = codebase
 	if err := manager.saveLocked(); err != nil {
-		slog.ErrorContext(ctx, "write registry after graph state update failed", "codebase_id", codebaseID, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"write registry after graph state update failed",
+			"codebase_id",
+			codebaseID,
+			"err",
+			err,
+		)
 	}
 }
 
-func (manager *Manager) shouldReconcileGraph(codebaseID string, currentSnapshotHash string, presence collectionPresence) bool {
+func (manager *Manager) shouldReconcileGraph(
+	codebaseID string,
+	currentSnapshotHash string,
+	presence collectionPresence,
+) bool {
 	if presence != collectionPresencePresent {
 		return false
 	}
@@ -365,13 +509,16 @@ func (manager *Manager) shouldReconcileGraph(codebaseID string, currentSnapshotH
 	if !found {
 		return false
 	}
+
 	if codebase.Kind == model.CodebaseKindDocument {
 		return false
 	}
+
 	graphState := codebase.GraphState
 	if graphState == "" {
 		graphState = model.GraphStateAbsent
 	}
+
 	return graphState != model.GraphStateReady || codebase.GraphSnapshotHash != currentSnapshotHash
 }
 
@@ -384,6 +531,7 @@ func (manager *Manager) graphDiagnostic(ctx context.Context, codebase model.Code
 	if codebase.Kind == model.CodebaseKindDocument {
 		return ""
 	}
+
 	graphState := codebase.GraphState
 	if graphState == "" {
 		graphState = model.GraphStateAbsent
@@ -397,21 +545,26 @@ func (manager *Manager) graphDiagnostic(ctx context.Context, codebase model.Code
 		// healthy empty repository as a problem for as long as it stays tracked.
 		return ""
 	}
+
 	if !checkpoint.usable() {
 		return codebase.CanonicalPath + ": can't confirm the code graph is current"
 	}
+
 	currentHash := snapshotHashForGraph(checkpoint.snapshot, codebase.EffectiveConfig.IgnoreDigest)
 	if graphState == model.GraphStateReady && codebase.GraphSnapshotHash == currentHash {
 		return ""
 	}
+
 	if graphState == model.GraphStateStale {
 		return codebase.CanonicalPath + ": code graph's last update didn't finish (retries automatically)"
 	}
+
 	return codebase.CanonicalPath + ": code graph is behind the current files (rebuilds automatically)"
 }
 
 func (manager *Manager) graphPaths(codebaseID string) []string {
 	basePath := filepath.Join(manager.config.GraphDir, codebaseID+".db")
+
 	return []string{
 		basePath,
 		basePath + "-wal",
@@ -424,8 +577,12 @@ func MarshalGraphToolArguments(argsJSON string, codebaseID string) (string, erro
 	var args graphToolArguments
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		slog.Warn("unmarshal graph tool arguments failed", "codebase_id", codebaseID, "err", err)
-		return "", fmt.Errorf("decode graph tool arguments: %w", adapterr.NewInvalidArgument("args_json must be a JSON object or null"))
+		return "", fmt.Errorf(
+			"decode graph tool arguments: %w",
+			adapterr.NewInvalidArgument("args_json must be a JSON object or null"),
+		)
 	}
+
 	if args == nil {
 		args = graphToolArguments{}
 	}
@@ -435,6 +592,7 @@ func MarshalGraphToolArguments(argsJSON string, codebaseID string) (string, erro
 		slog.Error("marshal graph project argument failed", "codebase_id", codebaseID, "err", err)
 		return "", fmt.Errorf("marshal graph project argument: %w", err)
 	}
+
 	args["project"] = projectJSON
 
 	enrichedArgs, err := json.Marshal(args)
@@ -442,5 +600,6 @@ func MarshalGraphToolArguments(argsJSON string, codebaseID string) (string, erro
 		slog.Error("marshal graph tool arguments failed", "codebase_id", codebaseID, "err", err)
 		return "", fmt.Errorf("marshal graph tool arguments: %w", err)
 	}
+
 	return string(enrichedArgs), nil
 }

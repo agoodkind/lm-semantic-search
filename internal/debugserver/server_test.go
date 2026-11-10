@@ -19,6 +19,7 @@ func TestServerServesDebugSurfaces(t *testing.T) {
 	if startErr := server.Start(ctx); startErr != nil {
 		t.Fatalf("Start returned error: %v", startErr)
 	}
+
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -33,6 +34,7 @@ func TestServerServesDebugSurfaces(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("read /debug/vars body: %v", readErr)
 	}
+
 	var decoded map[string]json.RawMessage
 	if jsonErr := json.Unmarshal(body, &decoded); jsonErr != nil {
 		t.Fatalf("/debug/vars body is not JSON: %v", jsonErr)
@@ -52,9 +54,11 @@ func TestServerServesResidencySnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWithResidencySnapshot returned error: %v", err)
 	}
+
 	if startErr := server.Start(context.Background()); startErr != nil {
 		t.Fatalf("Start returned error: %v", startErr)
 	}
+
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -66,10 +70,12 @@ func TestServerServesResidencySnapshot(t *testing.T) {
 	if contentType := response.Header.Get("Content-Type"); contentType != "application/json" {
 		t.Fatalf("Content-Type = %q, want application/json", contentType)
 	}
+
 	body, readErr := io.ReadAll(response.Body)
 	if readErr != nil {
 		t.Fatalf("read residency body: %v", readErr)
 	}
+
 	var decoded struct {
 		Collections []struct {
 			Collection string `json:"collection"`
@@ -79,6 +85,7 @@ func TestServerServesResidencySnapshot(t *testing.T) {
 	if jsonErr := json.Unmarshal(body, &decoded); jsonErr != nil {
 		t.Fatalf("decode residency body: %v", jsonErr)
 	}
+
 	if len(decoded.Collections) != 1 || decoded.Collections[0].Collection != "test" ||
 		!decoded.Collections[0].TimerArmed {
 		t.Fatalf("residency snapshot = %+v", decoded)
@@ -124,9 +131,11 @@ func getOK(t *testing.T, url string) *http.Response {
 	if err != nil {
 		t.Fatalf("GET %s: %v", url, err)
 	}
+
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		t.Fatalf("GET %s: status = %d, want 200", url, resp.StatusCode)
 	}
+
 	return resp
 }

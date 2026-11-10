@@ -57,7 +57,12 @@ type statusRefreshedMsg struct {
 
 type statusTickMsg struct{}
 
-func newStatusModel(source Source, interval time.Duration, now func() time.Time, first Snapshot) statusModel {
+func newStatusModel(
+	source Source,
+	interval time.Duration,
+	now func() time.Time,
+	first Snapshot,
+) statusModel {
 	return statusModel{
 		source:     source,
 		interval:   interval,
@@ -85,6 +90,7 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = typed.Width
 		m.height = typed.Height
+
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(typed)
@@ -96,8 +102,10 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshing = true
 			cmds = append(cmds, statusRefreshCmd(m.source))
 		}
+
 		return m, tea.Batch(cmds...)
 	}
+
 	return m, nil
 }
 
@@ -114,12 +122,15 @@ func (m statusModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if !m.paused {
 			m.comparable = false
 		}
+
 		return m, nil
 	case keyMatches(msg, "r"):
 		if m.refreshing {
 			return m, nil
 		}
+
 		m.refreshing = true
+
 		return m, statusRefreshCmd(m.source)
 	case keyMatches(msg, "down", "j"):
 		// Clamped on the way down, not only when rendering. View clamps a local
@@ -149,15 +160,18 @@ func (m statusModel) applyRefresh(msg statusRefreshedMsg) statusModel {
 		m.refreshErr = msg.err
 		return m
 	}
+
 	m.refreshErr = nil
 	if sameRun(m.snapshot, msg.snapshot) && m.comparable {
 		m.previous = integerValuesByName(m.snapshot)
 	} else {
 		m.previous = nil
 	}
+
 	m.comparable = true
 	m.snapshot = msg.snapshot
 	m.readAt = m.now()
+
 	return m
 }
 
@@ -168,6 +182,7 @@ func sameRun(previous Snapshot, current Snapshot) bool {
 	if previous.RunID == "" || current.RunID == "" {
 		return false
 	}
+
 	return previous.RunID == current.RunID
 }
 
@@ -179,6 +194,7 @@ func sameRun(previous Snapshot, current Snapshot) bool {
 func (m statusModel) View() tea.View {
 	view := tea.NewView(m.renderContent())
 	view.AltScreen = true
+
 	return view
 }
 
@@ -186,6 +202,7 @@ func (m statusModel) renderContent() string {
 	if m.quitting {
 		return ""
 	}
+
 	width := m.width
 	if width <= 0 {
 		width = defaultTermWidth
@@ -209,8 +226,10 @@ func (m statusModel) renderContent() string {
 		builder.WriteString(faintStyle.Render(fmt.Sprintf("  %d more lines below", hidden)))
 		builder.WriteString("\n")
 	}
+
 	builder.WriteString(footer)
 	builder.WriteString("\n")
+
 	return builder.String()
 }
 
@@ -218,10 +237,8 @@ func (m statusModel) renderContent() string {
 // then the activity block. View and the scroll keys both read it. The last
 // scrollable line has the same number in both.
 func (m statusModel) bodyLines(width int) []string {
-	lines := append(
-		strings.Split(statusCounterBlock(m.snapshot, m.previous, width), "\n"),
-		"",
-	)
+	lines := append(strings.Split(statusCounterBlock(m.snapshot, m.previous, width), "\n"), "")
+
 	return append(lines, strings.Split(m.activityBlock(width), "\n")...)
 }
 
@@ -232,7 +249,9 @@ func (m statusModel) maxOffset() int {
 	if width <= 0 {
 		width = defaultTermWidth
 	}
+
 	headerLines := len(strings.Split(m.headerBlock(), "\n"))
+
 	return max(len(m.bodyLines(width))-m.visibleBodyRows(headerLines), 0)
 }
 
@@ -242,12 +261,14 @@ func (m statusModel) visibleBodyRows(headerLines int) int {
 	if m.height <= 0 {
 		return int(^uint(0) >> 1)
 	}
+
 	// The blank line under the header, the more-lines notice, and the key line.
 	const chrome = 3
 	rows := m.height - headerLines - chrome
 	if rows < 1 {
 		return 1
 	}
+
 	return rows
 }
 
@@ -260,6 +281,7 @@ func (m statusModel) headerBlock() string {
 	if m.paused {
 		last = fmt.Sprintf("paused_at=%s  interval=%s", stamp, m.interval)
 	}
+
 	if m.refreshErr != nil {
 		last += fmt.Sprintf(`  refresh_error=%q`, m.refreshErr.Error())
 	}
@@ -268,7 +290,9 @@ func (m statusModel) headerBlock() string {
 	for _, detail := range m.snapshot.Details {
 		lines = append(lines, faintStyle.Render(detail))
 	}
+
 	lines = append(lines, faintStyle.Render(last))
+
 	return strings.Join(lines, "\n")
 }
 
@@ -277,9 +301,11 @@ func (m statusModel) keyLine() string {
 	if m.paused {
 		keys = "up/down scroll   p resume   r refresh   q quit"
 	}
+
 	if m.refreshing {
 		keys += "   reading"
 	}
+
 	return keys
 }
 
@@ -292,6 +318,7 @@ func statusCounterBlock(snapshot Snapshot, previous map[string]int64, width int)
 	nameWidth := 0
 	valueWidth := 0
 	deltaWidth := 0
+
 	for _, counter := range counters {
 		nameWidth = max(nameWidth, len(counter.Name))
 		valueWidth = max(valueWidth, len(statusValueText(counter.Value)))
@@ -300,13 +327,19 @@ func statusCounterBlock(snapshot Snapshot, previous map[string]int64, width int)
 
 	lines := make([]string, 0, len(counters)+8)
 	group := ""
+
 	for _, counter := range counters {
 		if counter.Group != group && group != "" {
 			lines = append(lines, "")
 		}
+
 		group = counter.Group
-		lines = append(lines, statusCounterLine(counter, previous, nameWidth, valueWidth, deltaWidth, width))
+		lines = append(
+			lines,
+			statusCounterLine(counter, previous, nameWidth, valueWidth, deltaWidth, width),
+		)
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -329,9 +362,11 @@ func statusCounterLine(
 	if len(line) > width {
 		line = fitTail(line, width)
 	}
+
 	if strings.TrimSpace(delta) == "" || strings.TrimSpace(delta) == "+0" {
 		return faintStyle.Render(line)
 	}
+
 	return line
 }
 
@@ -342,6 +377,7 @@ func statusValueText(value Value) string {
 	if value.kind == kindInteger {
 		return groupDigits(text)
 	}
+
 	return displayTimeText(text)
 }
 
@@ -353,6 +389,7 @@ func displayTimeText(text string) string {
 	if err != nil {
 		return text
 	}
+
 	return inLocalZone(parsed).Format("2006-01-02T15:04:05-07:00")
 }
 
@@ -364,6 +401,7 @@ func inLocalZone(value time.Time) time.Time {
 	if err != nil {
 		return value
 	}
+
 	return value.In(location)
 }
 
@@ -374,13 +412,16 @@ func statusDeltaText(field Field, previous map[string]int64) string {
 	if field.NoDelta {
 		return ""
 	}
+
 	if field.Value.kind != kindInteger || previous == nil {
 		return ""
 	}
+
 	prior, seen := previous[field.Name]
 	if !seen {
 		return ""
 	}
+
 	return deltaText(field.Value.integer-prior, true)
 }
 
@@ -394,9 +435,11 @@ func (m statusModel) activityBlock(width int) string {
 	}
 
 	lines := []string{header}
+
 	for index, row := range rows {
 		lines = append(lines, statusActivityRow(index, row, width)...)
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -410,22 +453,27 @@ func statusActivityRow(index int, row []Field, width int) []string {
 	for _, field := range row {
 		pairs = append(pairs, field.Name+"="+statusValueText(field.Value))
 	}
+
 	if len(pairs) == 0 {
 		return []string{fmt.Sprintf("  [%d] (no fields reported)", index)}
 	}
 
 	lines := []string{fmt.Sprintf("  [%d] %s", index, pairs[0])}
 	current := "     "
+
 	for _, pair := range pairs[1:] {
 		if len(current)+len(pair)+2 > width {
 			lines = append(lines, faintStyle.Render(strings.TrimRight(current, " ")))
 			current = "     "
 		}
+
 		current += pair + "  "
 	}
+
 	if strings.TrimSpace(current) != "" {
 		lines = append(lines, faintStyle.Render(strings.TrimRight(current, " ")))
 	}
+
 	return lines
 }
 
@@ -439,6 +487,7 @@ func integerValuesByName(snapshot Snapshot) map[string]int64 {
 			values[counter.Name] = counter.Value.integer
 		}
 	}
+
 	return values
 }
 
@@ -450,15 +499,19 @@ func groupDigits(digits string) string {
 		sign = "-"
 		digits = digits[1:]
 	}
+
 	if len(digits) <= 3 {
 		return sign + digits
 	}
+
 	parts := make([]string, 0, (len(digits)+2)/3)
 	for len(digits) > 3 {
 		parts = append([]string{digits[len(digits)-3:]}, parts...)
 		digits = digits[:len(digits)-3]
 	}
+
 	parts = append([]string{digits}, parts...)
+
 	return sign + strings.Join(parts, ",")
 }
 
@@ -469,16 +522,21 @@ func deltaText(delta int64, hasPrevious bool) string {
 	if !hasPrevious {
 		return ""
 	}
+
 	if delta < 0 {
 		return groupDigits(strconv.FormatInt(delta, 10))
 	}
+
 	return "+" + groupDigits(strconv.FormatInt(delta, 10))
 }
 
 func statusTick(interval time.Duration) tea.Cmd {
-	return tea.Tick(interval, func(time.Time) tea.Msg {
-		return statusTickMsg{}
-	})
+	return tea.Tick(
+		interval,
+		func(time.Time) tea.Msg {
+			return statusTickMsg{}
+		},
+	)
 }
 
 func statusRefreshCmd(source Source) tea.Cmd {
@@ -501,6 +559,7 @@ func padTo(text string, width int) string {
 	if gap <= 0 {
 		return text
 	}
+
 	return text + strings.Repeat(" ", gap)
 }
 
@@ -511,6 +570,7 @@ func padLeftTo(text string, width int) string {
 	if gap <= 0 {
 		return text
 	}
+
 	return strings.Repeat(" ", gap) + text
 }
 
@@ -521,12 +581,15 @@ func fitTail(text string, width int) string {
 	if width <= 0 {
 		return ""
 	}
+
 	runes := []rune(text)
 	if len(runes) <= width {
 		return text
 	}
+
 	if width == 1 {
 		return "…"
 	}
+
 	return string(runes[:width-1]) + "…"
 }

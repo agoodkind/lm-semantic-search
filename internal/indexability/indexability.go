@@ -103,7 +103,13 @@ type builtRules struct {
 // ignore rule is ignored, a non-regular file is rejected, and an oversize file
 // is rejected. relPath is slash-separated and relative to root, and info is the
 // path's [os.FileInfo].
-func (r *Resolver) Decide(ctx context.Context, codebaseID string, root string, relPath string, info os.FileInfo) Decision {
+func (r *Resolver) Decide(
+	ctx context.Context,
+	codebaseID string,
+	root string,
+	relPath string,
+	info os.FileInfo,
+) Decision {
 	rules := r.rulesFor(ctx, codebaseID, root)
 
 	if reason := rules.scopeOrIgnore(root, relPath, info.IsDir()); reason != Keep {
@@ -128,6 +134,7 @@ func (r *Resolver) DecideContent(data []byte) Decision {
 	if keep, skip := eligibleContent(data); !keep {
 		return Decision{Indexed: false, Reason: reasonForSkip(skip)}
 	}
+
 	return Decision{Indexed: true, Reason: Keep}
 }
 
@@ -137,7 +144,13 @@ func (r *Resolver) DecideContent(data []byte) Decision {
 // structurally out-of-scope paths such as .git metadata never enqueue. Pass
 // isDir when known; deleted paths can pass false, because the ancestor-directory
 // check still catches a path under an ignored directory.
-func (r *Resolver) Ignored(ctx context.Context, codebaseID string, root string, relPath string, isDir bool) bool {
+func (r *Resolver) Ignored(
+	ctx context.Context,
+	codebaseID string,
+	root string,
+	relPath string,
+	isDir bool,
+) bool {
 	return r.rulesFor(ctx, codebaseID, root).scopeOrIgnore(root, relPath, isDir) != Keep
 }
 
@@ -158,16 +171,26 @@ func (rules *builtRules) scopeOrIgnore(root string, relPath string, isDir bool) 
 		if gitworktree.PathInsideNestedWorktree(root, rules.commonDir, absPath) {
 			return ReasonOutOfScope
 		}
-		if submoduleRoot, ok := rules.submodules.containing(root, rules.commonDir, relPath, absPath); ok && !rules.submodules.allowed(submoduleRoot) {
+
+		if submoduleRoot, ok := rules.submodules.containing(
+			root,
+			rules.commonDir,
+			relPath,
+			absPath,
+		); ok &&
+			!rules.submodules.allowed(submoduleRoot) {
 			return ReasonSubmodule
 		}
 	}
+
 	if hasGitComponent(relPath) {
 		return ReasonOutOfScope
 	}
+
 	if pathIgnored(rules.matcher, relPath, isDir) {
 		return ReasonIgnored
 	}
+
 	return Keep
 }
 
@@ -179,15 +202,23 @@ func (rules *builtRules) scopeOrIgnore(root string, relPath string, isDir bool) 
 // or the .git directory) reports excluded with an empty pattern, because no
 // .gitignore line names it. relPath is slash-separated and relative to root;
 // pass isDir for a directory so a directory-only pattern matches.
-func (r *Resolver) IgnoreDetail(ctx context.Context, codebaseID string, root string, relPath string, isDir bool) (gitignore.MatchResult, bool) {
+func (r *Resolver) IgnoreDetail(
+	ctx context.Context,
+	codebaseID string,
+	root string,
+	relPath string,
+	isDir bool,
+) (gitignore.MatchResult, bool) {
 	rules := r.rulesFor(ctx, codebaseID, root)
 	reason := rules.scopeOrIgnore(root, relPath, isDir)
 	if reason == Keep {
 		return gitignore.MatchResult{}, false
 	}
+
 	if reason != ReasonIgnored {
 		return gitignore.MatchResult{Ignored: true}, true
 	}
+
 	return ignoreDetail(rules.matcher, relPath, isDir), true
 }
 
@@ -202,6 +233,7 @@ func ignoreDetail(matcher *gitignore.Matcher, relPath string, isDir bool) gitign
 	if normalized == "" {
 		return gitignore.MatchResult{}
 	}
+
 	parts := strings.Split(normalized, "/")
 	for index := 1; index < len(parts); index++ {
 		ancestor := strings.Join(parts[:index], "/") + "/"
@@ -209,10 +241,12 @@ func ignoreDetail(matcher *gitignore.Matcher, relPath string, isDir bool) gitign
 			return detail
 		}
 	}
+
 	leaf := normalized
 	if isDir {
 		leaf += "/"
 	}
+
 	return matcher.MatchDetail(leaf)
 }
 
@@ -236,11 +270,13 @@ func (r *Resolver) rulesFor(ctx context.Context, codebaseID string, root string)
 		entry = &ruleEntry{once: sync.Once{}, built: nil}
 		r.entries[codebaseID] = entry
 	}
+
 	r.mu.Unlock()
 
 	entry.once.Do(func() {
 		entry.built = r.buildRules(ctx, codebaseID, root)
 	})
+
 	return entry.built
 }
 
@@ -254,12 +290,14 @@ func pathIgnored(matcher *gitignore.Matcher, relPath string, isDir bool) bool {
 	if normalized == "" {
 		return false
 	}
+
 	parts := strings.Split(normalized, "/")
 	for index := 1; index < len(parts); index++ {
 		if matcher.MatchPath(strings.Join(parts[:index], "/"), true) {
 			return true
 		}
 	}
+
 	return matcher.MatchPath(normalized, isDir)
 }
 
@@ -273,6 +311,7 @@ func hasGitComponent(relPath string) bool {
 	if normalized == "" {
 		return false
 	}
+
 	return slices.Contains(strings.Split(normalized, "/"), ".git")
 }
 
@@ -294,6 +333,7 @@ func (r *Resolver) buildRules(ctx context.Context, codebaseID string, root strin
 	if r.submodules != nil {
 		allowlist = r.submodules(codebaseID)
 	}
+
 	submodules := buildSubmoduleRules(ctx, root, allowlist)
 
 	matcher := seedMatcher(ctx, commonDir)
@@ -325,6 +365,7 @@ func seedMatcher(ctx context.Context, commonDir string) *gitignore.Matcher {
 	if commonDir != "" {
 		matcher.AddFromFile(filepath.Join(commonDir, "info", "exclude"), "")
 	}
+
 	return matcher
 }
 
@@ -346,17 +387,21 @@ func (r *Resolver) IgnoreSources(ctx context.Context, codebaseID string, root st
 	commonDir, _ := gitworktree.CommonDirAt(root)
 
 	sources := make([]string, 0)
+
 	for _, path := range globalExcludePaths(ctx) {
 		if path != "" {
 			sources = append(sources, path)
 		}
 	}
+
 	if contextIgnore := contextIgnorePath(ctx); contextIgnore != "" {
 		sources = append(sources, contextIgnore)
 	}
+
 	if commonDir != "" {
 		sources = append(sources, filepath.Join(commonDir, "info", "exclude"))
 	}
+
 	// Resolve the submodule allowlist from the same provider buildRules uses, so
 	// the walk visits an allowlisted (indexed) submodule and lists its .gitignore
 	// files. Otherwise the periodic CheckSources backstop would never watch those
@@ -366,9 +411,11 @@ func (r *Resolver) IgnoreSources(ctx context.Context, codebaseID string, root st
 	if r.submodules != nil {
 		allowlist = r.submodules(codebaseID)
 	}
+
 	submodules := buildSubmoduleRules(ctx, root, allowlist)
 	matcher := seedMatcher(ctx, commonDir)
 	sources = append(sources, addGitignoreFiles(ctx, matcher, root, commonDir, submodules)...)
+
 	return dedupeStringsPreservingOrder(sources)
 }
 
@@ -377,14 +424,17 @@ func (r *Resolver) IgnoreSources(ctx context.Context, codebaseID string, root st
 // contract when two ignore-source candidates resolve to the same path.
 func dedupeStringsPreservingOrder(values []string) []string {
 	seen := make(map[string]bool, len(values))
+
 	deduped := make([]string, 0, len(values))
 	for _, value := range values {
 		if seen[value] {
 			continue
 		}
+
 		seen[value] = true
 		deduped = append(deduped, value)
 	}
+
 	return deduped
 }
 
@@ -402,6 +452,7 @@ func (r *Resolver) IsIgnoreSourcePath(path string, commonDir string) bool {
 	if base == ".gitignore" || base == ".gitmodules" {
 		return true
 	}
+
 	return commonDir != "" && path == filepath.Join(commonDir, "info", "exclude")
 }
 
@@ -413,19 +464,34 @@ func (r *Resolver) IsIgnoreSourcePath(path string, commonDir string) bool {
 // returns the .gitignore path it visited for each walked directory, so
 // IgnoreSources can report the same set this walk reads without a second walk
 // definition.
-func addGitignoreFiles(ctx context.Context, matcher *gitignore.Matcher, root string, commonDir string, submodules submoduleRules) []string {
+func addGitignoreFiles(
+	ctx context.Context,
+	matcher *gitignore.Matcher,
+	root string,
+	commonDir string,
+	submodules submoduleRules,
+) []string {
 	sources := make([]string, 0)
 	var walk func(relDir string)
 	walk = func(relDir string) {
 		if ctx.Err() != nil {
 			return
 		}
+
 		currentDir := filepath.Join(root, filepath.FromSlash(relDir))
 		entries, err := os.ReadDir(currentDir)
 		if err != nil {
-			slog.WarnContext(ctx, "indexability: read directory failed", "path", currentDir, "err", err)
+			slog.WarnContext(
+				ctx,
+				"indexability: read directory failed",
+				"path",
+				currentDir,
+				"err",
+				err,
+			)
 			return
 		}
+
 		gitignorePath := filepath.Join(currentDir, ".gitignore")
 		matcher.AddFromFile(gitignorePath, relDir)
 		sources = append(sources, gitignorePath)
@@ -434,27 +500,33 @@ func addGitignoreFiles(ctx context.Context, matcher *gitignore.Matcher, root str
 		// Parsing it in every directory does a wasted os.ReadFile per dir and
 		// doubles the IgnoreSources list, so limit it to those roots and only when
 		// the file is actually present in this directory's already-read entries.
-		atAllowedSubmoduleRoot := relDir != "" && submodules.isRoot(relDir) && submodules.allowed(relDir)
+		atAllowedSubmoduleRoot := relDir != "" && submodules.isRoot(relDir) &&
+			submodules.allowed(relDir)
 		if (relDir == "" || atAllowedSubmoduleRoot) && dirEntriesContain(entries, ".gitmodules") {
 			submodules.addGitmodules(ctx, currentDir, relDir)
 			sources = append(sources, filepath.Join(currentDir, ".gitmodules"))
 		}
+
 		for _, entry := range entries {
 			if !entry.IsDir() || entry.Name() == ".git" {
 				continue
 			}
+
 			childRel := entry.Name()
 			if relDir != "" {
 				childRel = relDir + "/" + entry.Name()
 			}
+
 			childAbs := filepath.Join(currentDir, entry.Name())
 			if childWalkBlocked(matcher, root, commonDir, submodules, childRel, childAbs) {
 				continue
 			}
+
 			walk(childRel)
 		}
 	}
 	walk("")
+
 	return sources
 }
 
@@ -463,19 +535,29 @@ func addGitignoreFiles(ctx context.Context, matcher *gitignore.Matcher, root str
 // is not allowlisted, or a directory the gathered .gitignore rules already
 // exclude. It registers a filesystem-detected submodule root as a side effect so
 // a later isRoot check sees it.
-func childWalkBlocked(matcher *gitignore.Matcher, root string, commonDir string, submodules submoduleRules, childRel string, childAbs string) bool {
+func childWalkBlocked(
+	matcher *gitignore.Matcher,
+	root string,
+	commonDir string,
+	submodules submoduleRules,
+	childRel string,
+	childAbs string,
+) bool {
 	if gitworktree.WorktreeOfRepo(childAbs, commonDir) {
 		return true
 	}
+
 	if relRoot, ok := submodules.containing(root, commonDir, childRel, childAbs); ok {
 		submodules.add(relRoot, "")
 		if !submodules.allowed(relRoot) {
 			return true
 		}
 	}
+
 	if submodules.isRoot(childRel) && !submodules.allowed(childRel) {
 		return true
 	}
+
 	return matcher.MatchPath(childRel, true)
 }
 
@@ -488,6 +570,7 @@ func dirEntriesContain(entries []os.DirEntry, name string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -501,6 +584,7 @@ func contextIgnorePath(ctx context.Context) string {
 		slog.WarnContext(ctx, "indexability: resolve home directory failed", "err", err)
 		return ""
 	}
+
 	return filepath.Join(home, ".context", ".contextignore")
 }
 
@@ -524,9 +608,11 @@ func globalExcludePaths(ctx context.Context) []string {
 	} else if home, err := os.UserHomeDir(); err == nil {
 		paths = append(paths, filepath.Join(home, ".config", "git", "ignore"))
 	}
+
 	if configured := excludesFileFromConfig(ctx); configured != "" {
 		paths = append(paths, configured)
 	}
+
 	return paths
 }
 
@@ -538,6 +624,7 @@ func excludesFileFromConfig(ctx context.Context) string {
 			return expandHome(value)
 		}
 	}
+
 	return ""
 }
 
@@ -548,11 +635,13 @@ func gitConfigPaths(ctx context.Context) []string {
 	if env := os.Getenv("GIT_CONFIG_GLOBAL"); env != "" {
 		paths = append(paths, env)
 	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		slog.WarnContext(ctx, "indexability: resolve home directory failed", "err", err)
 		return paths
 	}
+
 	return append(paths, filepath.Join(home, ".gitconfig"))
 }
 
@@ -563,24 +652,30 @@ func readExcludesFileKey(configPath string) string {
 	if err != nil {
 		return ""
 	}
+
 	inCore := false
+
 	for raw := range strings.SplitSeq(string(data), "\n") {
 		line := strings.TrimSpace(raw)
 		if strings.HasPrefix(line, "[") {
 			inCore = strings.EqualFold(sectionName(line), "core")
 			continue
 		}
+
 		if !inCore {
 			continue
 		}
+
 		key, value, found := strings.Cut(line, "=")
 		if !found {
 			continue
 		}
+
 		if strings.EqualFold(strings.TrimSpace(key), "excludesfile") {
 			return unquoteConfigValue(strings.TrimSpace(value))
 		}
 	}
+
 	return ""
 }
 
@@ -591,6 +686,7 @@ func sectionName(line string) string {
 	if name, _, found := strings.Cut(trimmed, " "); found {
 		return name
 	}
+
 	return trimmed
 }
 
@@ -604,6 +700,7 @@ func unquoteConfigValue(value string) string {
 			return value[1 : len(value)-1]
 		}
 	}
+
 	return value
 }
 
@@ -617,13 +714,16 @@ func expandHome(path string) string {
 	if len(path) == 0 || path[0] != tildeMarker {
 		return path
 	}
+
 	if len(path) > 1 && path[1] != '/' {
 		return path
 	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return path
 	}
+
 	return filepath.Join(home, path[1:])
 }
 

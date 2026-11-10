@@ -108,23 +108,28 @@ func (server *transportReuseServer) DescribeCollection(
 			},
 		}, nil
 	}
+
 	return &milvuspb.DescribeCollectionResponse{
 		Status:         transportReuseSuccessStatus(),
 		CollectionName: request.GetCollectionName(),
-		Schema: &schemapb.CollectionSchema{Fields: []*schemapb.FieldSchema{
-			{Name: idFieldName, DataType: schemapb.DataType_VarChar, IsPrimaryKey: true},
-			{Name: contentFieldName, DataType: schemapb.DataType_VarChar},
-			{Name: contentHashFieldName, DataType: schemapb.DataType_VarChar, Nullable: true},
-			{Name: embeddingModelFieldName, DataType: schemapb.DataType_VarChar, Nullable: true},
-			{
-				Name:     denseVectorFieldName,
-				DataType: schemapb.DataType_FloatVector,
-				TypeParams: []*commonpb.KeyValuePair{{
-					Key:   "dim",
-					Value: strconv.Itoa(transportReuseDimension),
-				}},
+		Schema: &schemapb.CollectionSchema{
+			Fields: []*schemapb.FieldSchema{
+				{Name: idFieldName, DataType: schemapb.DataType_VarChar, IsPrimaryKey: true},
+				{Name: contentFieldName, DataType: schemapb.DataType_VarChar},
+				{Name: contentHashFieldName, DataType: schemapb.DataType_VarChar, Nullable: true},
+				{Name: embeddingModelFieldName, DataType: schemapb.DataType_VarChar, Nullable: true},
+				{
+					Name:     denseVectorFieldName,
+					DataType: schemapb.DataType_FloatVector,
+					TypeParams: []*commonpb.KeyValuePair{
+						{
+							Key:   "dim",
+							Value: strconv.Itoa(transportReuseDimension),
+						},
+					},
+				},
 			},
-		}},
+		},
 	}, nil
 }
 
@@ -134,10 +139,13 @@ func (server *transportReuseServer) Query(
 ) (*milvuspb.QueryResults, error) {
 	ids := transportReuseIDs(request.GetExpr(), server.rows)
 	server.mutex.Lock()
-	server.requests = append(server.requests, transportReuseRequest{
-		ids:          slices.Clone(ids),
-		outputFields: slices.Clone(request.GetOutputFields()),
-	})
+	server.requests = append(
+		server.requests,
+		transportReuseRequest{
+			ids:          slices.Clone(ids),
+			outputFields: slices.Clone(request.GetOutputFields()),
+		},
+	)
 	server.mutex.Unlock()
 
 	rows := make([]transportReuseRow, 0, len(server.rows))
@@ -151,12 +159,14 @@ func (server *transportReuseServer) Query(
 	case strings.Contains(request.GetExpr(), contentHashFieldName+" is null"):
 		rows = append(rows, server.rows...)
 	}
+
 	return transportReuseQueryResults(request.GetOutputFields(), rows), nil
 }
 
 func (server *transportReuseServer) snapshot() []transportReuseRequest {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
+
 	requests := make([]transportReuseRequest, len(server.requests))
 	for index, request := range server.requests {
 		requests[index] = transportReuseRequest{
@@ -164,16 +174,19 @@ func (server *transportReuseServer) snapshot() []transportReuseRequest {
 			outputFields: slices.Clone(request.outputFields),
 		}
 	}
+
 	return requests
 }
 
 func transportReuseIDs(filter string, rows []transportReuseRow) []string {
 	ids := make([]string, 0)
+
 	for _, row := range rows {
 		if strings.Contains(filter, `"`+row.id+`"`) {
 			ids = append(ids, row.id)
 		}
 	}
+
 	return ids
 }
 
@@ -189,12 +202,14 @@ func transportReuseQueryResults(
 			for _, row := range rows {
 				values = append(values, row.id)
 			}
+
 			fields = append(fields, column.NewColumnVarChar(idFieldName, values).FieldData())
 		case contentFieldName:
 			values := make([]string, 0, len(rows))
 			for _, row := range rows {
 				values = append(values, row.content)
 			}
+
 			fields = append(fields, column.NewColumnVarChar(contentFieldName, values).FieldData())
 		case contentHashFieldName:
 			values := make([]string, len(rows))
@@ -211,13 +226,18 @@ func transportReuseQueryResults(
 			for _, row := range rows {
 				vectors = append(vectors, row.vector)
 			}
-			fields = append(fields, column.NewColumnFloatVector(
-				denseVectorFieldName,
-				transportReuseDimension,
-				vectors,
-			).FieldData())
+
+			fields = append(
+				fields,
+				column.NewColumnFloatVector(
+					denseVectorFieldName,
+					transportReuseDimension,
+					vectors,
+				).FieldData(),
+			)
 		}
 	}
+
 	return &milvuspb.QueryResults{
 		Status:       transportReuseSuccessStatus(),
 		FieldsData:   fields,
@@ -235,6 +255,7 @@ func transportReuseMutationMethod(fullMethod string) bool {
 		strings.HasPrefix(method, "Drop") {
 		return true
 	}
+
 	switch method {
 	case "Delete", "Flush", "Import", "Insert", "LoadCollection", "ReleaseCollection",
 		"RenameCollection", "TruncateCollection", "Upsert":
@@ -253,20 +274,24 @@ func newTransportReuseTestService(
 	if err != nil {
 		t.Fatalf("listen for bounded transport Milvus: %v", err)
 	}
+
 	server := &transportReuseServer{rows: rows}
 	grpcServer := grpc.NewServer(
 		grpc.MaxSendMsgSize(transportReuseMaxSendBytes),
-		grpc.UnaryInterceptor(func(
-			ctx context.Context,
-			request interface{},
-			info *grpc.UnaryServerInfo,
-			handler grpc.UnaryHandler,
-		) (interface{}, error) {
-			if transportReuseMutationMethod(info.FullMethod) {
-				server.mutationCalls.Add(1)
-			}
-			return handler(ctx, request)
-		}),
+		grpc.UnaryInterceptor(
+			func(
+				ctx context.Context,
+				request interface{},
+				info *grpc.UnaryServerInfo,
+				handler grpc.UnaryHandler,
+			) (interface{}, error) {
+				if transportReuseMutationMethod(info.FullMethod) {
+					server.mutationCalls.Add(1)
+				}
+
+				return handler(ctx, request)
+			},
+		),
 	)
 	milvuspb.RegisterMilvusServiceServer(grpcServer, server)
 	go func() {
@@ -274,13 +299,17 @@ func newTransportReuseTestService(
 	}()
 	t.Cleanup(grpcServer.Stop)
 
-	client, err := milvusclient.New(context.Background(), &milvusclient.ClientConfig{
-		TelemetryConfig: &milvusclient.TelemetryConfig{Enabled: false},
-		Address:         listener.Addr().String(),
-	})
+	client, err := milvusclient.New(
+		context.Background(),
+		&milvusclient.ClientConfig{
+			TelemetryConfig: &milvusclient.TelemetryConfig{Enabled: false},
+			Address:         listener.Addr().String(),
+		},
+	)
 	if err != nil {
 		t.Fatalf("construct bounded transport Milvus client: %v", err)
 	}
+
 	t.Cleanup(func() {
 		if closeErr := client.Close(context.Background()); closeErr != nil {
 			t.Errorf("close bounded transport Milvus client: %v", closeErr)
@@ -316,6 +345,7 @@ func newTransportReuseTestService(
 			t.Errorf("close bounded transport residency controller: %v", closeErr)
 		}
 	})
+
 	return service, server, embedder
 }
 
@@ -325,13 +355,18 @@ func TestLoadReuseVectorsForContentsBoundsCandidateTransportResponse(t *testing.
 	expectedVector[0] = 1
 	expectedVector[len(expectedVector)-1] = 2
 	rows := make([]transportReuseRow, 0, 8)
+
 	for index := range 8 {
-		rows = append(rows, transportReuseRow{
-			id:      fmt.Sprintf("legacy-%02d", index),
-			content: content,
-			vector:  expectedVector,
-		})
+		rows = append(
+			rows,
+			transportReuseRow{
+				id:      fmt.Sprintf("legacy-%02d", index),
+				content: content,
+				vector:  expectedVector,
+			},
+		)
 	}
+
 	service, server, embedder := newTransportReuseTestService(t, rows)
 
 	reuse, err := service.LoadReuseVectorsForContents(
@@ -342,18 +377,25 @@ func TestLoadReuseVectorsForContentsBoundsCandidateTransportResponse(t *testing.
 	if err != nil {
 		t.Fatalf("load reuse through bounded transport: %v", err)
 	}
+
 	actualVector, found := reuse[ContentVectorKey(content)]
 	if !found || !slices.Equal(actualVector.Vector, expectedVector) {
-		t.Fatalf("reuse vector found=%t dimension=%d, want exact selected vector", found, len(actualVector.Vector))
+		t.Fatalf(
+			"reuse vector found=%t dimension=%d, want exact selected vector",
+			found,
+			len(actualVector.Vector),
+		)
 	}
 
 	requests := server.snapshot()
 	selectedVectorRequests := 0
+
 	for _, request := range requests {
 		requestsVector := slices.Contains(request.outputFields, denseVectorFieldName)
 		if len(request.ids) == 0 && requestsVector {
 			t.Fatalf("candidate discovery requested vectors: %+v", request)
 		}
+
 		if len(request.ids) > 0 && requestsVector {
 			selectedVectorRequests++
 			if !slices.Equal(request.ids, []string{"legacy-00"}) {
@@ -361,12 +403,15 @@ func TestLoadReuseVectorsForContentsBoundsCandidateTransportResponse(t *testing.
 			}
 		}
 	}
+
 	if selectedVectorRequests != 1 {
 		t.Fatalf("selected vector requests = %d, want 1", selectedVectorRequests)
 	}
+
 	if embedder.calls.Load() != 0 {
 		t.Fatalf("embedding calls = %d, want 0", embedder.calls.Load())
 	}
+
 	if server.mutationCalls.Load() != 0 {
 		t.Fatalf("mutation calls = %d, want 0", server.mutationCalls.Load())
 	}

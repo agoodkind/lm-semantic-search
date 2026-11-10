@@ -11,7 +11,9 @@ func TestRootListsAllTopLevelCommands(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("root help: %v", err)
 	}
+
 	out := stdout.String()
+
 	for _, name := range []string{"codebase", "job", "daemon", "version"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("root help missing %q:\n%s", name, out)
@@ -25,7 +27,9 @@ func TestGroupNameListsSubcommands(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("codebase help: %v", err)
 	}
+
 	out := stdout.String()
+
 	for _, name := range []string{
 		"list",
 		"status",
@@ -48,7 +52,9 @@ func TestJobGroupHelpListsSubcommands(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("job help: %v", err)
 	}
+
 	out := stdout.String()
+
 	for _, name := range []string{"list", "get", "cancel"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("job help missing subcommand %q:\n%s", name, out)
@@ -62,7 +68,9 @@ func TestDaemonGroupHelpListsSubcommands(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("daemon help: %v", err)
 	}
+
 	out := stdout.String()
+
 	for _, name := range []string{"status", "stop", "doctor", "maintenance"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("daemon help missing subcommand %q:\n%s", name, out)
@@ -76,7 +84,9 @@ func TestLeafHelpShowsArgumentsExamplesAndEnum(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("codebase index help: %v", err)
 	}
+
 	out := stdout.String()
+
 	for _, want := range []string{
 		"Arguments:",
 		"PATH",
@@ -99,7 +109,9 @@ func TestSearchLeafHelpShowsArgumentsAndExample(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("codebase search help: %v", err)
 	}
+
 	out := stdout.String()
+
 	for _, want := range []string{
 		"Arguments:",
 		"PATH",
@@ -119,6 +131,7 @@ func TestDaemonLeafHelpShowsExample(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("daemon status help: %v", err)
 	}
+
 	if out := stdout.String(); !strings.Contains(out, "lm-semantic-search daemon status") {
 		t.Errorf("daemon status help missing example:\n%s", out)
 	}

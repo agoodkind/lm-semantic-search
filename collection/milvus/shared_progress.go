@@ -49,23 +49,39 @@ type ProgressFunc func(CopyProgress)
 
 func (progress ProgressFunc) report(phase CopyPhase, done int64, total int64) {
 	if progress != nil {
-		progress(CopyProgress{Phase: phase, Done: done, Total: total})
+		progress(CopyProgress{
+			Phase: phase,
+			Done:  done,
+			Total: total,
+		})
 	}
 }
 
 // countRows returns the number of rows an expression matches with strong
 // consistency.
-func (store *SharedStore) countRows(ctx context.Context, collectionName string, expression string) (int64, error) {
-	resultSet, err := store.inner.client.Query(ctx, milvusclient.NewQueryOption(collectionName).
-		WithFilter(expression).
-		WithOutputFields("count(*)").
-		WithConsistencyLevel(entity.ClStrong))
+func (store *SharedStore) countRows(
+	ctx context.Context,
+	collectionName string,
+	expression string,
+) (int64, error) {
+	resultSet, err := store.inner.client.Query(
+		ctx,
+		milvusclient.NewQueryOption(collectionName).WithFilter(expression).
+			WithOutputFields(
+				"count(*)",
+			).
+			WithConsistencyLevel(
+				entity.ClStrong,
+			),
+	)
 	if err != nil {
 		return 0, WrapError(ctx, err, "count rows of "+collectionName)
 	}
+
 	count, err := requiredInt64(resultSet, "count(*)", 0)
 	if err != nil {
 		return 0, err
 	}
+
 	return count, nil
 }

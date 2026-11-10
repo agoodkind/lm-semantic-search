@@ -21,7 +21,10 @@ func TestCollectionLoadLimiterHonorsContextWhileWaiting(t *testing.T) {
 
 	waitCtx, cancelWait := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancelWait()
-	if _, err := limiter.acquire(waitCtx, "hybrid_code_chunks_second"); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := limiter.acquire(waitCtx, "hybrid_code_chunks_second"); !errors.Is(
+		err,
+		context.DeadlineExceeded,
+	) {
 		t.Fatalf("second acquire error = %v, want the waiter's own deadline", err)
 	}
 
@@ -31,6 +34,7 @@ func TestCollectionLoadLimiterHonorsContextWhileWaiting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire after release returned error: %v", err)
 	}
+
 	thirdRelease()
 	if got := len(limiter.slots); got != 0 {
 		t.Fatalf("slots held after every release = %d, want 0", got)

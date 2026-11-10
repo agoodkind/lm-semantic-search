@@ -14,20 +14,26 @@ import (
 // activity field name starts with its row position.
 func Dump(snapshot Snapshot) string {
 	var builder strings.Builder
+
 	for _, notice := range snapshot.Notices {
 		builder.WriteString(notice)
 		builder.WriteString("\n")
 	}
+
 	writeIdentityLines(&builder, snapshot.Identity)
+
 	for _, field := range snapshot.Counters {
 		writeFieldLine(&builder, field.Name, field)
 	}
+
 	for index, row := range snapshot.Activity {
 		prefix := "activity." + strconv.Itoa(index) + "."
+
 		for _, field := range row {
 			writeFieldLine(&builder, prefix+field.Name, field)
 		}
 	}
+
 	return strings.TrimRight(builder.String(), "\n")
 }
 
@@ -46,6 +52,7 @@ func writeIdentityLine(builder *strings.Builder, name string, value string) {
 	if value == "" {
 		return
 	}
+
 	builder.WriteString(name)
 	builder.WriteString(" ")
 	builder.WriteString(stringValueText(value))
@@ -60,6 +67,7 @@ func writeFieldLine(builder *strings.Builder, name string, field Field) {
 		builder.WriteString(" ")
 		builder.WriteString(field.Unit)
 	}
+
 	builder.WriteString("\n")
 }
 
@@ -93,6 +101,7 @@ func stringValueText(value string) string {
 	if value == "" || strings.ContainsFunc(value, needsEscaping) {
 		return strconv.Quote(value)
 	}
+
 	return value
 }
 
@@ -105,8 +114,10 @@ func needsEscaping(candidate rune) bool {
 	if candidate == ' ' {
 		return false
 	}
+
 	if candidate == '"' || candidate == '\\' {
 		return true
 	}
+
 	return unicode.IsSpace(candidate) || !unicode.IsPrint(candidate)
 }

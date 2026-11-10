@@ -24,7 +24,13 @@ type seedDecision struct {
 
 // resolveSeed owns this invariant: A build's seed snapshot may only cause
 // per-file skips for rows provably present in the collection this build writes to.
-func (manager *Manager) resolveSeed(ctx context.Context, job model.Job, codebaseID string, staging bool, semanticReady bool) seedDecision {
+func (manager *Manager) resolveSeed(
+	ctx context.Context,
+	job model.Job,
+	codebaseID string,
+	staging bool,
+	semanticReady bool,
+) seedDecision {
 	configDigest := job.Config.IgnoreDigest
 	legacyDigest := manager.legacyDigestForCodebase(codebaseID)
 	if !staging {
@@ -38,6 +44,7 @@ func (manager *Manager) resolveSeed(ctx context.Context, job model.Job, codebase
 		// The zero codebase also carries no id, so resolve the path from the id the
 		// caller supplied rather than from the record.
 		codebase.ID = codebaseID
+
 		return seedDecision{
 			seed:         manager.loadLiveCheckpoint(ctx, codebase, configDigest).snapshot,
 			snapshotPath: manager.snapshotPathForCodebase(codebase),
@@ -58,18 +65,35 @@ func (manager *Manager) resolveSeed(ctx context.Context, job model.Job, codebase
 		}
 		manager.logBootstrapSeed(ctx, job, codebaseID, decision)
 		manager.routeToBootstrap(ctx, job.ID, bootstrapReasonStagingResume)
+
 		return decision
 	}
 
 	if semanticReady {
 		if dropErr := manager.semantic.DropStaging(ctx, job.CanonicalPath); dropErr != nil {
-			slog.WarnContext(ctx, "drop stale staging before bootstrap failed", "path", job.CanonicalPath, "err", dropErr)
+			slog.WarnContext(
+				ctx,
+				"drop stale staging before bootstrap failed",
+				"path",
+				job.CanonicalPath,
+				"err",
+				dropErr,
+			)
 		}
 	}
+
 	seed = merkle.Snapshot{ConfigDigest: configDigest, Files: nil, Inodes: nil}
 	if removeErr := store.RemoveFile(snapshotPath); removeErr != nil {
-		slog.WarnContext(ctx, "remove stale bootstrap checkpoint failed", "path", snapshotPath, "err", removeErr)
+		slog.WarnContext(
+			ctx,
+			"remove stale bootstrap checkpoint failed",
+			"path",
+			snapshotPath,
+			"err",
+			removeErr,
+		)
 	}
+
 	decision := seedDecision{
 		seed:         seed,
 		snapshotPath: snapshotPath,
@@ -77,6 +101,7 @@ func (manager *Manager) resolveSeed(ctx context.Context, job model.Job, codebase
 		reason:       reason,
 	}
 	manager.logBootstrapSeed(ctx, job, codebaseID, decision)
+
 	return decision
 }
 
@@ -87,25 +112,46 @@ func (manager *Manager) resolveSeed(ctx context.Context, job model.Job, codebase
 // checkpoint describes work whose vectors were lost, so the build restarts.
 // When the backend is unavailable the checkpoint is the only state and is
 // trusted on its own.
-func (manager *Manager) canResumeStaging(ctx context.Context, canonicalPath string, seed merkle.Snapshot, semanticReady bool) (bool, string) {
+func (manager *Manager) canResumeStaging(
+	ctx context.Context,
+	canonicalPath string,
+	seed merkle.Snapshot,
+	semanticReady bool,
+) (bool, string) {
 	if len(seed.Files) == 0 {
 		return false, seedReasonFreshNoCheckpoint
 	}
+
 	if !semanticReady {
 		return true, string(bootstrapReasonStagingResume)
 	}
+
 	hasStaging, err := manager.semantic.HasStaging(ctx, canonicalPath)
 	if err != nil {
-		slog.WarnContext(ctx, "check staging for resume failed; restarting build", "path", canonicalPath, "err", err)
+		slog.WarnContext(
+			ctx,
+			"check staging for resume failed; restarting build",
+			"path",
+			canonicalPath,
+			"err",
+			err,
+		)
 		return false, seedReasonStagingCheckFailed
 	}
+
 	if !hasStaging {
 		return false, seedReasonStagingDiscardedNoCollection
 	}
+
 	return true, string(bootstrapReasonStagingResume)
 }
 
-func (manager *Manager) logBootstrapSeed(ctx context.Context, job model.Job, codebaseID string, decision seedDecision) {
+func (manager *Manager) logBootstrapSeed(
+	ctx context.Context,
+	job model.Job,
+	codebaseID string,
+	decision seedDecision,
+) {
 	slog.InfoContext(
 		ctx,
 		"bootstrap.seed",

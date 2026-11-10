@@ -23,6 +23,7 @@ func newSemanticIndex(ctx context.Context, cfg config.Config) (semanticIndex, er
 			slog.ErrorContext(ctx, "create local vector store failed", "err", err)
 			return nil, fmt.Errorf("create local vector store: %w", err)
 		}
+
 		return store, nil
 	case config.IndexBackendMilvus:
 		fallthrough
@@ -32,6 +33,7 @@ func newSemanticIndex(ctx context.Context, cfg config.Config) (semanticIndex, er
 			slog.ErrorContext(ctx, "create semantic service failed", "err", err)
 			return nil, fmt.Errorf("create semantic service: %w", err)
 		}
+
 		return service, nil
 	}
 }
@@ -40,5 +42,6 @@ func (manager *Manager) indexingDependencyError() error {
 	if manager.semantic.Degraded() {
 		return semantic.ErrUnavailable
 	}
+
 	return nil
 }

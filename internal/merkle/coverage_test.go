@@ -17,9 +17,11 @@ func TestSnapshotHasFileAndCoversPath(t *testing.T) {
 	if !snapshot.HasFile("Sources/App/Main.swift") {
 		t.Fatal("HasFile should find an indexed file")
 	}
+
 	if snapshot.HasFile("Sources/App") {
 		t.Fatal("HasFile must not treat a directory as a file")
 	}
+
 	if snapshot.HasFile("Sources/App/Missing.swift") {
 		t.Fatal("HasFile must be false for an absent file")
 	}
@@ -31,6 +33,7 @@ func TestSnapshotHasFileAndCoversPath(t *testing.T) {
 			t.Fatalf("CoversPath(%q) should be true", path)
 		}
 	}
+
 	uncoveredCases := []string{"Tests", "Sources/AppOther", "Sources/App/Missing.swift"}
 	for _, path := range uncoveredCases {
 		if snapshot.CoversPath(path) {

@@ -9,18 +9,25 @@ import (
 	"goodkind.io/lm-semantic-search/internal/grpcutil"
 )
 
-func (harness *modelDownloadHarness) status(t *testing.T) (*pb.GetStatusResponse, map[string]*pb.Metric) {
+func (harness *modelDownloadHarness) status(
+	t *testing.T,
+) (*pb.GetStatusResponse, map[string]*pb.Metric) {
 	t.Helper()
-	requestContext, cancel := context.WithTimeout(grpcutil.WithCorrelation(context.Background()), 5*time.Second)
+	requestContext, cancel := context.WithTimeout(
+		grpcutil.WithCorrelation(context.Background()),
+		5*time.Second,
+	)
 	defer cancel()
 	response, err := harness.client.GetStatus(requestContext, &pb.GetStatusRequest{})
 	if err != nil {
 		t.Fatalf("GetStatus returned error: %v", err)
 	}
+
 	metrics := make(map[string]*pb.Metric, len(response.GetMetrics()))
 	for _, metric := range response.GetMetrics() {
 		metrics[metric.GetName()] = metric
 	}
+
 	return response, metrics
 }
 
@@ -31,18 +38,22 @@ func (harness *modelDownloadHarness) waitForMetrics(
 ) map[string]*pb.Metric {
 	t.Helper()
 	deadline := time.Now().Add(testDownloadTimeout)
+
 	for {
 		_, metrics := harness.status(t)
 		if accept(metrics) {
 			return metrics
 		}
+
 		if time.Now().After(deadline) {
-			t.Fatalf("status never showed %s; model_download.state = %q, last_error = %q",
+			t.Fatalf(
+				"status never showed %s; model_download.state = %q, last_error = %q",
 				description,
 				metrics["model_download.state"].GetStringValue(),
 				metrics["model_download.last_error"].GetStringValue(),
 			)
 		}
+
 		time.Sleep(testPollInterval)
 	}
 }
@@ -55,6 +66,7 @@ func (harness *modelDownloadHarness) waitForJob(
 ) {
 	t.Helper()
 	deadline := time.Now().Add(testDownloadTimeout)
+
 	for {
 		response, err := harness.client.GetJob(
 			grpcutil.WithCorrelation(context.Background()),
@@ -63,17 +75,21 @@ func (harness *modelDownloadHarness) waitForJob(
 		if err != nil {
 			t.Fatalf("GetJob returned error: %v", err)
 		}
+
 		if accept(response.GetJob()) {
 			return
 		}
+
 		if time.Now().After(deadline) {
-			t.Fatalf("job %s never showed %s; state = %q, phase = %q",
+			t.Fatalf(
+				"job %s never showed %s; state = %q, phase = %q",
 				jobID,
 				description,
 				response.GetJob().GetState(),
 				response.GetJob().GetProgress().GetPhase(),
 			)
 		}
+
 		time.Sleep(testPollInterval)
 	}
 }
@@ -90,6 +106,7 @@ func requireMetricString(t *testing.T, metrics map[string]*pb.Metric, name strin
 	if !found {
 		t.Fatalf("status has no metric %q", name)
 	}
+
 	value, isString := metric.GetValue().(*pb.Metric_StringValue)
 	if !isString || value.StringValue != want {
 		t.Fatalf("metric %s = %v, want string %q", name, metric.GetValue(), want)
@@ -102,6 +119,7 @@ func requireMetricAbsent(t *testing.T, metrics map[string]*pb.Metric, name strin
 	if !found {
 		t.Fatalf("metric %q is not present in status response; cannot assert it has no value", name)
 	}
+
 	if metric.GetValue() != nil {
 		t.Fatalf("metric %q has value %v, want no value", name, metric.GetValue())
 	}
