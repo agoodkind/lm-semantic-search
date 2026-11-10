@@ -26,6 +26,7 @@ func formatCount(value int32) string {
 	if len(digits) <= 3 {
 		return digits
 	}
+
 	var out strings.Builder
 	lead := len(digits) % 3
 	if lead > 0 {
@@ -34,12 +35,14 @@ func formatCount(value int32) string {
 			out.WriteString(",")
 		}
 	}
+
 	for i := lead; i < len(digits); i += 3 {
 		out.WriteString(digits[i : i+3])
 		if i+3 < len(digits) {
 			out.WriteString(",")
 		}
 	}
+
 	return out.String()
 }
 
@@ -48,15 +51,20 @@ func formatBoundaryTime(value time.Time) string {
 	if value.IsZero() {
 		return ""
 	}
+
 	const layout = "1/2/2006, 3:04:05 PM MST"
+
 	return render.InLocalZone(value).Format(layout)
 }
 
 // progressHeading names the pass for an active job, empty otherwise.
 func progressHeading(job model.Job) string {
-	if job.State != model.JobStateQueued && job.State != model.JobStateRunning && job.State != model.JobStatePaused && job.State != model.JobStateCancelling {
+	if job.State != model.JobStateQueued && job.State != model.JobStateRunning &&
+		job.State != model.JobStatePaused &&
+		job.State != model.JobStateCancelling {
 		return ""
 	}
+
 	switch job.Progress.RunMode {
 	case model.RunModeResuming:
 		return "Resuming after restart: checking changed work, embedding only what's new"
@@ -97,11 +105,14 @@ func resolveProgressSurface(job model.Job) view.ProgressSurface {
 	if scopeUnit == "" {
 		scopeUnit = progress.Unit
 	}
+
 	if scopeUnit == "" {
 		scopeUnit = "file"
 	}
 
-	active := job.State == model.JobStateQueued || job.State == model.JobStateRunning || job.State == model.JobStatePaused || job.State == model.JobStateCancelling
+	active := job.State == model.JobStateQueued || job.State == model.JobStateRunning ||
+		job.State == model.JobStatePaused ||
+		job.State == model.JobStateCancelling
 
 	percentLabel := fmt.Sprintf("%.1f%%", resolveOverallPercent(progress))
 	percentScopeLabel := percentLabel + " run progress"
@@ -111,6 +122,7 @@ func resolveProgressSurface(job model.Job) view.ProgressSurface {
 		} else {
 			percentLabel = "Preparing to index"
 		}
+
 		percentScopeLabel = percentLabel
 	}
 
@@ -118,20 +130,32 @@ func resolveProgressSurface(job model.Job) view.ProgressSurface {
 	if progress.FilesAdded > 0 || progress.FilesModified > 0 || progress.FilesRemoved > 0 {
 		parts := []string{}
 		if progress.FilesAdded > 0 {
-			parts = append(parts, fmt.Sprintf("%s %s added", formatCount(progress.FilesAdded), scopeUnit+pluralSuffix(progress.FilesAdded)))
+			parts = append(
+				parts,
+				fmt.Sprintf(
+					"%s %s added",
+					formatCount(progress.FilesAdded),
+					scopeUnit+pluralSuffix(progress.FilesAdded),
+				),
+			)
 		}
+
 		if progress.FilesModified > 0 {
 			parts = append(parts, formatCount(progress.FilesModified)+" modified")
 		}
+
 		if progress.FilesRemoved > 0 {
 			parts = append(parts, formatCount(progress.FilesRemoved)+" removed")
 		}
+
 		scopeLine = "Changed since last sync: " + strings.Join(parts, " · ")
 	}
 
 	batchLine := ""
 	if active && progress.EmbeddingBatchesTotal > 0 {
-		batchLine = "embedding batch " + formatCount(progress.EmbeddingBatchesCompleted) + " of " + formatCount(progress.EmbeddingBatchesTotal)
+		batchLine = "embedding batch " + formatCount(
+			progress.EmbeddingBatchesCompleted,
+		) + " of " + formatCount(progress.EmbeddingBatchesTotal)
 	}
 
 	return view.ProgressSurface{
@@ -149,6 +173,7 @@ func pluralSuffix(count int32) string {
 	if count == 1 {
 		return ""
 	}
+
 	return "s"
 }
 
@@ -165,10 +190,12 @@ func resolveTimingView(job model.Job) view.TimingView {
 		timing.CompletedLabel = formatBoundaryTime(*job.CompletedAt)
 		timing.DurationWord = "Duration"
 	}
+
 	end := job.UpdatedAt
 	if job.CompletedAt != nil && !job.CompletedAt.IsZero() {
 		end = *job.CompletedAt
 	}
+
 	if !job.StartedAt.IsZero() && !end.IsZero() && !end.Before(job.StartedAt) {
 		duration := end.Sub(job.StartedAt).Round(time.Second)
 		if duration <= 0 {
@@ -177,11 +204,16 @@ func resolveTimingView(job model.Job) view.TimingView {
 			timing.DurationLabel = duration.String()
 		}
 	}
+
 	return timing
 }
 
 // resolveJobEntry assembles the full job view for list and detail surfaces.
-func resolveJobEntry(job model.Job, pipelineDegraded bool, supersededByJobID string) view.JobEntryView {
+func resolveJobEntry(
+	job model.Job,
+	pipelineDegraded bool,
+	supersededByJobID string,
+) view.JobEntryView {
 	return view.JobEntryView{
 		ID:            job.ID,
 		CanonicalPath: job.CanonicalPath,
@@ -209,6 +241,7 @@ func displayJobPhase(phase string) string {
 // resolveListSummary tallies the job list.
 func resolveListSummary(jobs []model.Job, pipelineDegraded bool) view.ListSummary {
 	successors := buildJobSuccessors(jobs)
+
 	summary := view.ListSummary{
 		Total:      len(jobs),
 		Queued:     0,
@@ -242,5 +275,6 @@ func resolveListSummary(jobs []model.Job, pipelineDegraded bool) view.ListSummar
 			summary.Canceled++
 		}
 	}
+
 	return summary
 }

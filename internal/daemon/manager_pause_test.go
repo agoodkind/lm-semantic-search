@@ -34,9 +34,13 @@ func TestPriorityPauseFinishesCurrentFileBeforeRelease(t *testing.T) {
 	entered := make(chan struct{})
 	releaseFile := make(chan struct{})
 	manager.runner = fakeRunner{
-		indexOne: func(context.Context, string, string, model.IndexConfig) (indexer.OneFileResult, error) {
+		indexOne: func(context.Context, string, string, model.IndexConfig) (
+			indexer.OneFileResult,
+			error,
+		) {
 			close(entered)
 			<-releaseFile
+
 			return indexer.OneFileResult{
 				Chunks:   []model.StoredChunk{{Content: "package pause"}},
 				FileHash: "hash",
@@ -66,16 +70,19 @@ func TestPriorityPauseFinishesCurrentFileBeforeRelease(t *testing.T) {
 	if snapshot := scheduler.Snapshot(); snapshot.Running[model.JobPriorityLow] != 1 {
 		t.Fatal("scheduler released the low job before its file completed")
 	}
+
 	close(releaseFile)
 	highLease := receivePauseTestLease(t, highResult)
 	paused := waitPauseTestJobState(t, manager, job.ID, model.JobStatePaused)
 	if paused.ID != job.ID {
 		t.Fatalf("paused job id = %q, want %q", paused.ID, job.ID)
 	}
+
 	highLease.Release()
 	if err := receivePauseTestError(t, convergeDone); err != nil {
 		t.Fatalf("ConvergePaths: %v", err)
 	}
+
 	waitPauseTestJobState(t, manager, job.ID, model.JobStateRunning)
 }
 
@@ -100,6 +107,7 @@ func TestPausedJobReleasesLeaseAndResumesSameJob(t *testing.T) {
 	if err := receivePauseTestError(t, checkpointDone); err != nil {
 		t.Fatalf("checkpointJob: %v", err)
 	}
+
 	resumed := waitPauseTestJobState(t, manager, job.ID, model.JobStateRunning)
 	if resumed.ID != job.ID {
 		t.Fatalf("resumed job id = %q, want %q", resumed.ID, job.ID)
@@ -114,6 +122,7 @@ func TestResumeJobRejectsTerminalState(t *testing.T) {
 	if err := manager.resumeJob(job.ID); err == nil {
 		t.Fatal("resumeJob accepted a terminal job")
 	}
+
 	terminal := waitPauseTestJobState(t, manager, job.ID, model.JobStateCancelled)
 	if terminal.State != model.JobStateCancelled {
 		t.Fatalf("terminal state = %q, want cancelled", terminal.State)
@@ -129,9 +138,11 @@ func TestWatchdogPriorityRaceDoesNotDoubleRelease(t *testing.T) {
 		if err := originalAppendTransition(event); err != nil {
 			return err
 		}
+
 		transitionMutex.Lock()
 		transitionCounts[event.Event]++
 		transitionMutex.Unlock()
+
 		return nil
 	}
 	job := seedPauseTestJob(t, manager, repoPath, model.CodebaseKindCode)
@@ -145,6 +156,7 @@ func TestWatchdogPriorityRaceDoesNotDoubleRelease(t *testing.T) {
 	if err != nil || outcome != syncLockAcquired {
 		t.Fatalf("acquireJobCapacity outcome = %q, err = %v", outcome, err)
 	}
+
 	defer capacity.release(context.Background())
 	ctx := withJobCapacity(context.Background(), capacity)
 	ctx = withJobSchedulerLease(ctx, job.ID, capacity.lease)
@@ -163,11 +175,15 @@ func TestWatchdogPriorityRaceDoesNotDoubleRelease(t *testing.T) {
 	releaseOperation := make(chan struct{})
 	stalledDone := make(chan error, 1)
 	go func() {
-		stalledDone <- manager.runReleasingCapacityIfStalled(ctx, func() error {
-			close(operationStarted)
-			<-releaseOperation
-			return nil
-		})
+		stalledDone <- manager.runReleasingCapacityIfStalled(
+			ctx,
+			func() error {
+				close(operationStarted)
+				<-releaseOperation
+
+				return nil
+			},
+		)
 	}()
 	waitPauseTestSignal(t, operationStarted)
 
@@ -181,9 +197,11 @@ func TestWatchdogPriorityRaceDoesNotDoubleRelease(t *testing.T) {
 	if err := receivePauseTestError(t, checkpointDone); err != nil {
 		t.Fatalf("checkpointJob: %v", err)
 	}
+
 	if err := receivePauseTestError(t, stalledDone); err != nil {
 		t.Fatalf("runReleasingCapacityIfStalled: %v", err)
 	}
+
 	waitPauseTestJobState(t, manager, job.ID, model.JobStateRunning)
 
 	snapshot := manager.jobScheduler.Snapshot()
@@ -193,6 +211,7 @@ func TestWatchdogPriorityRaceDoesNotDoubleRelease(t *testing.T) {
 		snapshot.Yields != 1 {
 		t.Fatalf("scheduler snapshot after watchdog race = %+v", snapshot)
 	}
+
 	transitionMutex.Lock()
 	pausedCount := transitionCounts["job_paused"]
 	resumedCount := transitionCounts["job_resumed"]
@@ -218,10 +237,12 @@ func TestPauseJournalFailureTerminatesBeforeRelease(t *testing.T) {
 	if err := manager.checkpointJob(ctx); err == nil {
 		t.Fatal("checkpointJob returned nil after pause journal failure")
 	}
+
 	failed := waitPauseTestJobState(t, manager, job.ID, model.JobStateFailed)
 	if failed.Error == nil || failed.Error.Code != pauseJournalFailureCode {
 		t.Fatalf("failure = %+v, want code %q", failed.Error, pauseJournalFailureCode)
 	}
+
 	highLease := receivePauseTestLease(t, highResult)
 	highLease.Release()
 	if snapshot := scheduler.Snapshot(); snapshot.Paused[model.JobPriorityLow] != 0 {
@@ -236,6 +257,7 @@ func TestResumeJournalFailureTerminatesAndReleasesLease(t *testing.T) {
 		if event.Event == "job_resumed" {
 			return errors.New("resume barrier failed")
 		}
+
 		return nil
 	}
 	scheduler := jobscheduler.New(context.Background(), 1, nil)
@@ -254,10 +276,12 @@ func TestResumeJournalFailureTerminatesAndReleasesLease(t *testing.T) {
 	if err := receivePauseTestError(t, checkpointDone); err == nil {
 		t.Fatal("checkpointJob returned nil after resume journal failure")
 	}
+
 	failed := waitPauseTestJobState(t, manager, job.ID, model.JobStateFailed)
 	if failed.Error == nil || failed.Error.Code != resumeJournalFailureCode {
 		t.Fatalf("failure = %+v, want code %q", failed.Error, resumeJournalFailureCode)
 	}
+
 	snapshot := scheduler.Snapshot()
 	if snapshot.Running[model.JobPriorityLow] != 0 || snapshot.Paused[model.JobPriorityLow] != 0 {
 		t.Fatal("resume journal failure retained scheduler capacity")
@@ -271,15 +295,10 @@ func TestWatcherPauseBarrierFailurePreservesCodebase(t *testing.T) {
 		if event.Event == "job_paused" {
 			return errors.New("watcher pause barrier failed")
 		}
+
 		return nil
 	}
-	lease := acquirePauseTestLease(
-		t,
-		manager.jobScheduler,
-		job.ID,
-		model.JobPriorityLow,
-		1,
-	)
+	lease := acquirePauseTestLease(t, manager.jobScheduler, job.ID, model.JobPriorityLow, 1)
 	highCancel, highResult := startPauseTestAcquire(
 		manager.jobScheduler,
 		"watcher-pause-high",
@@ -293,6 +312,7 @@ func TestWatcherPauseBarrierFailurePreservesCodebase(t *testing.T) {
 	if err := manager.checkpointJob(ctx); err == nil {
 		t.Fatal("checkpointJob returned nil after watcher pause barrier failure")
 	}
+
 	highLease := receivePauseTestLease(t, highResult)
 	highLease.Release()
 	assertDetachedPauseFailure(t, manager, job, pauseJournalFailureCode)
@@ -305,15 +325,10 @@ func TestWatcherResumeBarrierFailurePreservesCodebase(t *testing.T) {
 		if event.Event == "job_resumed" {
 			return errors.New("watcher resume barrier failed")
 		}
+
 		return nil
 	}
-	lease := acquirePauseTestLease(
-		t,
-		manager.jobScheduler,
-		job.ID,
-		model.JobPriorityLow,
-		1,
-	)
+	lease := acquirePauseTestLease(t, manager.jobScheduler, job.ID, model.JobPriorityLow, 1)
 	highCancel, highResult := startPauseTestAcquire(
 		manager.jobScheduler,
 		"watcher-resume-high",
@@ -333,6 +348,7 @@ func TestWatcherResumeBarrierFailurePreservesCodebase(t *testing.T) {
 	if err := receivePauseTestError(t, checkpointDone); err == nil {
 		t.Fatal("checkpointJob returned nil after watcher resume barrier failure")
 	}
+
 	assertDetachedPauseFailure(t, manager, job, resumeJournalFailureCode)
 }
 
@@ -346,6 +362,7 @@ func TestCancellationBetweenPauseSnapshotAndJournalStaysTerminal(t *testing.T) {
 			close(journalEntered)
 			<-releaseJournal
 		}
+
 		return nil
 	}
 
@@ -363,11 +380,13 @@ func TestCancellationBetweenPauseSnapshotAndJournalStaysTerminal(t *testing.T) {
 	if err := receivePauseTestError(t, pauseDone); err != nil {
 		t.Fatalf("pauseJob: %v", err)
 	}
+
 	waitPauseTestSignal(t, cancelDone)
 	waitPauseTestJobState(t, manager, job.ID, model.JobStateCancelled)
 	if err := manager.pauseJob(job.ID, "stale"); err != nil {
 		t.Fatalf("stale pauseJob: %v", err)
 	}
+
 	waitPauseTestJobState(t, manager, job.ID, model.JobStateCancelled)
 }
 
@@ -377,19 +396,23 @@ func TestTerminalEventSupersedesPausedJournalState(t *testing.T) {
 	if err := manager.pauseJob(job.ID, "priority"); err != nil {
 		t.Fatalf("pauseJob: %v", err)
 	}
+
 	if _, err := manager.CancelJob(context.Background(), job.ID); err != nil {
 		t.Fatalf("CancelJob: %v", err)
 	}
+
 	manager.closeJobJournal()
 
 	latest, err := store.ReadJobEventsLatest(manager.config.JobsPath)
 	if err != nil {
 		t.Fatalf("ReadJobEventsLatest: %v", err)
 	}
+
 	event, found := latest[job.ID]
 	if !found {
 		t.Fatalf("latest journal event missing job %s", job.ID)
 	}
+
 	if event.Job.State != model.JobStateCancelled {
 		t.Fatalf("latest journal state = %q, want %q", event.Job.State, model.JobStateCancelled)
 	}
@@ -398,14 +421,19 @@ func TestTerminalEventSupersedesPausedJournalState(t *testing.T) {
 func TestQuarantineTerminalCannotBeFollowedByPause(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	job := seedPauseTestJob(t, manager, repoPath, model.CodebaseKindCode)
-	manager.updateJobQuarantined(context.Background(), job.ID, quarantineSignal{
-		trigger:      "test",
-		missingCount: 9,
-		totalCount:   10,
-	})
+	manager.updateJobQuarantined(
+		context.Background(),
+		job.ID,
+		quarantineSignal{
+			trigger:      "test",
+			missingCount: 9,
+			totalCount:   10,
+		},
+	)
 	if err := manager.pauseJob(job.ID, "stale"); err != nil {
 		t.Fatalf("pauseJob: %v", err)
 	}
+
 	waitPauseTestJobState(t, manager, job.ID, model.JobStateFailed)
 }
 
@@ -436,6 +464,7 @@ func seedPauseTestJob(
 	manager.codebases[codebase.ID] = codebase
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()
+
 	return job
 }
 
@@ -461,6 +490,7 @@ func seedDetachedPauseTestJob(
 	manager.mu.Lock()
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()
+
 	return job
 }
 
@@ -475,6 +505,7 @@ func assertDetachedPauseFailure(
 	if failed.Error == nil || failed.Error.Code != expectedCode {
 		t.Fatalf("failed watcher error = %+v, want code %q", failed.Error, expectedCode)
 	}
+
 	manager.mu.Lock()
 	codebase := manager.codebases[job.CodebaseID]
 	manager.mu.Unlock()
@@ -500,6 +531,7 @@ func acquirePauseTestLease(
 	if err != nil {
 		t.Fatalf("Acquire %s: %v", jobID, err)
 	}
+
 	return lease
 }
 
@@ -515,6 +547,7 @@ func startPauseTestAcquire(
 		lease, err := scheduler.Acquire(ctx, pauseTestSchedulerEntry(jobID, priority, sequence))
 		result <- pauseAcquireResult{lease: lease, err: err}
 	}()
+
 	return cancel, result
 }
 
@@ -525,20 +558,24 @@ func pauseTestSchedulerEntry(
 ) jobscheduler.Entry {
 	policy := model.DefaultSchedulingPolicy()
 	policy.Priority = priority
+
 	return jobscheduler.Entry{JobID: jobID, Policy: policy, QueueSequence: sequence}
 }
 
 func waitPauseTestRequested(t *testing.T, lease *jobscheduler.Lease) {
 	t.Helper()
 	deadline := time.Now().Add(pauseTestTimeout)
+
 	for {
 		requested, _ := lease.Checkpoint()
 		if requested {
 			return
 		}
+
 		if time.Now().After(deadline) {
 			t.Fatal("timed out waiting for pause request")
 		}
+
 		time.Sleep(time.Millisecond)
 	}
 }
@@ -553,6 +590,7 @@ func receivePauseTestLease(
 		if acquired.err != nil {
 			t.Fatalf("Acquire: %v", acquired.err)
 		}
+
 		return acquired.lease
 	case <-time.After(pauseTestTimeout):
 		t.Fatal("timed out waiting for scheduler lease")
@@ -579,14 +617,17 @@ func waitPauseTestJobState(
 ) model.Job {
 	t.Helper()
 	deadline := time.Now().Add(pauseTestTimeout)
+
 	for {
 		job, found := manager.GetJob(jobID)
 		if found && job.State == want {
 			return job
 		}
+
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for job %s state %s", jobID, want)
 		}
+
 		time.Sleep(time.Millisecond)
 	}
 }

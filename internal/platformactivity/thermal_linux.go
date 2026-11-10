@@ -45,9 +45,7 @@ func readThermalActivity(root string) thermalActivity {
 				continue
 			}
 			tripTemperatureName := strings.TrimSuffix(name, "_type") + "_temp"
-			tripTemperature, err := readThermalInteger(
-				filepath.Join(zonePath, tripTemperatureName),
-			)
+			tripTemperature, err := readThermalInteger(filepath.Join(zonePath, tripTemperatureName))
 			if err != nil {
 				continue
 			}

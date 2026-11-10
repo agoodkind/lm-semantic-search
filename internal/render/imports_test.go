@@ -18,15 +18,19 @@ func TestRenderImportsNoModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}
+
 	fset := token.NewFileSet()
+
 	for _, file := range files {
 		parsed, parseErr := parser.ParseFile(fset, file, nil, parser.ImportsOnly)
 		if parseErr != nil {
 			t.Fatalf("parse %s: %v", file, parseErr)
 		}
+
 		for _, imported := range parsed.Imports {
 			path := strings.Trim(imported.Path.Value, `"`)
-			if strings.HasSuffix(path, "internal/model") || strings.HasSuffix(path, "internal/daemon") {
+			if strings.HasSuffix(path, "internal/model") ||
+				strings.HasSuffix(path, "internal/daemon") {
 				t.Fatalf("%s imports %s; the render wall forbids raw record access", file, path)
 			}
 		}

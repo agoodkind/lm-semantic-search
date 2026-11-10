@@ -57,6 +57,7 @@ func FormatProto(mode Mode, message proto.Message) (string, error) {
 		if displayText == "" {
 			return MarshalCompactJSON(message)
 		}
+
 		return firstNonEmptyLine(displayText), nil
 	case ModeHuman, ModeText:
 		fallthrough
@@ -65,6 +66,7 @@ func FormatProto(mode Mode, message proto.Message) (string, error) {
 		if displayText != "" {
 			return displayText, nil
 		}
+
 		return MarshalCompactJSON(message)
 	}
 }
@@ -74,6 +76,7 @@ func extractDisplayText(message proto.Message) string {
 	if !ok {
 		return ""
 	}
+
 	return strings.TrimSpace(getter.GetDisplayText())
 }
 
@@ -84,6 +87,7 @@ func MarshalCompactJSON(message proto.Message) (string, error) {
 		slog.Error("marshal compact JSON failed", "err", err)
 		return "", fmt.Errorf("marshal compact JSON: %w", err)
 	}
+
 	return string(data), nil
 }
 
@@ -94,5 +98,6 @@ func firstNonEmptyLine(text string) string {
 			return trimmed
 		}
 	}
+
 	return ""
 }

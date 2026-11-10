@@ -54,17 +54,32 @@ func TestMilvusDeadlineInterceptorInjectsDeadlineWhenAbsent(t *testing.T) {
 		if !ok {
 			t.Fatal("invoker context has no deadline")
 		}
+
 		remaining := time.Until(deadline)
-		if remaining <= defaultMetadataCallTimeout-time.Second || remaining > defaultMetadataCallTimeout {
-			t.Fatalf("injected deadline remaining = %s, want approximately %s", remaining, defaultMetadataCallTimeout)
+		if remaining <= defaultMetadataCallTimeout-time.Second ||
+			remaining > defaultMetadataCallTimeout {
+			t.Fatalf(
+				"injected deadline remaining = %s, want approximately %s",
+				remaining,
+				defaultMetadataCallTimeout,
+			)
 		}
+
 		return nil
 	}
 
 	interceptor := milvusDeadlineInterceptor(slog.Default(), DefaultCallTimeouts())
-	if err := interceptor(context.Background(), "/milvus.test/Call", nil, nil, nil, invoker); err != nil {
+	if err := interceptor(
+		context.Background(),
+		"/milvus.test/Call",
+		nil,
+		nil,
+		nil,
+		invoker,
+	); err != nil {
 		t.Fatalf("interceptor returned error: %v", err)
 	}
+
 	if !invoked {
 		t.Fatal("interceptor did not invoke the call")
 	}
@@ -92,8 +107,10 @@ func TestMilvusDeadlineInterceptorShortensLongerCallerDeadline(t *testing.T) {
 		if !ok {
 			t.Fatal("invoker context has no deadline")
 		}
+
 		remaining := time.Until(deadline)
-		if remaining <= defaultMetadataCallTimeout-time.Second || remaining > defaultMetadataCallTimeout {
+		if remaining <= defaultMetadataCallTimeout-time.Second ||
+			remaining > defaultMetadataCallTimeout {
 			t.Fatalf(
 				"deadline remaining = %s, want approximately the %s bound rather than the caller's %s",
 				remaining,
@@ -101,6 +118,7 @@ func TestMilvusDeadlineInterceptorShortensLongerCallerDeadline(t *testing.T) {
 				callerTimeout,
 			)
 		}
+
 		return nil
 	}
 
@@ -108,6 +126,7 @@ func TestMilvusDeadlineInterceptorShortensLongerCallerDeadline(t *testing.T) {
 	if err := interceptor(ctx, "/milvus.test/Call", nil, nil, nil, invoker); err != nil {
 		t.Fatalf("interceptor returned error: %v", err)
 	}
+
 	if !invoked {
 		t.Fatal("interceptor did not invoke the call")
 	}
@@ -166,15 +185,21 @@ func (clock testControlledClock) budgetOf(instant time.Time) time.Duration {
 // keeps production off this shape; this function exists to show, deterministically
 // and without editing production code, what that shape does after a forward
 // wall-clock correction.
-func wallClockDeadlineChoice(ctx context.Context, wallClockNow time.Time, timeout time.Duration) time.Time {
+func wallClockDeadlineChoice(
+	ctx context.Context,
+	wallClockNow time.Time,
+	timeout time.Duration,
+) time.Time {
 	bound := wallClockNow.Add(timeout)
 	deadline, hasDeadline := ctx.Deadline()
 	if !hasDeadline {
 		return bound
 	}
+
 	if deadline.After(bound) {
 		return bound
 	}
+
 	return deadline
 }
 
@@ -207,7 +232,9 @@ func TestWallClockDeadlineChoiceEscapesTheBoundAfterAForwardStep(t *testing.T) {
 		)
 	}
 
-	stepped := clock.budgetOf(wallClockDeadlineChoice(ctx, clock.wallReadingAfter(forwardStep), timeout))
+	stepped := clock.budgetOf(
+		wallClockDeadlineChoice(ctx, clock.wallReadingAfter(forwardStep), timeout),
+	)
 	if stepped <= timeout+deadlineSlack {
 		t.Fatalf(
 			"stepped-clock budget = %s, want the caller's %s; a %s forward wall-clock correction is what made the removed comparison stop bounding the call",
@@ -245,7 +272,9 @@ func TestMilvusDeadlineInterceptorBoundsALaterCallerDeadlineUnderTheSameStep(t *
 		if !ok {
 			t.Fatal("invoker context has no deadline")
 		}
+
 		effectiveDeadline = deadline
+
 		return nil
 	}
 
@@ -282,9 +311,11 @@ func TestMilvusDeadlineInterceptorPreservesEarlierCallerDeadline(t *testing.T) {
 		if !ok {
 			t.Fatal("invoker context has no deadline")
 		}
+
 		if !gotDeadline.Equal(originalDeadline) {
 			t.Fatalf("invoker deadline = %s, want original %s", gotDeadline, originalDeadline)
 		}
+
 		return nil
 	}
 
@@ -303,6 +334,7 @@ func TestMilvusDeadlineInterceptorPreservesEarlierCallerDeadline(t *testing.T) {
 // names an inexact match would sweep in with the row Delete.
 func TestCallTimeoutsForMethod(t *testing.T) {
 	timeouts := DefaultCallTimeouts()
+
 	cases := []struct {
 		method string
 		want   time.Duration
@@ -333,8 +365,13 @@ func TestCallTimeoutsForMethod(t *testing.T) {
 			t.Fatalf("forMethod(%q) = %s, want %s", testCase.method, got, testCase.want)
 		}
 	}
+
 	if timeouts.Mutation <= timeouts.Metadata {
-		t.Fatalf("mutation bound %s must exceed the metadata bound %s", timeouts.Mutation, timeouts.Metadata)
+		t.Fatalf(
+			"mutation bound %s must exceed the metadata bound %s",
+			timeouts.Mutation,
+			timeouts.Metadata,
+		)
 	}
 }
 
@@ -348,15 +385,29 @@ func TestCallTimeoutsWithMutationIsOperatorTunable(t *testing.T) {
 
 	tuned := base.WithMutation(configuredMutation)
 	if tuned.Mutation != configuredMutation {
-		t.Fatalf("tuned mutation bound = %s, want the configured %s", tuned.Mutation, configuredMutation)
+		t.Fatalf(
+			"tuned mutation bound = %s, want the configured %s",
+			tuned.Mutation,
+			configuredMutation,
+		)
 	}
+
 	if tuned.Metadata != base.Metadata {
-		t.Fatalf("tuning the mutation bound changed the metadata bound to %s, want %s", tuned.Metadata, base.Metadata)
+		t.Fatalf(
+			"tuning the mutation bound changed the metadata bound to %s, want %s",
+			tuned.Metadata,
+			base.Metadata,
+		)
 	}
 
 	for _, unusable := range []time.Duration{0, -time.Second} {
 		if got := base.WithMutation(unusable).Mutation; got != base.Mutation {
-			t.Fatalf("WithMutation(%s) = %s, want the built-in %s bound kept", unusable, got, base.Mutation)
+			t.Fatalf(
+				"WithMutation(%s) = %s, want the built-in %s bound kept",
+				unusable,
+				got,
+				base.Mutation,
+			)
 		}
 	}
 }
@@ -369,8 +420,13 @@ func TestCallTimeoutsWithMetadataIsOperatorTunable(t *testing.T) {
 	if tuned.Metadata != configuredMetadata {
 		t.Fatalf("tuned metadata bound = %s, want %s", tuned.Metadata, configuredMetadata)
 	}
+
 	if tuned.Mutation != base.Mutation {
-		t.Fatalf("tuning metadata changed mutation bound to %s, want %s", tuned.Mutation, base.Mutation)
+		t.Fatalf(
+			"tuning metadata changed mutation bound to %s, want %s",
+			tuned.Mutation,
+			base.Mutation,
+		)
 	}
 
 	for _, unusable := range []time.Duration{0, -time.Second} {
@@ -400,6 +456,7 @@ func TestMilvusDeadlineInterceptorLogsOnDeadlineExceeded(t *testing.T) {
 	if err != wantErr {
 		t.Fatalf("interceptor error = %v, want %v", err, wantErr)
 	}
+
 	if len(handler.records) != 1 {
 		t.Fatalf("deadline log records = %d, want 1", len(handler.records))
 	}
@@ -408,6 +465,7 @@ func TestMilvusDeadlineInterceptorLogsOnDeadlineExceeded(t *testing.T) {
 	if record.Level != slog.LevelError {
 		t.Fatalf("deadline log level = %s, want ERROR", record.Level)
 	}
+
 	attributes := make(map[string]slog.Value)
 	record.Attrs(func(attribute slog.Attr) bool {
 		attributes[attribute.Key] = attribute.Value
@@ -416,12 +474,15 @@ func TestMilvusDeadlineInterceptorLogsOnDeadlineExceeded(t *testing.T) {
 	if got := attributes["method"].String(); got != "/milvus.test/Call" {
 		t.Fatalf("method = %q, want %q", got, "/milvus.test/Call")
 	}
+
 	if got := attributes["timeout_ms"].Int64(); got != defaultMetadataCallTimeout.Milliseconds() {
 		t.Fatalf("timeout_ms = %d, want %d", got, defaultMetadataCallTimeout.Milliseconds())
 	}
+
 	if got := attributes["duration_ms"].Int64(); got < 0 {
 		t.Fatalf("duration_ms = %d, want non-negative", got)
 	}
+
 	if attributes["err"].Any() == nil {
 		t.Fatal("err attribute is nil")
 	}
@@ -445,6 +506,7 @@ func TestDialOptionsReportsEveryUnaryCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial fake Milvus: %v", err)
 	}
+
 	t.Cleanup(func() {
 		_ = conn.Close()
 	})
@@ -452,9 +514,11 @@ func TestDialOptionsReportsEveryUnaryCall(t *testing.T) {
 	if err := invokeFakeMilvus(conn, "DescribeCollection"); err != nil {
 		t.Fatalf("invoke fake Milvus: %v", err)
 	}
+
 	if observedMethod != "/"+fakeMilvusServiceName+"/DescribeCollection" {
 		t.Fatalf("observed method = %q, want DescribeCollection", observedMethod)
 	}
+
 	if _, ok := observedRequest.(*emptypb.Empty); !ok {
 		t.Fatalf("observed request type = %T, want *emptypb.Empty", observedRequest)
 	}
@@ -476,15 +540,21 @@ func TestDialOptionsReportsTransmittedDatabaseMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial fake Milvus: %v", err)
 	}
+
 	t.Cleanup(func() { _ = conn.Close() })
 
 	transmittedContext := metadata.NewOutgoingContext(
 		context.Background(),
 		metadata.Pairs("dbname", "live_sandbox"),
 	)
-	if err := invokeFakeMilvusWithContext(transmittedContext, conn, "DescribeCollection"); err != nil {
+	if err := invokeFakeMilvusWithContext(
+		transmittedContext,
+		conn,
+		"DescribeCollection",
+	); err != nil {
 		t.Fatalf("invoke fake Milvus with database metadata: %v", err)
 	}
+
 	if err := invokeFakeMilvus(conn, "DescribeCollection"); err != nil {
 		t.Fatalf("invoke fake Milvus without database metadata: %v", err)
 	}
@@ -492,6 +562,7 @@ func TestDialOptionsReportsTransmittedDatabaseMetadata(t *testing.T) {
 	if databaseName := <-observedDatabases; databaseName != "live_sandbox" {
 		t.Fatalf("transmitted database = %q, want live_sandbox", databaseName)
 	}
+
 	if databaseName := <-observedDatabases; databaseName != "" {
 		t.Fatalf("absent transmitted database = %q, want empty", databaseName)
 	}
@@ -526,10 +597,15 @@ func handleDelayedCall(
 	if err := dec(request); err != nil {
 		return nil, err
 	}
+
 	server, ok := srv.(fakeMilvusHandler)
 	if !ok {
-		return nil, status.Error(codes.Internal, "fake server registered with the wrong handler type")
+		return nil, status.Error(
+			codes.Internal,
+			"fake server registered with the wrong handler type",
+		)
 	}
+
 	timer := time.NewTimer(server.callDelay())
 	defer timer.Stop()
 	select {
@@ -562,12 +638,14 @@ func startFakeMilvus(t *testing.T, delay time.Duration) net.Addr {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
+
 	server := grpc.NewServer()
 	server.RegisterService(&fakeMilvusServiceDesc, fakeMilvusServer{delay: delay})
 	go func() {
 		_ = server.Serve(listener)
 	}()
 	t.Cleanup(server.Stop)
+
 	return listener.Addr()
 }
 
@@ -580,9 +658,11 @@ func dialFakeMilvus(t *testing.T, address net.Addr, timeouts CallTimeouts) *grpc
 	if err != nil {
 		t.Fatalf("dial fake Milvus: %v", err)
 	}
+
 	t.Cleanup(func() {
 		_ = conn.Close()
 	})
+
 	return conn
 }
 
@@ -659,6 +739,7 @@ func TestKeepaliveParametersRespectDefaultServerEnforcement(t *testing.T) {
 				"and a server with default enforcement answers with too_many_pings",
 		)
 	}
+
 	if parameters.Time < serverDefaultMinPingInterval {
 		t.Fatalf(
 			"keepalive Time = %s, want at least the default server enforcement minimum of %s",
@@ -666,6 +747,7 @@ func TestKeepaliveParametersRespectDefaultServerEnforcement(t *testing.T) {
 			serverDefaultMinPingInterval,
 		)
 	}
+
 	if parameters.Timeout <= 0 {
 		t.Fatalf("keepalive Timeout = %s, want a positive ping-ack budget", parameters.Timeout)
 	}
@@ -714,18 +796,27 @@ func readGoAway(t *testing.T, reader io.Reader) (uint32, string) {
 		if _, err := io.ReadFull(reader, header); err != nil {
 			t.Fatalf("read HTTP/2 frame header: %v", err)
 		}
+
 		length := int(header[0])<<16 | int(header[1])<<8 | int(header[2])
 		payload := make([]byte, length)
 		if _, err := io.ReadFull(reader, payload); err != nil {
 			t.Fatalf("read HTTP/2 frame payload: %v", err)
 		}
+
 		if header[3] != http2GoAwayFrame {
 			continue
 		}
+
 		if len(payload) < http2GoAwayPrefixLen {
-			t.Fatalf("GOAWAY payload length = %d, want at least %d", len(payload), http2GoAwayPrefixLen)
+			t.Fatalf(
+				"GOAWAY payload length = %d, want at least %d",
+				len(payload),
+				http2GoAwayPrefixLen,
+			)
 		}
+
 		errorCode := binary.BigEndian.Uint32(payload[4:http2GoAwayPrefixLen])
+
 		return errorCode, string(payload[http2GoAwayPrefixLen:])
 	}
 }
@@ -743,6 +834,7 @@ func TestDefaultServerEnforcementDisconnectsIdlePings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial raw HTTP/2 connection: %v", err)
 	}
+
 	t.Cleanup(func() {
 		_ = conn.Close()
 	})
@@ -753,15 +845,22 @@ func TestDefaultServerEnforcementDisconnectsIdlePings(t *testing.T) {
 	if _, err := io.WriteString(conn, http2ClientPreface); err != nil {
 		t.Fatalf("write HTTP/2 client preface: %v", err)
 	}
+
 	writeConnectionFrame(t, conn, http2SettingsFrame, nil)
+
 	for range idlePingCount {
 		writeConnectionFrame(t, conn, http2PingFrame, make([]byte, http2PingPayloadLen))
 	}
 
 	errorCode, debugData := readGoAway(t, conn)
 	if errorCode != http2EnhanceYourCalm {
-		t.Fatalf("GOAWAY error code = %d, want ENHANCE_YOUR_CALM (%d)", errorCode, http2EnhanceYourCalm)
+		t.Fatalf(
+			"GOAWAY error code = %d, want ENHANCE_YOUR_CALM (%d)",
+			errorCode,
+			http2EnhanceYourCalm,
+		)
 	}
+
 	if debugData != "too_many_pings" {
 		t.Fatalf("GOAWAY debug data = %q, want %q", debugData, "too_many_pings")
 	}

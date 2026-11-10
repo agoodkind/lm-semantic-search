@@ -39,42 +39,98 @@ type Filter struct {
 
 // AllOf returns an all node over children.
 func AllOf(children ...Filter) Filter {
-	return Filter{Kind: FilterAll, Children: children, Column: "", Values: nil, Lower: nil, Upper: nil}
+	return Filter{
+		Kind:     FilterAll,
+		Children: children,
+		Column:   "",
+		Values:   nil,
+		Lower:    nil,
+		Upper:    nil,
+	}
 }
 
 // AnyOf returns an any node over children.
 func AnyOf(children ...Filter) Filter {
-	return Filter{Kind: FilterAny, Children: children, Column: "", Values: nil, Lower: nil, Upper: nil}
+	return Filter{
+		Kind:     FilterAny,
+		Children: children,
+		Column:   "",
+		Values:   nil,
+		Lower:    nil,
+		Upper:    nil,
+	}
 }
 
 // Negate returns a not node over child.
 func Negate(child Filter) Filter {
-	return Filter{Kind: FilterNot, Children: []Filter{child}, Column: "", Values: nil, Lower: nil, Upper: nil}
+	return Filter{
+		Kind:     FilterNot,
+		Children: []Filter{child},
+		Column:   "",
+		Values:   nil,
+		Lower:    nil,
+		Upper:    nil,
+	}
 }
 
 // ColumnEquals returns an equality leaf.
 func ColumnEquals(column string, value ScalarValue) Filter {
-	return Filter{Kind: FilterEquals, Children: nil, Column: column, Values: []ScalarValue{value}, Lower: nil, Upper: nil}
+	return Filter{
+		Kind:     FilterEquals,
+		Children: nil,
+		Column:   column,
+		Values:   []ScalarValue{value},
+		Lower:    nil,
+		Upper:    nil,
+	}
 }
 
 // ColumnIn returns a set membership leaf.
 func ColumnIn(column string, values []ScalarValue) Filter {
-	return Filter{Kind: FilterIn, Children: nil, Column: column, Values: values, Lower: nil, Upper: nil}
+	return Filter{
+		Kind:     FilterIn,
+		Children: nil,
+		Column:   column,
+		Values:   values,
+		Lower:    nil,
+		Upper:    nil,
+	}
 }
 
 // ColumnRange returns a half-open int64 range leaf. A nil bound is open.
 func ColumnRange(column string, lower *int64, upper *int64) Filter {
-	return Filter{Kind: FilterRange, Children: nil, Column: column, Values: nil, Lower: lower, Upper: upper}
+	return Filter{
+		Kind:     FilterRange,
+		Children: nil,
+		Column:   column,
+		Values:   nil,
+		Lower:    lower,
+		Upper:    upper,
+	}
 }
 
 // ColumnIsNull returns a null test leaf.
 func ColumnIsNull(column string) Filter {
-	return Filter{Kind: FilterIsNull, Children: nil, Column: column, Values: nil, Lower: nil, Upper: nil}
+	return Filter{
+		Kind:     FilterIsNull,
+		Children: nil,
+		Column:   column,
+		Values:   nil,
+		Lower:    nil,
+		Upper:    nil,
+	}
 }
 
 // ColumnIsPresent returns a non-null test leaf.
 func ColumnIsPresent(column string) Filter {
-	return Filter{Kind: FilterIsPresent, Children: nil, Column: column, Values: nil, Lower: nil, Upper: nil}
+	return Filter{
+		Kind:     FilterIsPresent,
+		Children: nil,
+		Column:   column,
+		Values:   nil,
+		Lower:    nil,
+		Upper:    nil,
+	}
 }
 
 // StringValues converts strings to string scalar values.
@@ -83,5 +139,6 @@ func StringValues(values []string) []ScalarValue {
 	for _, value := range values {
 		converted = append(converted, StringScalar(value))
 	}
+
 	return converted
 }

@@ -31,10 +31,12 @@ func maxFileBytes() int64 {
 	if raw == "" {
 		return defaultMaxFileBytes
 	}
+
 	parsed, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
 		return defaultMaxFileBytes
 	}
+
 	return parsed
 }
 
@@ -44,9 +46,11 @@ func eligibleByStat(info os.FileInfo, maxBytes int64) (bool, SkipReason) {
 	if !info.Mode().IsRegular() {
 		return false, SkipNotRegular
 	}
+
 	if maxBytes > 0 && info.Size() > maxBytes {
 		return false, SkipOversize
 	}
+
 	return true, SkipKeep
 }
 
@@ -56,6 +60,7 @@ func eligibleContent(data []byte) (bool, SkipReason) {
 	if !utf8.Valid(data) {
 		return false, SkipNonUTF8
 	}
+
 	return true, SkipKeep
 }
 

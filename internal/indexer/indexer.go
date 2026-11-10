@@ -161,7 +161,13 @@ type OneFileResult struct {
 // processedFile mirrors OneFileResult for the runner's internal accumulator.
 type processedFile = OneFileResult
 
-func newProcessedFile(chunks []model.StoredChunk, fileHash string, skipped bool, skipReason SkipReason, removed bool) processedFile {
+func newProcessedFile(
+	chunks []model.StoredChunk,
+	fileHash string,
+	skipped bool,
+	skipReason SkipReason,
+	removed bool,
+) processedFile {
 	return processedFile{
 		Chunks:          chunks,
 		FileHash:        fileHash,
@@ -179,7 +185,14 @@ func newProcessedFile(chunks []model.StoredChunk, fileHash string, skipped bool,
 // delta loop calls this so the merkle snapshot can be flushed after each
 // successful semantic.Reindex call. The resolver and codebaseID let the stat
 // and content gates route through the shared indexability decider.
-func (runner *Runner) IndexOne(ctx context.Context, resolver *indexability.Resolver, codebaseID string, root string, relativePath string, cfg model.IndexConfig) (OneFileResult, error) {
+func (runner *Runner) IndexOne(
+	ctx context.Context,
+	resolver *indexability.Resolver,
+	codebaseID string,
+	root string,
+	relativePath string,
+	cfg model.IndexConfig,
+) (OneFileResult, error) {
 	fullPath := filepath.Join(root, relativePath)
 	statResult, keep, err := runner.statEligibility(ctx, resolver, codebaseID, root, relativePath)
 	if err != nil {
@@ -187,24 +200,41 @@ func (runner *Runner) IndexOne(ctx context.Context, resolver *indexability.Resol
 			slog.DebugContext(ctx, "source file absent; converging to removal", "path", fullPath)
 			return newProcessedFile(nil, "", false, SkipNone, true), nil
 		}
+
 		return newProcessedFile(nil, "", false, SkipNone, false), err
 	}
+
 	if !keep {
 		return statResult, nil
 	}
+
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			slog.DebugContext(ctx, "source file absent; converging to removal", "path", fullPath)
 			return newProcessedFile(nil, "", false, SkipNone, true), nil
 		}
+
 		if readErrorMeansRemoved(fullPath) {
-			slog.DebugContext(ctx, "source path is no longer a regular file; converging to removal", "path", fullPath)
+			slog.DebugContext(
+				ctx,
+				"source path is no longer a regular file; converging to removal",
+				"path",
+				fullPath,
+			)
+
 			return newProcessedFile(nil, "", false, SkipNone, true), nil
 		}
+
 		slog.ErrorContext(ctx, "read source file failed", "path", fullPath, "err", err)
-		return newProcessedFile(nil, "", false, SkipNone, false), fmt.Errorf("read source file %s: %w", fullPath, err)
+
+		return newProcessedFile(nil, "", false, SkipNone, false), fmt.Errorf(
+			"read source file %s: %w",
+			fullPath,
+			err,
+		)
 	}
+
 	return runner.processFile(ctx, resolver, fullPath, relativePath, data, cfg.SplitterType)
 }
 
@@ -214,30 +244,70 @@ func (runner *Runner) IndexOne(ctx context.Context, resolver *indexability.Resol
 // whole Decision keeps the indexer from owning a second copy of any gate. An
 // oversize file is a recorded skip; a not-regular, out-of-scope, or ignored
 // path converges to a removal.
-func (runner *Runner) statEligibility(ctx context.Context, resolver *indexability.Resolver, codebaseID string, root string, relativePath string) (processedFile, bool, error) {
+func (runner *Runner) statEligibility(
+	ctx context.Context,
+	resolver *indexability.Resolver,
+	codebaseID string,
+	root string,
+	relativePath string,
+) (processedFile, bool, error) {
 	fullPath := filepath.Join(root, relativePath)
 	info, err := os.Stat(fullPath)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			slog.ErrorContext(ctx, "stat source file failed", "path", fullPath, "err", err)
 		}
-		return newProcessedFile(nil, "", false, SkipNone, false), false, fmt.Errorf("stat source file %s: %w", fullPath, err)
+
+		return newProcessedFile(nil, "", false, SkipNone, false), false, fmt.Errorf(
+			"stat source file %s: %w",
+			fullPath,
+			err,
+		)
 	}
+
 	decision := resolver.Decide(ctx, codebaseID, root, filepath.ToSlash(relativePath), info)
 	if decision.Indexed {
 		return newProcessedFile(nil, "", false, SkipNone, false), true, nil
 	}
+
 	switch decision.Reason {
 	case indexability.ReasonOversize:
-		slog.WarnContext(ctx, "indexer.skipped_oversize", "path", relativePath, "bytes", info.Size())
+		slog.WarnContext(
+			ctx,
+			"indexer.skipped_oversize",
+			"path",
+			relativePath,
+			"bytes",
+			info.Size(),
+		)
+
 		return newProcessedFile(nil, "", true, SkipOversize, false), false, nil
-	case indexability.ReasonNotRegular, indexability.ReasonOutOfScope, indexability.ReasonIgnored, indexability.ReasonSubmodule:
-		slog.DebugContext(ctx, "source path is not indexable; converging to removal", "path", fullPath, "reason", string(decision.Reason))
+	case indexability.ReasonNotRegular,
+		indexability.ReasonOutOfScope,
+		indexability.ReasonIgnored,
+		indexability.ReasonSubmodule:
+		slog.DebugContext(
+			ctx,
+			"source path is not indexable; converging to removal",
+			"path",
+			fullPath,
+			"reason",
+			string(decision.Reason),
+		)
+
 		return newProcessedFile(nil, "", false, SkipNone, true), false, nil
 	case indexability.Keep, indexability.ReasonNonUTF8:
-		return newProcessedFile(nil, "", false, SkipNone, false), false, fmt.Errorf("unexpected stat-stage indexability reason %q for %s", decision.Reason, fullPath)
+		return newProcessedFile(nil, "", false, SkipNone, false), false, fmt.Errorf(
+			"unexpected stat-stage indexability reason %q for %s",
+			decision.Reason,
+			fullPath,
+		)
 	default:
-		return newProcessedFile(nil, "", false, SkipNone, false), false, fmt.Errorf("unknown indexability reason %q for %s", decision.Reason, fullPath)
+		return newProcessedFile(nil, "", false, SkipNone, false), false, fmt.Errorf(
+			"unknown indexability reason %q for %s",
+			decision.Reason,
+			fullPath,
+		)
 	}
 }
 
@@ -249,6 +319,7 @@ func readErrorMeansRemoved(path string) bool {
 		// failure to surface.
 		return errors.Is(err, os.ErrNotExist)
 	}
+
 	return !info.Mode().IsRegular()
 }
 
@@ -256,30 +327,51 @@ func readErrorMeansRemoved(path string) bool {
 // valid UTF-8 the splitter is skipped and Skipped=true is returned. Milvus
 // rejects non-UTF-8 VarChar payloads at the gRPC marshal boundary, so the
 // skip happens at the indexer boundary.
-func (runner *Runner) processFile(ctx context.Context, resolver *indexability.Resolver, fullPath string, relativePath string, data []byte, splitterType string) (processedFile, error) {
+func (runner *Runner) processFile(
+	ctx context.Context,
+	resolver *indexability.Resolver,
+	fullPath string,
+	relativePath string,
+	data []byte,
+	splitterType string,
+) (processedFile, error) {
 	if !resolver.DecideContent(data).Indexed {
-		slog.WarnContext(ctx, "indexer.skipped_invalid_utf8", "path", relativePath, "bytes", len(data))
+		slog.WarnContext(
+			ctx,
+			"indexer.skipped_invalid_utf8",
+			"path",
+			relativePath,
+			"bytes",
+			len(data),
+		)
+
 		return newProcessedFile(nil, "", true, SkipUnreadable, false), nil
 	}
+
 	splitResult, err := runner.dispatcher.SplitFileWithType(ctx, fullPath, data, splitterType)
 	if err != nil {
 		return processedFile{}, fmt.Errorf("split source file %s: %w", fullPath, err)
 	}
+
 	chunks := make([]model.StoredChunk, 0, len(splitResult.Chunks))
 	for _, splitChunk := range splitResult.Chunks {
-		chunks = append(chunks, model.StoredChunk{
-			Content:           splitChunk.Content,
-			RelativePath:      relativePath,
-			StartLine:         safeInt32(splitChunk.StartLine),
-			EndLine:           safeInt32(splitChunk.EndLine),
-			Language:          splitChunk.Language,
-			FileExtension:     filepath.Ext(relativePath),
-			SplitPart:         0,
-			SplitPartRecorded: true,
-			Scalars:           nil,
-			Score:             0,
-		})
+		chunks = append(
+			chunks,
+			model.StoredChunk{
+				Content:           splitChunk.Content,
+				RelativePath:      relativePath,
+				StartLine:         safeInt32(splitChunk.StartLine),
+				EndLine:           safeInt32(splitChunk.EndLine),
+				Language:          splitChunk.Language,
+				FileExtension:     filepath.Ext(relativePath),
+				SplitPart:         0,
+				SplitPartRecorded: true,
+				Scalars:           nil,
+				Score:             0,
+			},
+		)
 	}
+
 	return newProcessedFile(chunks, digestFileBytes(data), false, SkipNone, false), nil
 }
 
@@ -298,47 +390,83 @@ type indexAccumulator struct {
 // ingestFile reads one file, routes the size and UTF-8 gates through the
 // resolver, and routes the result into the accumulator. It returns false when
 // the file was skipped.
-func (runner *Runner) ingestFile(ctx context.Context, resolver *indexability.Resolver, codebaseID string, root string, relativePath string, splitterType string, accumulator *indexAccumulator) error {
+func (runner *Runner) ingestFile(
+	ctx context.Context,
+	resolver *indexability.Resolver,
+	codebaseID string,
+	root string,
+	relativePath string,
+	splitterType string,
+	accumulator *indexAccumulator,
+) error {
 	fullPath := filepath.Join(root, relativePath)
 	statResult, keep, err := runner.statEligibility(ctx, resolver, codebaseID, root, relativePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			slog.DebugContext(ctx, "source file absent during walk; excluding from rebuild", "path", fullPath)
+			slog.DebugContext(
+				ctx,
+				"source file absent during walk; excluding from rebuild",
+				"path",
+				fullPath,
+			)
+
 			return nil
 		}
+
 		return err
 	}
+
 	if !keep {
 		accumulator.addSkipped(relativePath, statResult)
 		return nil
 	}
+
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			slog.DebugContext(ctx, "source file absent during walk; excluding from rebuild", "path", fullPath)
+			slog.DebugContext(
+				ctx,
+				"source file absent during walk; excluding from rebuild",
+				"path",
+				fullPath,
+			)
+
 			return nil
 		}
+
 		if readErrorMeansRemoved(fullPath) {
-			slog.DebugContext(ctx, "source path is no longer a regular file during walk; excluding from rebuild", "path", fullPath)
+			slog.DebugContext(
+				ctx,
+				"source path is no longer a regular file during walk; excluding from rebuild",
+				"path",
+				fullPath,
+			)
+
 			return nil
 		}
+
 		slog.ErrorContext(ctx, "read source file failed", "path", fullPath, "err", err)
+
 		return fmt.Errorf("read source file %s: %w", fullPath, err)
 	}
+
 	processed, err := runner.processFile(ctx, resolver, fullPath, relativePath, data, splitterType)
 	if err != nil {
 		slog.ErrorContext(ctx, "split source file failed", "path", fullPath, "err", err)
 		return err
 	}
+
 	if processed.Skipped {
 		accumulator.addSkipped(relativePath, processed)
 		return nil
 	}
+
 	accumulator.totalChunks += safeInt32(len(processed.Chunks))
 	accumulator.totalBytes += chunkContentBytes(processed.Chunks)
 	accumulator.indexedCount++
 	accumulator.fileHashes[relativePath] = processed.FileHash
 	accumulator.storedChunks = append(accumulator.storedChunks, processed.Chunks...)
+
 	return nil
 }
 
@@ -346,18 +474,27 @@ func (accumulator *indexAccumulator) addSkipped(relativePath string, processed p
 	if !processed.Skipped {
 		return
 	}
+
 	accumulator.skippedFiles = append(accumulator.skippedFiles, relativePath)
 	if processed.SkipReason == SkipOversize {
 		accumulator.skippedOversize++
 		return
 	}
+
 	accumulator.skippedUnreadable++
 }
 
 // Index walks the codebase and splits files into chunks. The resolver and
 // codebaseID are threaded into discovery so the walk routes its scope and ignore
 // decisions through the daemon's one shared indexability resolver.
-func (runner *Runner) Index(ctx context.Context, resolver *indexability.Resolver, codebaseID string, root string, indexConfig model.IndexConfig, progress func(Progress)) (Result, error) {
+func (runner *Runner) Index(
+	ctx context.Context,
+	resolver *indexability.Resolver,
+	codebaseID string,
+	root string,
+	indexConfig model.IndexConfig,
+	progress func(Progress),
+) (Result, error) {
 	if progress != nil {
 		progress(newEmbeddedProgress("Preparing and scanning files...", 0, 0, 0, 0, 0, 0, 0, 0))
 	}
@@ -370,7 +507,19 @@ func (runner *Runner) Index(ctx context.Context, resolver *indexability.Resolver
 
 	totalFiles := safeInt32(len(discoveryResult.Files))
 	if progress != nil {
-		progress(newEmbeddedProgress("Processing files and generating embeddings...", 10, totalFiles, 0, 0, 0, 0, 0, 0))
+		progress(
+			newEmbeddedProgress(
+				"Processing files and generating embeddings...",
+				10,
+				totalFiles,
+				0,
+				0,
+				0,
+				0,
+				0,
+				0,
+			),
+		)
 	}
 
 	accumulator := &indexAccumulator{
@@ -388,31 +537,66 @@ func (runner *Runner) Index(ctx context.Context, resolver *indexability.Resolver
 			slog.ErrorContext(ctx, "indexing cancelled before file read", "path", path, "err", err)
 			return Result{}, fmt.Errorf("indexing cancelled before file read %s: %w", path, err)
 		}
+
 		relativePath, err := filepath.Rel(root, path)
 		if err != nil {
-			slog.ErrorContext(ctx, "compute relative chunk path failed", "root", root, "path", path, "err", err)
+			slog.ErrorContext(
+				ctx,
+				"compute relative chunk path failed",
+				"root",
+				root,
+				"path",
+				path,
+				"err",
+				err,
+			)
+
 			return Result{}, fmt.Errorf("compute relative chunk path for %s: %w", path, err)
 		}
-		if err := runner.ingestFile(ctx, resolver, codebaseID, root, relativePath, indexConfig.SplitterType, accumulator); err != nil {
+
+		if err := runner.ingestFile(
+			ctx,
+			resolver,
+			codebaseID,
+			root,
+			relativePath,
+			indexConfig.SplitterType,
+			accumulator,
+		); err != nil {
 			return Result{}, err
 		}
+
 		if progress != nil {
-			progress(newEmbeddedProgress(
-				"Processing files and generating embeddings...",
-				calculateOverallPercent(index+1, len(discoveryResult.Files)),
-				totalFiles,
-				safeInt32(index+1),
-				safeInt32(index+1),
-				accumulator.skippedOversize,
-				accumulator.skippedUnreadable,
-				accumulator.totalChunks,
-				accumulator.totalChunks,
-			))
+			progress(
+				newEmbeddedProgress(
+					"Processing files and generating embeddings...",
+					calculateOverallPercent(index+1, len(discoveryResult.Files)),
+					totalFiles,
+					safeInt32(index+1),
+					safeInt32(index+1),
+					accumulator.skippedOversize,
+					accumulator.skippedUnreadable,
+					accumulator.totalChunks,
+					accumulator.totalChunks,
+				),
+			)
 		}
 	}
 
 	if progress != nil {
-		progress(newEmbeddedProgress("completed", 100, totalFiles, totalFiles, totalFiles, accumulator.skippedOversize, accumulator.skippedUnreadable, accumulator.totalChunks, accumulator.totalChunks))
+		progress(
+			newEmbeddedProgress(
+				"completed",
+				100,
+				totalFiles,
+				totalFiles,
+				totalFiles,
+				accumulator.skippedOversize,
+				accumulator.skippedUnreadable,
+				accumulator.totalChunks,
+				accumulator.totalChunks,
+			),
+		)
 	}
 
 	return Result{
@@ -436,10 +620,20 @@ func (runner *Runner) Index(ctx context.Context, resolver *indexability.Resolver
 // FileHashes in the result covers only the supplied files. Callers should
 // merge this map into the previous snapshot before persisting. The resolver and
 // codebaseID route the per-file gates through the shared indexability decider.
-func (runner *Runner) IndexFiles(ctx context.Context, resolver *indexability.Resolver, codebaseID string, root string, relativePaths []string, indexConfig model.IndexConfig, progress func(Progress)) (Result, error) {
+func (runner *Runner) IndexFiles(
+	ctx context.Context,
+	resolver *indexability.Resolver,
+	codebaseID string,
+	root string,
+	relativePaths []string,
+	indexConfig model.IndexConfig,
+	progress func(Progress),
+) (Result, error) {
 	totalFiles := safeInt32(len(relativePaths))
 	if progress != nil {
-		progress(newEmbeddedProgress("Processing changed files...", 10, totalFiles, 0, 0, 0, 0, 0, 0))
+		progress(
+			newEmbeddedProgress("Processing changed files...", 10, totalFiles, 0, 0, 0, 0, 0, 0),
+		)
 	}
 
 	accumulator := &indexAccumulator{
@@ -454,29 +648,65 @@ func (runner *Runner) IndexFiles(ctx context.Context, resolver *indexability.Res
 	}
 	for index, relativePath := range relativePaths {
 		if err := ctx.Err(); err != nil {
-			slog.ErrorContext(ctx, "delta indexing cancelled before file read", "path", relativePath, "err", err)
-			return Result{}, fmt.Errorf("delta indexing cancelled before file read %s: %w", relativePath, err)
+			slog.ErrorContext(
+				ctx,
+				"delta indexing cancelled before file read",
+				"path",
+				relativePath,
+				"err",
+				err,
+			)
+
+			return Result{}, fmt.Errorf(
+				"delta indexing cancelled before file read %s: %w",
+				relativePath,
+				err,
+			)
 		}
-		if err := runner.ingestFile(ctx, resolver, codebaseID, root, relativePath, indexConfig.SplitterType, accumulator); err != nil {
+
+		if err := runner.ingestFile(
+			ctx,
+			resolver,
+			codebaseID,
+			root,
+			relativePath,
+			indexConfig.SplitterType,
+			accumulator,
+		); err != nil {
 			return Result{}, err
 		}
+
 		if progress != nil {
-			progress(newEmbeddedProgress(
-				"Processing changed files...",
-				calculateOverallPercent(index+1, len(relativePaths)),
-				totalFiles,
-				safeInt32(index+1),
-				safeInt32(index+1),
-				accumulator.skippedOversize,
-				accumulator.skippedUnreadable,
-				accumulator.totalChunks,
-				accumulator.totalChunks,
-			))
+			progress(
+				newEmbeddedProgress(
+					"Processing changed files...",
+					calculateOverallPercent(index+1, len(relativePaths)),
+					totalFiles,
+					safeInt32(index+1),
+					safeInt32(index+1),
+					accumulator.skippedOversize,
+					accumulator.skippedUnreadable,
+					accumulator.totalChunks,
+					accumulator.totalChunks,
+				),
+			)
 		}
 	}
 
 	if progress != nil {
-		progress(newEmbeddedProgress("completed", 100, totalFiles, totalFiles, totalFiles, accumulator.skippedOversize, accumulator.skippedUnreadable, accumulator.totalChunks, accumulator.totalChunks))
+		progress(
+			newEmbeddedProgress(
+				"completed",
+				100,
+				totalFiles,
+				totalFiles,
+				totalFiles,
+				accumulator.skippedOversize,
+				accumulator.skippedUnreadable,
+				accumulator.totalChunks,
+				accumulator.totalChunks,
+			),
+		)
 	}
 
 	return Result{
@@ -495,9 +725,11 @@ func (runner *Runner) IndexFiles(ctx context.Context, resolver *indexability.Res
 
 func chunkContentBytes(chunks []model.StoredChunk) int64 {
 	var total int64
+
 	for _, chunk := range chunks {
 		total += int64(len(chunk.Content))
 	}
+
 	return total
 }
 
@@ -510,6 +742,7 @@ func calculateOverallPercent(processedFiles int, totalFiles int) float64 {
 	if totalFiles <= 0 {
 		return 100
 	}
+
 	return 10 + (float64(processedFiles)/float64(totalFiles))*90
 }
 
@@ -517,8 +750,10 @@ func safeInt32(value int) int32 {
 	if value > math.MaxInt32 {
 		return math.MaxInt32
 	}
+
 	if value < math.MinInt32 {
 		return math.MinInt32
 	}
+
 	return int32(value)
 }

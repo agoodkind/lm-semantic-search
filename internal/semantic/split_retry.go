@@ -49,13 +49,21 @@ type splitRetryPackResult struct {
 // rejected input whole because splitting cannot help. Otherwise, every split strictly shortens a piece until
 // it reaches the positive floor or one codepoint, so the loop stays bounded
 // without a round cap. keptChunks and keptVectors remain index-aligned.
-func EmbedChunksSplittingOversize(ctx context.Context, chunks []model.StoredChunk, activeModelMaxTokens int, pack ChunkPackFunc, embed EmbedBatchFunc) (keptChunks []model.StoredChunk, keptVectors [][]float32, droppedInputs int, err error) {
+func EmbedChunksSplittingOversize(
+	ctx context.Context,
+	chunks []model.StoredChunk,
+	activeModelMaxTokens int,
+	pack ChunkPackFunc,
+	embed EmbedBatchFunc,
+) (keptChunks []model.StoredChunk, keptVectors [][]float32, droppedInputs int, err error) {
 	keptChunks = make([]model.StoredChunk, 0, len(chunks))
 	keptVectors = make([][]float32, 0, len(chunks))
 	queue := slices.Clone(chunks)
 	retryRound := 0
+
 	for len(queue) > 0 {
 		var nextQueue []model.StoredChunk
+
 		for _, chunkPack := range pack(queue) {
 			packResult, packErr := embedSplitRetryPack(
 				ctx,
@@ -67,36 +75,72 @@ func EmbedChunksSplittingOversize(ctx context.Context, chunks []model.StoredChun
 			if packErr != nil {
 				return nil, nil, 0, packErr
 			}
+
 			keptChunks = append(keptChunks, packResult.keptChunks...)
 			keptVectors = append(keptVectors, packResult.keptVectors...)
 			nextQueue = append(nextQueue, packResult.retryChunks...)
 			droppedInputs += packResult.droppedInput
 		}
+
 		queue = nextQueue
 		retryRound++
 	}
+
 	return keptChunks, keptVectors, droppedInputs, nil
 }
 
-func embedSplitRetryPack(ctx context.Context, chunkPack []model.StoredChunk, activeModelMaxTokens int, retryRound int, embed EmbedBatchFunc) (splitRetryPackResult, error) {
+func embedSplitRetryPack(
+	ctx context.Context,
+	chunkPack []model.StoredChunk,
+	activeModelMaxTokens int,
+	retryRound int,
+	embed EmbedBatchFunc,
+) (splitRetryPackResult, error) {
 	texts := make([]string, len(chunkPack))
 	for index := range chunkPack {
 		texts[index] = chunkPack[index].Content
 	}
+
 	result, err := embed(ctx, texts)
 	if err != nil {
-		slog.ErrorContext(ctx, "split-retry embed batch failed", "chunks", len(chunkPack), "err", err)
+		slog.ErrorContext(
+			ctx,
+			"split-retry embed batch failed",
+			"chunks",
+			len(chunkPack),
+			"err",
+			err,
+		)
+
 		return splitRetryPackResult{}, fmt.Errorf("split-retry embed batch: %w", err)
 	}
+
 	if len(result.Vectors) != len(chunkPack) {
 		countErr := errors.New("vector count mismatch")
-		slog.ErrorContext(ctx, "split-retry embed returned unexpected vector count", "want", len(chunkPack), "got", len(result.Vectors), "err", countErr)
-		return splitRetryPackResult{}, fmt.Errorf("split-retry embed returned %d vectors for %d chunks: %w", len(result.Vectors), len(chunkPack), countErr)
+		slog.ErrorContext(
+			ctx,
+			"split-retry embed returned unexpected vector count",
+			"want",
+			len(chunkPack),
+			"got",
+			len(result.Vectors),
+			"err",
+			countErr,
+		)
+
+		return splitRetryPackResult{}, fmt.Errorf(
+			"split-retry embed returned %d vectors for %d chunks: %w",
+			len(result.Vectors),
+			len(chunkPack),
+			countErr,
+		)
 	}
+
 	skippedByIndex := make(map[int]embedding.SkippedInput, len(result.Skipped))
 	for _, skip := range result.Skipped {
 		skippedByIndex[skip.Index] = skip
 	}
+
 	packResult := splitRetryPackResult{
 		keptChunks:   make([]model.StoredChunk, 0, len(chunkPack)),
 		keptVectors:  make([][]float32, 0, len(chunkPack)),
@@ -108,30 +152,57 @@ func embedSplitRetryPack(ctx context.Context, chunkPack []model.StoredChunk, act
 		if !wasSkipped {
 			vector := result.Vectors[index]
 			if vector == nil {
-				slog.ErrorContext(ctx, "split-retry embed returned nil vector without skip", "chunk_index", index, "relative_path", chunkPack[index].RelativePath, "err", ErrNilEmbeddingVector)
-				return splitRetryPackResult{}, fmt.Errorf("split-retry chunk %d: %w", index, ErrNilEmbeddingVector)
+				slog.ErrorContext(
+					ctx,
+					"split-retry embed returned nil vector without skip",
+					"chunk_index",
+					index,
+					"relative_path",
+					chunkPack[index].RelativePath,
+					"err",
+					ErrNilEmbeddingVector,
+				)
+
+				return splitRetryPackResult{}, fmt.Errorf(
+					"split-retry chunk %d: %w",
+					index,
+					ErrNilEmbeddingVector,
+				)
 			}
+
 			packResult.keptChunks = append(packResult.keptChunks, chunkPack[index])
 			packResult.keptVectors = append(packResult.keptVectors, vector)
 			continue
 		}
+
 		if shouldSplitRejectedChunk(chunkPack[index], skip, activeModelMaxTokens) {
-			packResult.retryChunks = append(packResult.retryChunks, splitChunkInHalf(chunkPack[index])...)
+			packResult.retryChunks = append(
+				packResult.retryChunks,
+				splitChunkInHalf(chunkPack[index])...,
+			)
 			continue
 		}
+
 		logRejectedDrop(ctx, chunkPack[index], skip, activeModelMaxTokens, retryRound)
 		packResult.droppedInput++
 	}
+
 	return packResult, nil
 }
 
-func shouldSplitRejectedChunk(chunk model.StoredChunk, skip embedding.SkippedInput, activeModelMaxTokens int) bool {
+func shouldSplitRejectedChunk(
+	chunk model.StoredChunk,
+	skip embedding.SkippedInput,
+	activeModelMaxTokens int,
+) bool {
 	if skip.Reason != contextLengthExceededReason {
 		return false
 	}
+
 	if isIndivisibleContent(chunk.Content) {
 		return false
 	}
+
 	byteFloor, hasContentCapacity := splitRetryContentByteFloor(
 		skip.MaxTokens,
 		activeModelMaxTokens,
@@ -139,9 +210,11 @@ func shouldSplitRejectedChunk(chunk model.StoredChunk, skip embedding.SkippedInp
 	if !hasContentCapacity {
 		return false
 	}
+
 	if len(chunk.Content) <= byteFloor {
 		return false
 	}
+
 	return true
 }
 
@@ -149,11 +222,15 @@ func shouldSplitRejectedChunk(chunk model.StoredChunk, skip embedding.SkippedInp
 // size where another split cannot be assumed to help. A limit no larger than the
 // special-token margin has no content capacity, so the caller drops the rejected
 // input whole.
-func splitRetryContentByteFloor(reportedMaxTokens adapterr.EmbedFigure, activeModelMaxTokens int) (int, bool) {
+func splitRetryContentByteFloor(
+	reportedMaxTokens adapterr.EmbedFigure,
+	activeModelMaxTokens int,
+) (int, bool) {
 	modelMaxTokens := splitRetryModelMaxTokens(reportedMaxTokens, activeModelMaxTokens)
 	if modelMaxTokens <= splitRetrySpecialTokenMargin {
 		return 0, false
 	}
+
 	return modelMaxTokens - splitRetrySpecialTokenMargin, true
 }
 
@@ -166,23 +243,34 @@ func splitRetryContentByteFloor(reportedMaxTokens adapterr.EmbedFigure, activeMo
 // never reported, and a negative one no limit could take, both fall back to the
 // active model's limit, and then to the smallest limit any known embedding model
 // accepts when the caller passes no usable limit either.
-func splitRetryModelMaxTokens(reportedMaxTokens adapterr.EmbedFigure, activeModelMaxTokens int) int {
+func splitRetryModelMaxTokens(
+	reportedMaxTokens adapterr.EmbedFigure,
+	activeModelMaxTokens int,
+) int {
 	if reportedMaxTokens.Reported && reportedMaxTokens.Value >= 0 {
 		return reportedMaxTokens.Value
 	}
+
 	if activeModelMaxTokens > 0 {
 		return activeModelMaxTokens
 	}
+
 	return config.MinimumKnownEmbedModelInputTokenLimit
 }
 
-func rejectedDropKind(chunk model.StoredChunk, skip embedding.SkippedInput, activeModelMaxTokens int) string {
+func rejectedDropKind(
+	chunk model.StoredChunk,
+	skip embedding.SkippedInput,
+	activeModelMaxTokens int,
+) string {
 	if skip.Reason != contextLengthExceededReason {
 		return "unexpected_reason"
 	}
+
 	if isIndivisibleContent(chunk.Content) {
 		return "indivisible"
 	}
+
 	byteFloor, hasContentCapacity := splitRetryContentByteFloor(
 		skip.MaxTokens,
 		activeModelMaxTokens,
@@ -190,26 +278,44 @@ func rejectedDropKind(chunk model.StoredChunk, skip embedding.SkippedInput, acti
 	if !hasContentCapacity {
 		return "no_content_capacity"
 	}
+
 	if len(chunk.Content) <= byteFloor {
 		return "below_token_floor"
 	}
+
 	return "unknown"
 }
 
-func logRejectedDrop(ctx context.Context, chunk model.StoredChunk, skip embedding.SkippedInput, activeModelMaxTokens int, retryRound int) {
+func logRejectedDrop(
+	ctx context.Context,
+	chunk model.StoredChunk,
+	skip embedding.SkippedInput,
+	activeModelMaxTokens int,
+	retryRound int,
+) {
 	byteFloor, _ := splitRetryContentByteFloor(skip.MaxTokens, activeModelMaxTokens)
 	slog.WarnContext(
 		ctx,
 		"semantic.embed_input_dropped",
-		"drop_kind", rejectedDropKind(chunk, skip, activeModelMaxTokens),
-		"reason", skip.Reason,
-		"relative_path", chunk.RelativePath,
-		"estimated_tokens", estimatedTokenCount(chunk.Content),
-		"content_bytes", len(chunk.Content),
-		"model_max_tokens", skip.MaxTokens,
-		"active_model_max_tokens", activeModelMaxTokens,
-		"content_byte_floor", byteFloor,
-		"reported_tokens", skip.ReportedTokens,
-		"retry_round", retryRound,
+		"drop_kind",
+		rejectedDropKind(chunk, skip, activeModelMaxTokens),
+		"reason",
+		skip.Reason,
+		"relative_path",
+		chunk.RelativePath,
+		"estimated_tokens",
+		estimatedTokenCount(chunk.Content),
+		"content_bytes",
+		len(chunk.Content),
+		"model_max_tokens",
+		skip.MaxTokens,
+		"active_model_max_tokens",
+		activeModelMaxTokens,
+		"content_byte_floor",
+		byteFloor,
+		"reported_tokens",
+		skip.ReportedTokens,
+		"retry_round",
+		retryRound,
 	)
 }

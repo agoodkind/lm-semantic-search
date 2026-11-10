@@ -68,17 +68,26 @@ func NewWithResidencySnapshot(
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	mux.Handle("/debug/vars", expvar.Handler())
 	if provider != nil {
-		mux.HandleFunc("/debug/residency", func(writer http.ResponseWriter, _ *http.Request) {
-			body, snapshotErr := provider()
-			if snapshotErr != nil {
-				http.Error(writer, "residency snapshot unavailable", http.StatusInternalServerError)
-				return
-			}
-			writer.Header().Set("Content-Type", "application/json")
-			if _, writeErr := writer.Write(body); writeErr != nil {
-				slog.Warn("debugserver: write residency snapshot failed", "err", writeErr)
-			}
-		})
+		mux.HandleFunc(
+			"/debug/residency",
+			func(writer http.ResponseWriter, _ *http.Request) {
+				body, snapshotErr := provider()
+				if snapshotErr != nil {
+					http.Error(
+						writer,
+						"residency snapshot unavailable",
+						http.StatusInternalServerError,
+					)
+
+					return
+				}
+
+				writer.Header().Set("Content-Type", "application/json")
+				if _, writeErr := writer.Write(body); writeErr != nil {
+					slog.Warn("debugserver: write residency snapshot failed", "err", writeErr)
+				}
+			},
+		)
 	}
 
 	return &Server{
@@ -97,15 +106,22 @@ func (server *Server) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("debugserver: listen on %q: %w", server.addr, err)
 	}
+
 	server.addr = listener.Addr().String()
 
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(ctx, "debugserver goroutine panic", "err", fmt.Errorf("panic: %v", recovered))
+				slog.ErrorContext(
+					ctx,
+					"debugserver goroutine panic",
+					"err",
+					fmt.Errorf("panic: %v", recovered),
+				)
 			}
 		}()
-		if serveErr := server.httpServer.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		if serveErr := server.httpServer.Serve(listener); serveErr != nil &&
+			!errors.Is(serveErr, http.ErrServerClosed) {
 			slog.ErrorContext(ctx, "debugserver serve failed", "addr", server.addr, "err", serveErr)
 		}
 	}()
@@ -119,6 +135,7 @@ func (server *Server) Shutdown(ctx context.Context) error {
 		slog.ErrorContext(ctx, "debugserver: shutdown failed", "addr", server.addr, "err", err)
 		return fmt.Errorf("debugserver: shutdown: %w", err)
 	}
+
 	return nil
 }
 

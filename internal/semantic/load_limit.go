@@ -33,6 +33,7 @@ func newCollectionLoadLimiter(limit int) *collectionLoadLimiter {
 	if limit < 1 {
 		limit = defaultMaxConcurrentCollectionLoads
 	}
+
 	return &collectionLoadLimiter{limit: limit, slots: make(chan struct{}, limit)}
 }
 
@@ -54,32 +55,55 @@ func (limiter *collectionLoadLimiter) acquire(
 	}
 
 	startedAt := clock.Now()
-	slog.InfoContext(ctx, "semantic.collection_load_slot_wait",
-		"component", "semantic",
-		"subcomponent", "load",
-		"collection", collectionName,
-		"limit", limiter.limit,
+	slog.InfoContext(
+		ctx,
+		"semantic.collection_load_slot_wait",
+		"component",
+		"semantic",
+		"subcomponent",
+		"load",
+		"collection",
+		collectionName,
+		"limit",
+		limiter.limit,
 	)
 	select {
 	case limiter.slots <- struct{}{}:
-		slog.InfoContext(ctx, "semantic.collection_load_slot_acquired",
-			"component", "semantic",
-			"subcomponent", "load",
-			"collection", collectionName,
-			"limit", limiter.limit,
-			"waited_ms", clock.Now().Sub(startedAt).Milliseconds(),
+		slog.InfoContext(
+			ctx,
+			"semantic.collection_load_slot_acquired",
+			"component",
+			"semantic",
+			"subcomponent",
+			"load",
+			"collection",
+			collectionName,
+			"limit",
+			limiter.limit,
+			"waited_ms",
+			clock.Now().Sub(startedAt).Milliseconds(),
 		)
+
 		return limiter.releaseFunc(), nil
 	case <-ctx.Done():
 		err := fmt.Errorf("wait for a collection load slot for %s: %w", collectionName, ctx.Err())
-		slog.WarnContext(ctx, "semantic.collection_load_slot_wait_cancelled",
-			"component", "semantic",
-			"subcomponent", "load",
-			"collection", collectionName,
-			"limit", limiter.limit,
-			"waited_ms", clock.Now().Sub(startedAt).Milliseconds(),
-			"err", err,
+		slog.WarnContext(
+			ctx,
+			"semantic.collection_load_slot_wait_cancelled",
+			"component",
+			"semantic",
+			"subcomponent",
+			"load",
+			"collection",
+			collectionName,
+			"limit",
+			limiter.limit,
+			"waited_ms",
+			clock.Now().Sub(startedAt).Milliseconds(),
+			"err",
+			err,
 		)
+
 		return nil, err
 	}
 }
@@ -88,6 +112,7 @@ func (limiter *collectionLoadLimiter) acquire(
 // call and an explicit call cannot hand out a slot that was never taken.
 func (limiter *collectionLoadLimiter) releaseFunc() func() {
 	var once sync.Once
+
 	return func() {
 		once.Do(func() {
 			<-limiter.slots

@@ -267,6 +267,8 @@ message Codebase {
   // worktree_reuse_unavailable_reason contains no_source_recorded, source_not_registered, source_not_indexed, or source_embedding_configuration_differs.
   // The field is empty when a source is selected or when the codebase records no source and is not discovered.
   string worktree_reuse_unavailable_reason = 24;
+  // Explicit cancellation pauses automatic indexing until an index or sync request.
+  bool auto_indexing_paused = 25;
 }
 
 message Job {

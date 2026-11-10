@@ -22,6 +22,7 @@ func TestEnsureRemovesPartialFileOnChecksumMismatch(t *testing.T) {
 	if !errors.Is(err, modeldownload.ErrUnavailable) {
 		t.Fatalf("Ensure err = %v, want ErrUnavailable", err)
 	}
+
 	assertAbsent(t, run.partialPath)
 	assertAbsent(t, run.destinationPath)
 	if requestCount := len(fixture.ranges()); requestCount != 1 {
@@ -32,17 +33,25 @@ func TestEnsureRemovesPartialFileOnChecksumMismatch(t *testing.T) {
 func TestEnsureSendsNoRequestForInstalledArtifact(t *testing.T) {
 	fixture := newArtifactServer(t)
 	run := newDownloadRun(t)
-	if err := modeldownload.Ensure(context.Background(), run.request(fixture, fixture.sha256())); err != nil {
+	if err := modeldownload.Ensure(
+		context.Background(),
+		run.request(fixture, fixture.sha256()),
+	); err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
+
 	requestsAfterInstall := len(fixture.ranges())
 
-	if err := modeldownload.Ensure(context.Background(), run.request(fixture, fixture.sha256())); err != nil {
+	if err := modeldownload.Ensure(
+		context.Background(),
+		run.request(fixture, fixture.sha256()),
+	); err != nil {
 		t.Fatalf("Ensure on installed artifact: %v", err)
 	}
 
 	if requestCount := len(fixture.ranges()); requestCount != requestsAfterInstall {
 		t.Fatalf("requests = %d, want %d", requestCount, requestsAfterInstall)
 	}
+
 	assertInstalled(t, run, fixture)
 }

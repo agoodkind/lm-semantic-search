@@ -41,6 +41,7 @@ func (manager *Manager) ignoreOverridesFromRegistry(codebaseID string) []string 
 	if !found {
 		return nil
 	}
+
 	return slices.Clone(codebase.EffectiveConfig.IgnorePatterns)
 }
 
@@ -51,6 +52,7 @@ func (manager *Manager) submoduleAllowlistFromRegistry(codebaseID string) []stri
 	if !found {
 		return nil
 	}
+
 	return slices.Clone(codebase.EffectiveConfig.IncludeSubmodules)
 }
 
@@ -65,6 +67,7 @@ func (manager *Manager) legacyDigestForCodebase(codebaseID string) string {
 	if !found {
 		return ""
 	}
+
 	return digestIndexConfig(codebase.EffectiveConfig)
 }
 
@@ -81,7 +84,9 @@ func digestIndexConfig(indexConfig model.IndexConfig) string {
 		digest := sha256.Sum256([]byte(hashable.SplitterType))
 		return "sha256:" + hex.EncodeToString(digest[:])
 	}
+
 	digest := sha256.Sum256(digestBytes)
+
 	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
@@ -97,9 +102,11 @@ func (manager *Manager) reportedVectorBackend() model.VectorBackend {
 	if manager.semantic != nil {
 		return manager.semantic.BackendName()
 	}
+
 	if manager.config.IndexBackend == "" {
 		return config.IndexBackendMilvus
 	}
+
 	return manager.config.IndexBackend
 }
 
@@ -123,6 +130,7 @@ func (manager *Manager) reportedEmbeddingProvider() model.EmbeddingProvider {
 			return built
 		}
 	}
+
 	return manager.config.EmbeddingProvider
 }
 
@@ -130,21 +138,32 @@ func (manager *Manager) enrichIndexConfig(indexConfig model.IndexConfig) model.I
 	if strings.TrimSpace(indexConfig.SplitterType) == "" {
 		indexConfig.SplitterType = "ast"
 	}
+
 	if indexConfig.SplitterChunkSize == 0 {
 		indexConfig.SplitterChunkSize = 2500
 	}
+
 	if indexConfig.SplitterOverlap == 0 {
 		indexConfig.SplitterOverlap = 300
 	}
+
 	indexConfig.EmbeddingProvider = manager.reportedEmbeddingProvider()
 	indexConfig.EmbeddingModel = manager.config.EmbeddingModel
 	if manager.config.EmbeddingDimension > 0 {
 		indexConfig.EmbeddingDimension = manager.config.EmbeddingDimension
 	}
+
 	indexConfig.VectorBackend = manager.reportedVectorBackend()
 	indexConfig.Hybrid = manager.config.HybridMode
-	indexConfig.IgnorePatterns = mergeDistinct(indexConfig.IgnorePatterns, manager.config.CustomIgnorePatterns)
-	indexConfig.IncludeSubmodules = mergeNormalizedSubmodules(indexConfig.IncludeSubmodules, manager.config.IncludeSubmodules)
+	indexConfig.IgnorePatterns = mergeDistinct(
+		indexConfig.IgnorePatterns,
+		manager.config.CustomIgnorePatterns,
+	)
+	indexConfig.IncludeSubmodules = mergeNormalizedSubmodules(
+		indexConfig.IncludeSubmodules,
+		manager.config.IncludeSubmodules,
+	)
+
 	return indexConfig
 }
 
@@ -154,22 +173,28 @@ func mergeDistinct(base []string, extras []string) []string {
 	if len(extras) == 0 {
 		return base
 	}
+
 	seen := make(map[string]struct{}, len(base)+len(extras))
+
 	out := make([]string, 0, len(base)+len(extras))
 	for _, value := range base {
 		if _, exists := seen[value]; exists {
 			continue
 		}
+
 		seen[value] = struct{}{}
 		out = append(out, value)
 	}
+
 	for _, value := range extras {
 		if _, exists := seen[value]; exists {
 			continue
 		}
+
 		seen[value] = struct{}{}
 		out = append(out, value)
 	}
+
 	return out
 }
 
@@ -184,13 +209,17 @@ func normalizeSubmoduleList(values []string) []string {
 		if trimmed == "" || trimmed == "." {
 			continue
 		}
+
 		cleanedNative := filepath.Clean(filepath.FromSlash(trimmed))
 		cleaned := filepath.ToSlash(cleanedNative)
-		if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || filepath.IsAbs(cleanedNative) {
+		if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") ||
+			filepath.IsAbs(cleanedNative) {
 			continue
 		}
+
 		normalized = append(normalized, cleaned)
 	}
+
 	return normalized
 }
 
@@ -211,5 +240,6 @@ func newID(prefix string) string {
 	if _, err := rand.Read(randomBytes); err != nil {
 		return fmt.Sprintf("%s_%d", prefix, clock.Now().UnixNano())
 	}
+
 	return fmt.Sprintf("%s_%d_%s", prefix, clock.Now().Unix(), hex.EncodeToString(randomBytes))
 }

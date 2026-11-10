@@ -41,6 +41,7 @@ func TestWatchParentDeathExitsWhenReparented(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Watch did not cancel run context after parent-death signal")
 	}
+
 	<-done
 }
 

@@ -53,8 +53,10 @@ func buildReuseRowIndex(rows []row) map[string]int {
 		if key == "" {
 			key = semantic.ContentVectorKey(candidate.Content)
 		}
+
 		reuseRows[key] = rowIndex
 	}
+
 	return reuseRows
 }
 
@@ -66,20 +68,24 @@ func (stored *collection) reuseVectorsForKeys(
 	if err := stored.loadLocked(); err != nil {
 		return nil, err
 	}
+
 	reuse := make(map[string]model.ReuseVector, len(keys))
 	if !stored.exists {
 		return reuse, nil
 	}
+
 	for key := range keys {
 		rowIndex, found := stored.reuseRows[key]
 		if !found {
 			continue
 		}
+
 		reuse[key] = model.ReuseVector{
 			Vector:           append([]float32(nil), stored.rows[rowIndex].Vector...),
 			SourceModelKnown: false,
 		}
 	}
+
 	return reuse, nil
 }
 
@@ -89,6 +95,7 @@ func (stored *collection) snapshot() ([]row, bool, error) {
 	if err := stored.loadLocked(); err != nil {
 		return nil, false, err
 	}
+
 	return cloneRows(stored.rows), stored.exists, nil
 }
 
@@ -98,6 +105,7 @@ func (stored *collection) rowCount() (int32, bool, error) {
 	if err := stored.loadLocked(); err != nil {
 		return 0, false, err
 	}
+
 	return safeInt32(len(stored.rows)), stored.exists, nil
 }
 
@@ -107,9 +115,11 @@ func (stored *collection) vectorCount() (int, bool, error) {
 	if err := stored.loadLocked(); err != nil {
 		return 0, false, err
 	}
+
 	if !stored.exists {
 		return 0, false, nil
 	}
+
 	return stored.index.Size(), true, nil
 }
 
@@ -122,9 +132,11 @@ func (stored *collection) nearest(
 	if err := stored.loadLocked(); err != nil {
 		return nil, nil, false, err
 	}
+
 	if !stored.exists {
 		return nil, nil, false, nil
 	}
+
 	keys, distances, err := stored.index.Search(vector, count)
 	if err != nil {
 		slog.Error(
@@ -136,16 +148,19 @@ func (stored *collection) nearest(
 			"err",
 			err,
 		)
+
 		return nil, nil, true, fmt.Errorf(
 			"search vector index for local vector collection %s: %w",
 			stored.name,
 			err,
 		)
 	}
+
 	rowsByLabel := make(map[uint64]row, len(stored.rows))
 	for _, candidate := range stored.rows {
 		rowsByLabel[candidate.Label] = candidate
 	}
+
 	rows := make([]row, 0, len(keys))
 	for _, key := range keys {
 		candidate, found := rowsByLabel[key]
@@ -156,8 +171,10 @@ func (stored *collection) nearest(
 				stored.name,
 			)
 		}
+
 		rows = append(rows, candidate)
 	}
+
 	return cloneRows(rows), append([]float32(nil), distances...), true, nil
 }
 
@@ -171,27 +188,34 @@ func (stored *collection) mutate(
 	if err := stored.loadLocked(); err != nil {
 		return err
 	}
+
 	if requireExisting && !stored.exists {
 		return semantic.ErrCollectionMissing
 	}
+
 	if !stored.exists && len(added) == 0 {
 		return nil
 	}
 
 	kept, _ := removeRows(stored.rows, removal)
+
 	addedIDs := make(map[string]struct{}, len(added))
 	for _, candidate := range added {
 		addedIDs[candidate.ID] = struct{}{}
 	}
+
 	withoutReplaced := make([]row, 0, len(kept))
 	for _, candidate := range kept {
 		if _, found := addedIDs[candidate.ID]; found {
 			continue
 		}
+
 		withoutReplaced = append(withoutReplaced, candidate)
 	}
+
 	rewritten := cloneRows(withoutReplaced)
 	rewritten = append(rewritten, cloneRows(added)...)
+
 	return stored.persistLocked(rewritten)
 }
 
@@ -204,16 +228,20 @@ func (stored *collection) rewrite(
 	if err := stored.loadLocked(); err != nil {
 		return err
 	}
+
 	if requireExisting && !stored.exists {
 		return semantic.ErrCollectionMissing
 	}
+
 	if !stored.exists {
 		return nil
 	}
+
 	rewritten, err := transform(cloneRows(stored.rows))
 	if err != nil {
 		return err
 	}
+
 	return stored.persistLocked(rewritten)
 }
 
@@ -224,6 +252,7 @@ func (stored *collection) drop() error {
 		stored.index.Close()
 		stored.index = nil
 	}
+
 	if err := os.RemoveAll(stored.path); err != nil {
 		slog.Error(
 			"remove local vector collection failed",
@@ -234,13 +263,16 @@ func (stored *collection) drop() error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("remove local vector collection %s: %w", stored.path, err)
 	}
+
 	stored.rows = nil
 	stored.reuseRows = nil
 	stored.dimensions = 0
 	stored.loaded = true
 	stored.exists = false
+
 	return nil
 }
 
@@ -248,22 +280,21 @@ func (stored *collection) loadLocked() error {
 	if stored.loaded {
 		return nil
 	}
+
 	info, err := os.Stat(stored.path)
 	if errors.Is(err, os.ErrNotExist) {
 		stored.loaded = true
 		stored.exists = false
+
 		return nil
 	}
+
 	if err != nil {
-		slog.Error(
-			"inspect local vector collection failed",
-			"path",
-			stored.path,
-			"err",
-			err,
-		)
+		slog.Error("inspect local vector collection failed", "path", stored.path, "err", err)
+
 		return fmt.Errorf("inspect local vector collection %s: %w", stored.path, err)
 	}
+
 	if !info.IsDir() {
 		return fmt.Errorf("local vector collection %s is not a directory", stored.path)
 	}
@@ -273,35 +304,45 @@ func (stored *collection) loadLocked() error {
 	if err != nil {
 		return err
 	}
+
 	if !metadataExists {
 		return fmt.Errorf("local vector collection %s has no metadata sidecar", stored.name)
 	}
+
 	if err := assignLabels(rows); err != nil {
 		return err
 	}
+
 	if healed {
 		if err := rewriteRows(metadataPath, rows); err != nil {
 			return err
 		}
 	}
+
 	dimensions, err := vectorDimensions(rows)
 	if err != nil {
 		return err
 	}
+
 	if dimensions == 0 {
 		dimensions = 1
 	}
+
 	indexPath := filepath.Join(stored.path, indexFileName)
-	vectorIndex, indexDimensions, err := readVectorIndex(
-		stored.name,
-		indexPath,
-		rows,
-		dimensions,
-	)
+	vectorIndex, indexDimensions, err := readVectorIndex(stored.name, indexPath, rows, dimensions)
 	if errors.Is(err, errIndexRowsMismatch) {
-		slog.Warn("rebuilding local vector index from the row file", "collection", stored.name, "rows", len(rows), "err", err)
+		slog.Warn(
+			"rebuilding local vector index from the row file",
+			"collection",
+			stored.name,
+			"rows",
+			len(rows),
+			"err",
+			err,
+		)
 		vectorIndex, indexDimensions, err = stored.rebuildIndexLocked(rows, dimensions)
 	}
+
 	if err != nil {
 		slog.Error(
 			"load local vector index failed",
@@ -312,14 +353,17 @@ func (stored *collection) loadLocked() error {
 			"err",
 			err,
 		)
+
 		return err
 	}
+
 	stored.rows = rows
 	stored.reuseRows = buildReuseRowIndex(rows)
 	stored.index = vectorIndex
 	stored.dimensions = indexDimensions
 	stored.exists = true
 	stored.loaded = true
+
 	return nil
 }
 
@@ -331,8 +375,14 @@ func readVectorIndex(
 ) (*vectorindex.Index, int, error) {
 	vectorIndex, err := vectorindex.Load(indexPath)
 	if errors.Is(err, vectorindex.ErrFormat) && len(rows) > 0 {
-		return nil, 0, fmt.Errorf("local vector collection %s: %w: %w", collectionName, errIndexRowsMismatch, err)
+		return nil, 0, fmt.Errorf(
+			"local vector collection %s: %w: %w",
+			collectionName,
+			errIndexRowsMismatch,
+			err,
+		)
 	}
+
 	if err != nil {
 		slog.Error(
 			"load local vector index failed",
@@ -343,21 +393,26 @@ func readVectorIndex(
 			"err",
 			err,
 		)
+
 		return nil, 0, fmt.Errorf("load local vector index %s: %w", indexPath, err)
 	}
+
 	indexDimensions := vectorIndex.Dimensions()
 	if len(rows) > 0 && dimensions != indexDimensions {
 		vectorIndex.Close()
+
 		return nil, 0, fmt.Errorf(
 			"local vector metadata has %d dimensions, index has %d",
 			dimensions,
 			indexDimensions,
 		)
 	}
+
 	if err := validateVectorIndexRows(collectionName, rows, vectorIndex); err != nil {
 		vectorIndex.Close()
 		return nil, 0, err
 	}
+
 	return vectorIndex, indexDimensions, nil
 }
 
@@ -367,7 +422,16 @@ func validateVectorIndexRows(
 	vectorIndex *vectorindex.Index,
 ) error {
 	if size := vectorIndex.Size(); size != len(rows) {
-		slog.Warn("local vector index size differs from the row file", "collection", collectionName, "rows", len(rows), "indexed", size)
+		slog.Warn(
+			"local vector index size differs from the row file",
+			"collection",
+			collectionName,
+			"rows",
+			len(rows),
+			"indexed",
+			size,
+		)
+
 		return fmt.Errorf(
 			"local vector collection %s has %d metadata rows and %d indexed vectors: %w",
 			collectionName,
@@ -376,9 +440,17 @@ func validateVectorIndexRows(
 			errIndexRowsMismatch,
 		)
 	}
+
 	for _, candidate := range rows {
 		if !vectorIndex.Contains(candidate.Label) {
-			slog.Warn("local vector index lacks a row label", "collection", collectionName, "label", candidate.Label)
+			slog.Warn(
+				"local vector index lacks a row label",
+				"collection",
+				collectionName,
+				"label",
+				candidate.Label,
+			)
+
 			return fmt.Errorf(
 				"local vector index %s is missing label %d: %w",
 				collectionName,
@@ -387,6 +459,7 @@ func validateVectorIndexRows(
 			)
 		}
 	}
+
 	return nil
 }
 
@@ -395,30 +468,33 @@ func (stored *collection) persistLocked(rows []row) error {
 	if err := assignLabels(rewritten); err != nil {
 		return err
 	}
-	sort.Slice(rewritten, func(left int, right int) bool {
-		return rewritten[left].Label < rewritten[right].Label
-	})
+
+	sort.Slice(
+		rewritten,
+		func(left int, right int) bool {
+			return rewritten[left].Label < rewritten[right].Label
+		},
+	)
 	dimensions, err := vectorDimensions(rewritten)
 	if err != nil {
 		return err
 	}
+
 	if dimensions == 0 {
 		dimensions = stored.dimensions
 	}
+
 	if dimensions == 0 {
 		return errors.New("cannot persist an empty local vector collection without dimensions")
 	}
+
 	vectorIndex, err := buildVectorIndex(rewritten, dimensions)
 	if err != nil {
-		slog.Error(
-			"build local vector index failed",
-			"collection",
-			stored.name,
-			"err",
-			err,
-		)
+		slog.Error("build local vector index failed", "collection", stored.name, "err", err)
+
 		return err
 	}
+
 	tempPath, err := writeCollectionDirectory(stored.path, rewritten, vectorIndex)
 	if err != nil {
 		vectorIndex.Close()
@@ -431,8 +507,10 @@ func (stored *collection) persistLocked(rows []row) error {
 			"err",
 			err,
 		)
+
 		return err
 	}
+
 	if err := replaceCollectionDirectory(tempPath, stored.path); err != nil {
 		vectorIndex.Close()
 		_ = os.RemoveAll(tempPath)
@@ -445,17 +523,21 @@ func (stored *collection) persistLocked(rows []row) error {
 			"err",
 			err,
 		)
+
 		return err
 	}
+
 	if stored.index != nil {
 		stored.index.Close()
 	}
+
 	stored.rows = rewritten
 	stored.reuseRows = buildReuseRowIndex(rewritten)
 	stored.index = vectorIndex
 	stored.dimensions = dimensions
 	stored.exists = true
 	stored.loaded = true
+
 	return nil
 }
 
@@ -465,6 +547,7 @@ func buildVectorIndex(rows []row, dimensions int) (*vectorindex.Index, error) {
 		slog.Error("create vector index failed", "dimensions", dimensions, "err", err)
 		return nil, fmt.Errorf("create vector index for local vectors: %w", err)
 	}
+
 	for _, candidate := range rows {
 		if err := vectorIndex.Add(candidate.Label, candidate.Vector); err != nil {
 			vectorIndex.Close()
@@ -477,13 +560,11 @@ func buildVectorIndex(rows []row, dimensions int) (*vectorindex.Index, error) {
 				"err",
 				err,
 			)
-			return nil, fmt.Errorf(
-				"add local vector row %s to vector index: %w",
-				candidate.ID,
-				err,
-			)
+
+			return nil, fmt.Errorf("add local vector row %s to vector index: %w", candidate.ID, err)
 		}
 	}
+
 	return vectorIndex, nil
 }
 
@@ -495,15 +576,11 @@ func writeCollectionDirectory(
 	parent := filepath.Dir(destination)
 	tempPath, err := os.MkdirTemp(parent, "."+filepath.Base(destination)+".write-*")
 	if err != nil {
-		slog.Error(
-			"create local vector staging directory failed",
-			"path",
-			destination,
-			"err",
-			err,
-		)
+		slog.Error("create local vector staging directory failed", "path", destination, "err", err)
+
 		return "", fmt.Errorf("create local vector staging directory: %w", err)
 	}
+
 	removeTemp := true
 	defer func() {
 		if removeTemp {
@@ -515,14 +592,18 @@ func writeCollectionDirectory(
 		slog.Error("save local vector index failed", "path", indexPath, "err", err)
 		return "", fmt.Errorf("save local vector index %s: %w", indexPath, err)
 	}
+
 	if err := os.Chmod(indexPath, 0o600); err != nil {
 		slog.Error("set local vector index permissions failed", "path", indexPath, "err", err)
 		return "", fmt.Errorf("set local vector index permissions: %w", err)
 	}
+
 	if err := rewriteRows(filepath.Join(tempPath, metadataFileName), rows); err != nil {
 		return "", err
 	}
+
 	removeTemp = false
+
 	return tempPath, nil
 }
 
@@ -530,6 +611,7 @@ func replaceCollectionDirectory(source string, destination string) error {
 	if err := recoverCollectionDirectory(destination); err != nil {
 		return err
 	}
+
 	_, err := os.Stat(destination)
 	if errors.Is(err, os.ErrNotExist) {
 		if renameErr := os.Rename(source, destination); renameErr != nil {
@@ -542,10 +624,13 @@ func replaceCollectionDirectory(source string, destination string) error {
 				"err",
 				renameErr,
 			)
+
 			return fmt.Errorf("install local vector collection %s: %w", destination, renameErr)
 		}
+
 		return nil
 	}
+
 	if err != nil {
 		slog.Error(
 			"inspect local vector collection before replacement failed",
@@ -554,6 +639,7 @@ func replaceCollectionDirectory(source string, destination string) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("inspect local vector collection %s: %w", destination, err)
 	}
 
@@ -568,8 +654,10 @@ func replaceCollectionDirectory(source string, destination string) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("backup local vector collection %s: %w", destination, err)
 	}
+
 	if err := os.Rename(source, destination); err != nil {
 		if rollbackErr := os.Rename(backupPath, destination); rollbackErr != nil {
 			combinedErr := fmt.Errorf(
@@ -592,8 +680,10 @@ func replaceCollectionDirectory(source string, destination string) error {
 				"err",
 				combinedErr,
 			)
+
 			return combinedErr
 		}
+
 		slog.Error(
 			"install local vector collection failed",
 			"source",
@@ -603,17 +693,14 @@ func replaceCollectionDirectory(source string, destination string) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("install local vector collection %s: %w", destination, err)
 	}
+
 	if err := os.RemoveAll(backupPath); err != nil {
-		slog.Warn(
-			"remove local vector backup directory failed",
-			"path",
-			backupPath,
-			"err",
-			err,
-		)
+		slog.Warn("remove local vector backup directory failed", "path", backupPath, "err", err)
 	}
+
 	return nil
 }
 
@@ -627,6 +714,7 @@ func recoverCollectionDirectory(collectionPath string) error {
 			"err",
 			collectionErr,
 		)
+
 		return fmt.Errorf(
 			"inspect local vector collection %s for recovery: %w",
 			collectionPath,
@@ -639,6 +727,7 @@ func recoverCollectionDirectory(collectionPath string) error {
 	if errors.Is(backupErr, os.ErrNotExist) {
 		return nil
 	}
+
 	if backupErr != nil {
 		slog.Error(
 			"inspect local vector collection backup failed",
@@ -647,8 +736,10 @@ func recoverCollectionDirectory(collectionPath string) error {
 			"err",
 			backupErr,
 		)
+
 		return fmt.Errorf("inspect local vector collection backup %s: %w", backupPath, backupErr)
 	}
+
 	if !backupInfo.IsDir() {
 		return fmt.Errorf("local vector collection backup %s is not a directory", backupPath)
 	}
@@ -664,17 +755,17 @@ func recoverCollectionDirectory(collectionPath string) error {
 				"err",
 				err,
 			)
-			return fmt.Errorf(
-				"restore local vector collection backup %s: %w",
-				backupPath,
-				err,
-			)
+
+			return fmt.Errorf("restore local vector collection backup %s: %w", backupPath, err)
 		}
+
 		return nil
 	}
+
 	if !collectionInfo.IsDir() {
 		return fmt.Errorf("local vector collection %s is not a directory", collectionPath)
 	}
+
 	if err := os.RemoveAll(backupPath); err != nil {
 		slog.Error(
 			"remove stale local vector collection backup failed",
@@ -683,8 +774,10 @@ func recoverCollectionDirectory(collectionPath string) error {
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("remove stale local vector collection backup %s: %w", backupPath, err)
 	}
+
 	return nil
 }
 
@@ -692,29 +785,36 @@ func removeRows(rows []row, removal semantic.Removal) ([]row, bool) {
 	if removal.Empty() {
 		return cloneRows(rows), false
 	}
+
 	paths := make(map[string]struct{}, len(removal.Paths))
 	for _, relativePath := range removal.Paths {
 		paths[relativePath] = struct{}{}
 	}
+
 	itemIDs := make(map[string]struct{}, len(removal.ItemIDs))
 	for _, itemID := range removal.ItemIDs {
 		itemIDs[itemID] = struct{}{}
 	}
+
 	kept := make([]row, 0, len(rows))
 	removed := false
+
 	for _, stored := range rows {
 		if _, found := paths[stored.RelativePath]; found {
 			removed = true
 			continue
 		}
+
 		if itemValue, present := stored.itemID(removal.ItemColumn); present {
 			if _, found := itemIDs[itemValue]; found {
 				removed = true
 				continue
 			}
 		}
+
 		kept = append(kept, stored)
 	}
+
 	return kept, removed
 }
 
@@ -722,8 +822,10 @@ func safeInt32(value int) int32 {
 	if value > math.MaxInt32 {
 		return math.MaxInt32
 	}
+
 	if value < math.MinInt32 {
 		return math.MinInt32
 	}
+
 	return int32(value)
 }

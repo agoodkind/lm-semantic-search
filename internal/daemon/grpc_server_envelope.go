@@ -29,9 +29,11 @@ func (server *GRPCServer) envelopeText(health dependencyHealth, body string) str
 	if banner == "" {
 		return body
 	}
+
 	if strings.TrimSpace(body) == "" {
 		return banner
 	}
+
 	return banner + "\n" + body
 }
 
@@ -44,6 +46,7 @@ func joinBannerLines(banners ...string) string {
 			present = append(present, banner)
 		}
 	}
+
 	return strings.Join(present, "\n")
 }
 
@@ -54,6 +57,7 @@ func resolveMaintenanceView(state model.MaintenanceState, activeJobs int) view.M
 	if state.Enabled && !state.Since.IsZero() {
 		sinceLabel = formatStatusTime(state.Since)
 	}
+
 	return view.MaintenanceView{
 		Enabled:    state.Enabled,
 		Reason:     state.Reason,
@@ -73,6 +77,7 @@ func toMaintenanceStatus(state model.MaintenanceState) *pb.MaintenanceStatus {
 	if !state.Since.IsZero() {
 		result.Since = timestamppb.New(state.Since)
 	}
+
 	return result
 }
 
@@ -83,5 +88,6 @@ func (server *GRPCServer) refuseDuringMaintenance(ctx context.Context) error {
 	if refusal == nil {
 		return nil
 	}
+
 	return status.Error(adapterr.Respond(ctx, refusal))
 }

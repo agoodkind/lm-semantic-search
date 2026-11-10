@@ -53,6 +53,7 @@ func newJobJournalWriter(
 	if len(testCompactionThresholdBytes) > 0 {
 		compactionThresholdBytes = testCompactionThresholdBytes[0]
 	}
+
 	writer := &jobJournalWriter{
 		path:                     path,
 		appendJobEvent:           appendJobEvent,
@@ -75,10 +76,12 @@ func newJobJournalWriter(
 					fmt.Errorf("panic: %v", recovered),
 				)
 			}
+
 			writer.done <- true
 		}()
 		writer.run()
 	}()
+
 	return writer
 }
 
@@ -103,6 +106,7 @@ func (writer *jobJournalWriter) enqueue(event model.JobEvent) error {
 		cap(writer.queue),
 	)
 	writer.queue <- request
+
 	return <-request.result
 }
 
@@ -113,6 +117,7 @@ func (writer *jobJournalWriter) enqueueAndSync(event model.JobEvent) error {
 		result:  make(chan error, 1),
 	}
 	writer.queue <- request
+
 	return <-request.result
 }
 
@@ -122,6 +127,7 @@ func (writer *jobJournalWriter) run() {
 		if err == nil {
 			writer.recordSuccessfulAppend(request.event)
 		}
+
 		if request.result != nil {
 			request.result <- err
 		}
@@ -146,12 +152,15 @@ func (writer *jobJournalWriter) recordSuccessfulAppend(event model.JobEvent) {
 			"err",
 			err,
 		)
+
 		return
 	}
+
 	writer.currentSizeBytes += eventSize
 	if writer.currentSizeBytes < writer.compactionThresholdBytes {
 		return
 	}
+
 	if writer.compactionRetryAtBytes > 0 &&
 		writer.currentSizeBytes < writer.compactionRetryAtBytes {
 		return
@@ -171,8 +180,10 @@ func (writer *jobJournalWriter) recordSuccessfulAppend(event model.JobEvent) {
 			"err",
 			err,
 		)
+
 		return
 	}
+
 	info, err := os.Stat(writer.path)
 	if err != nil {
 		writer.compactionRetryAtBytes = writer.currentSizeBytes +
@@ -188,8 +199,10 @@ func (writer *jobJournalWriter) recordSuccessfulAppend(event model.JobEvent) {
 			"err",
 			err,
 		)
+
 		return
 	}
+
 	writer.currentSizeBytes = info.Size()
 	writer.compactionRetryAtBytes = 0
 }
@@ -201,9 +214,11 @@ func initialJobJournalSize(path string) int64 {
 	if err == nil {
 		return info.Size()
 	}
+
 	if errors.Is(err, os.ErrNotExist) {
 		return 0
 	}
+
 	slog.Error(
 		"stat jobs journal failed",
 		"component",
@@ -215,6 +230,7 @@ func initialJobJournalSize(path string) int64 {
 		"err",
 		err,
 	)
+
 	return 0
 }
 
@@ -239,6 +255,7 @@ func (writer *jobJournalWriter) write(event model.JobEvent, durable bool) (err e
 	if durable {
 		appendJobEvent = writer.appendJobEventSync
 	}
+
 	return appendJobJournalEvent(writer.path, appendJobEvent, event)
 }
 
@@ -267,8 +284,10 @@ func appendJobJournalEvent(
 			"err",
 			wrappedErr,
 		)
+
 		return wrappedErr
 	}
+
 	return nil
 }
 

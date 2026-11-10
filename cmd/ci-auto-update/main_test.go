@@ -21,9 +21,11 @@ func TestSelectReleasesForBranchBuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectReleases() error = %v", err)
 	}
+
 	if selection.target.TagName != releases[0].TagName {
 		t.Fatalf("target = %q, want %q", selection.target.TagName, releases[0].TagName)
 	}
+
 	if selection.previous.TagName != releases[1].TagName {
 		t.Fatalf("previous = %q, want %q", selection.previous.TagName, releases[1].TagName)
 	}
@@ -32,8 +34,14 @@ func TestSelectReleasesForBranchBuild(t *testing.T) {
 func TestSelectReleasesForManualRunUsesLatestRelease(t *testing.T) {
 	t.Parallel()
 	releases := []githubRelease{
-		{TagName: "202608122141-d2-abcdef1", PublishedAt: time.Date(2026, time.August, 12, 21, 41, 0, 0, time.UTC)},
-		{TagName: "202608122028-d1-1234567", PublishedAt: time.Date(2026, time.August, 12, 20, 28, 0, 0, time.UTC)},
+		{
+			TagName:     "202608122141-d2-abcdef1",
+			PublishedAt: time.Date(2026, time.August, 12, 21, 41, 0, 0, time.UTC),
+		},
+		{
+			TagName:     "202608122028-d1-1234567",
+			PublishedAt: time.Date(2026, time.August, 12, 20, 28, 0, 0, time.UTC),
+		},
 	}
 	environment := environment{
 		commit:  "unreleased123456",
@@ -45,9 +53,11 @@ func TestSelectReleasesForManualRunUsesLatestRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectReleases() error = %v", err)
 	}
+
 	if selection.target.TagName != releases[0].TagName {
 		t.Fatalf("target = %q, want %q", selection.target.TagName, releases[0].TagName)
 	}
+
 	if selection.previous.TagName != releases[1].TagName {
 		t.Fatalf("previous = %q, want %q", selection.previous.TagName, releases[1].TagName)
 	}
@@ -68,6 +78,7 @@ func TestLoadEnvironmentDetectsManualRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadEnvironment() error = %v", err)
 	}
+
 	if !environment.manual {
 		t.Fatal("manual = false, want true")
 	}
@@ -86,6 +97,7 @@ func TestSelectReleasesSkipsDrafts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectReleases() error = %v", err)
 	}
+
 	if selection.previous.TagName != releases[2].TagName {
 		t.Fatalf("previous = %q, want %q", selection.previous.TagName, releases[2].TagName)
 	}
@@ -94,8 +106,14 @@ func TestSelectReleasesSkipsDrafts(t *testing.T) {
 func TestSelectReleasesUsesPublishedOrder(t *testing.T) {
 	t.Parallel()
 	releases := []githubRelease{
-		{TagName: "202608122028-d1-1234567", PublishedAt: time.Date(2026, time.August, 12, 20, 28, 0, 0, time.UTC)},
-		{TagName: "202608122141-d2-abcdef1", PublishedAt: time.Date(2026, time.August, 12, 21, 41, 0, 0, time.UTC)},
+		{
+			TagName:     "202608122028-d1-1234567",
+			PublishedAt: time.Date(2026, time.August, 12, 20, 28, 0, 0, time.UTC),
+		},
+		{
+			TagName:     "202608122141-d2-abcdef1",
+			PublishedAt: time.Date(2026, time.August, 12, 21, 41, 0, 0, time.UTC),
+		},
 	}
 	environment := environment{commit: "abcdef1234567890", refType: "branch"}
 
@@ -103,6 +121,7 @@ func TestSelectReleasesUsesPublishedOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectReleases() error = %v", err)
 	}
+
 	if selection.previous.TagName != releases[0].TagName {
 		t.Fatalf("previous = %q, want %q", selection.previous.TagName, releases[0].TagName)
 	}
@@ -114,10 +133,12 @@ func TestStateReportsApplied(t *testing.T) {
 	if err := selfupdate.SaveState(statePath, selfupdate.State{LastResult: "applied"}); err != nil {
 		t.Fatalf("SaveState() error = %v", err)
 	}
+
 	applied, err := stateReportsApplied(statePath)
 	if err != nil {
 		t.Fatalf("stateReportsApplied() error = %v", err)
 	}
+
 	if !applied {
 		t.Fatal("stateReportsApplied() = false, want true")
 	}
@@ -130,6 +151,7 @@ func TestParseVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseVersion() error = %v", err)
 	}
+
 	if got != "202608122141-d2-9504f44" {
 		t.Fatalf("parseVersion() = %q", got)
 	}

@@ -42,7 +42,11 @@ func GetJob(entry view.JobEntryView, found bool) string {
 }
 
 // ListJobs formats active and terminal job entries.
-func ListJobs(summary view.ListSummary, active []view.JobEntryView, terminal []view.JobEntryView) string {
+func ListJobs(
+	summary view.ListSummary,
+	active []view.JobEntryView,
+	terminal []view.JobEntryView,
+) string {
 	return renderListJobs(summary, active, terminal)
 }
 
@@ -75,8 +79,13 @@ func renderStartIndex(startIndex view.StartIndexView) string {
 	// and the codebase, so the plain "resolved to canonical path" line would only
 	// repeat it; it renders only in the ordinary, non-merge case.
 	pathInfo := ""
-	if startIndex.MergeNote == "" && startIndex.RequestedPath != "" && startIndex.RequestedPath != startIndex.CanonicalPath {
-		pathInfo = fmt.Sprintf("\nNote: Input path '%s' was resolved to canonical path '%s'", startIndex.RequestedPath, startIndex.CanonicalPath)
+	if startIndex.MergeNote == "" && startIndex.RequestedPath != "" &&
+		startIndex.RequestedPath != startIndex.CanonicalPath {
+		pathInfo = fmt.Sprintf(
+			"\nNote: Input path '%s' was resolved to canonical path '%s'",
+			startIndex.RequestedPath,
+			startIndex.CanonicalPath,
+		)
 	}
 
 	merge := ""
@@ -86,7 +95,10 @@ func renderStartIndex(startIndex view.StartIndexView) string {
 
 	overlap := ""
 	if startIndex.OverlapsCodebaseID != "" {
-		overlap = fmt.Sprintf("\n⚠️  Overlap: this tree is also covered by codebase %s. Both will index files in the shared subtree independently.", startIndex.OverlapsCodebaseID)
+		overlap = fmt.Sprintf(
+			"\n⚠️  Overlap: this tree is also covered by codebase %s. Both will index files in the shared subtree independently.",
+			startIndex.OverlapsCodebaseID,
+		)
 	}
 
 	return fmt.Sprintf(
@@ -105,13 +117,28 @@ func renderMutationAck(ack view.MutationAckView) string {
 		return fmt.Sprintf("Successfully cleared codebase '%s'", ack.Path)
 	case view.AckCancel:
 		if !ack.AlreadyTerminal {
+			if ack.Path != "" {
+				return fmt.Sprintf(
+					"Canceled indexing job %s. Automatic indexing paused for %s. Run lm-semantic-search codebase sync %q to resume.",
+					ack.JobID,
+					ack.Path,
+					ack.Path,
+				)
+			}
+
 			return "Canceled indexing job " + ack.JobID
 		}
+
 		return fmt.Sprintf("Indexing job %s is already %s", ack.JobID, ack.StateLabel)
 	case view.AckSync:
 		if ack.Deduplicated {
-			return fmt.Sprintf("Sync request deduplicated onto active job %s for '%s'", ack.JobID, ack.Path)
+			return fmt.Sprintf(
+				"Sync request deduplicated onto active job %s for '%s'",
+				ack.JobID,
+				ack.Path,
+			)
 		}
+
 		return fmt.Sprintf("Started sync job %s for '%s'", ack.JobID, ack.Path)
 	case view.AckUpdatePolicy:
 		return fmt.Sprintf("Updated scheduling policy for codebase '%s'", ack.Path)
@@ -145,7 +172,13 @@ func renderMutationAck(ack view.MutationAckView) string {
 			ack.CollectionID,
 		)
 	case view.AckManifest:
-		return fmt.Sprintf("Conversation collection '%s' needs %d of %d %s.", ack.CollectionID, ack.NeededCount, ack.TotalCount, plural("conversation", ack.TotalCount))
+		return fmt.Sprintf(
+			"Conversation collection '%s' needs %d of %d %s.",
+			ack.CollectionID,
+			ack.NeededCount,
+			ack.TotalCount,
+			plural("conversation", ack.TotalCount),
+		)
 	case view.AckUpsertCollectionItems:
 		return fmt.Sprintf(
 			"Started document ingest job %s for collection '%s' with %d %s.",
@@ -155,7 +188,13 @@ func renderMutationAck(ack view.MutationAckView) string {
 			plural("row", ack.DocumentCount),
 		)
 	case view.AckCollectionManifest:
-		return fmt.Sprintf("Document collection '%s' needs %d of %d %s.", ack.CollectionID, ack.NeededCount, ack.TotalCount, plural("item", ack.TotalCount))
+		return fmt.Sprintf(
+			"Document collection '%s' needs %d of %d %s.",
+			ack.CollectionID,
+			ack.NeededCount,
+			ack.TotalCount,
+			plural("item", ack.TotalCount),
+		)
 	case view.AckDeleteCollectionItem:
 		return fmt.Sprintf(
 			"Started document delete job %s for item '%s' in collection '%s'.",
@@ -172,17 +211,21 @@ func renderGetIndex(getIndex view.GetIndexView) string {
 	if !getIndex.Tracked && getIndex.DescendantsHint != "" {
 		return getIndex.DescendantsHint
 	}
+
 	lines := []string{renderGetIndexBody(getIndex)}
 	lines = append(lines, getIndex.ResolutionLines...)
 	if getIndex.CoverageLine != "" {
 		lines = append(lines, getIndex.CoverageLine)
 	}
+
 	if getIndex.PathErrorLine != "" {
 		lines = append(lines, getIndex.PathErrorLine)
 	}
+
 	if getIndex.ClassificationLine != "" {
 		lines = append(lines, getIndex.ClassificationLine)
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -191,8 +234,12 @@ func renderGetIndexBody(getIndex view.GetIndexView) string {
 	// only "not indexed" message; a tracked codebase always presents as one of
 	// the live states below.
 	if !getIndex.Tracked {
-		return fmt.Sprintf("❌ Codebase '%s' is not indexed. Please use the index_codebase tool to index it first.", getIndex.RequestedPath)
+		return fmt.Sprintf(
+			"❌ Codebase '%s' is not indexed. Please use the index_codebase tool to index it first.",
+			getIndex.RequestedPath,
+		)
 	}
+
 	// A tracked codebase prints the literal stored values rather than a mapped
 	// display word, so two mapping layers cannot disagree in front of the reader.
 	return strings.Join(rawStatusLines(getIndex), "\n")
@@ -209,49 +256,104 @@ func rawStatusLines(getIndex view.GetIndexView) []string {
 	if raw.CollectionRows != nil {
 		statusLine += fmt.Sprintf(" collection_rows=%d", *raw.CollectionRows)
 	}
+
 	if raw.HeldForSiblingBuild {
 		statusLine += " held_for_sibling_build=true"
 	}
+
 	lines = append(lines, statusLine)
-	if raw.WorktreeSourcePath != "" || raw.WorktreeSourceID != "" || raw.WorktreeStartingCommit != "" {
-		lines = append(lines, fmt.Sprintf("worktree_source_path=%s worktree_source_id=%s worktree_starting_commit=%s",
-			raw.WorktreeSourcePath, raw.WorktreeSourceID, raw.WorktreeStartingCommit))
-	}
-	if raw.WorktreeReuseUnavailableReason != view.WorktreeReuseAvailable {
-		lines = append(lines, "worktree_reuse_unavailable_reason="+string(raw.WorktreeReuseUnavailableReason))
-	}
-	if raw.HasJob {
-		lines = append(lines,
-			fmt.Sprintf("job_id=%s operation=%s state=%s trigger=%s phase=%q",
-				raw.JobID, raw.Operation, raw.JobState, raw.Trigger, raw.Phase),
-			fmt.Sprintf("files_processed=%d files_total=%d chunks_embedded=%d chunks_reused=%d overall_percent=%.2f last_event_at=%s",
-				raw.FilesProcessed, raw.FilesTotal, raw.ChunksEmbedded, raw.ChunksReused, raw.OverallPercent, raw.LastEventAt),
+	if raw.WorktreeSourcePath != "" || raw.WorktreeSourceID != "" ||
+		raw.WorktreeStartingCommit != "" {
+		lines = append(
+			lines,
+			fmt.Sprintf(
+				"worktree_source_path=%s worktree_source_id=%s worktree_starting_commit=%s",
+				raw.WorktreeSourcePath,
+				raw.WorktreeSourceID,
+				raw.WorktreeStartingCommit,
+			),
 		)
 	}
+
+	if raw.WorktreeReuseUnavailableReason != view.WorktreeReuseAvailable {
+		lines = append(
+			lines,
+			"worktree_reuse_unavailable_reason="+string(raw.WorktreeReuseUnavailableReason),
+		)
+	}
+
+	if raw.HasJob {
+		lines = append(
+			lines,
+			fmt.Sprintf(
+				"job_id=%s operation=%s state=%s trigger=%s phase=%q",
+				raw.JobID,
+				raw.Operation,
+				raw.JobState,
+				raw.Trigger,
+				raw.Phase,
+			),
+			fmt.Sprintf(
+				"files_processed=%d files_total=%d chunks_embedded=%d chunks_reused=%d overall_percent=%.2f last_event_at=%s",
+				raw.FilesProcessed,
+				raw.FilesTotal,
+				raw.ChunksEmbedded,
+				raw.ChunksReused,
+				raw.OverallPercent,
+				raw.LastEventAt,
+			),
+		)
+	}
+
 	if raw.HasLastRun {
-		lines = append(lines, fmt.Sprintf("last_run indexed_files=%d total_chunks=%d completed_at=%s",
-			raw.LastRunFiles, raw.LastRunChunks, raw.LastRunCompleted))
+		lines = append(
+			lines,
+			fmt.Sprintf(
+				"last_run indexed_files=%d total_chunks=%d completed_at=%s",
+				raw.LastRunFiles,
+				raw.LastRunChunks,
+				raw.LastRunCompleted,
+			),
+		)
 	}
+
 	if raw.HasFailure {
-		lines = append(lines, fmt.Sprintf("last_failure message=%q job_id=%s failed_at=%s",
-			raw.FailureMessage, raw.FailureJobID, raw.FailureFailedAt))
+		lines = append(
+			lines,
+			fmt.Sprintf(
+				"last_failure message=%q job_id=%s failed_at=%s",
+				raw.FailureMessage,
+				raw.FailureJobID,
+				raw.FailureFailedAt,
+			),
+		)
 	}
+
 	if raw.GraphState != "" || raw.GraphUpdatedAt != "" {
-		lines = append(lines, fmt.Sprintf("graph_state=%s graph_updated_at=%s", raw.GraphState, raw.GraphUpdatedAt))
+		lines = append(
+			lines,
+			fmt.Sprintf("graph_state=%s graph_updated_at=%s", raw.GraphState, raw.GraphUpdatedAt),
+		)
 	}
+
 	if policy := SchedulingPolicy(getIndex.Status.Scheduling); policy != "" {
 		lines = append(lines, "policy "+policy)
 	}
+
 	return lines
 }
 
 func renderStatusBody(statusView view.StatusView, templateName string) string {
 	block := strings.Join(BreakdownLines(statusView.Breakdown), "\n")
-	body := renderStatusTemplate(templateName, statusTemplateData{
-		StatusView:     statusView,
-		BreakdownBlock: block,
-		QuotedPath:     shellQuote(statusView.Path),
-	})
+	body := renderStatusTemplate(
+		templateName,
+		statusTemplateData{
+			StatusView:     statusView,
+			BreakdownBlock: block,
+			QuotedPath:     shellQuote(statusView.Path),
+		},
+	)
+
 	return insertSchedulingPolicy(body, "🗓️ Stored policy: ", statusView.Scheduling)
 }
 
@@ -261,6 +363,7 @@ func renderListIndexes(views []view.CodebaseRowView) string {
 	}
 
 	lines := make([]string, 0, len(views)+1)
+
 	lines = append(lines, "Tracked "+countWord("codebase", len(views))+":")
 	for _, row := range views {
 		line := fmt.Sprintf("- %s  %s  [%s]", row.ID, row.CanonicalPath, row.Display)
@@ -268,6 +371,7 @@ func renderListIndexes(views []view.CodebaseRowView) string {
 		if policy := SchedulingPolicy(row.Scheduling); policy != "" {
 			line += "  stored policy: " + policy
 		}
+
 		lines = append(lines, line)
 		// An actively-indexing codebase shows its live breakdown tree inline, the
 		// same tree get_indexing_status renders, indented under the row.
@@ -277,6 +381,7 @@ func renderListIndexes(views []view.CodebaseRowView) string {
 			}
 		}
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -284,9 +389,11 @@ func worktreeReuseSuffix(row view.CodebaseRowView) string {
 	if row.ReuseUnavailableReason != view.WorktreeReuseAvailable {
 		return "  ♻️ " + worktreeReuseUnavailableLabel(row.ReuseUnavailableReason)
 	}
+
 	if row.WorktreeSourcePath == "" {
 		return ""
 	}
+
 	return "  ♻️ reusing embeddings from " + row.WorktreeSourcePath
 }
 
@@ -311,6 +418,7 @@ func renderGetJob(entry view.JobEntryView, found bool) string {
 	if !found {
 		return "Job not found."
 	}
+
 	lines := []string{
 		"🧾 Job " + entry.ID,
 		"📁 Codebase: " + entry.CanonicalPath,
@@ -320,10 +428,13 @@ func renderGetJob(entry view.JobEntryView, found bool) string {
 	if policy := SchedulingPolicy(entry.Surface.Scheduling); policy != "" {
 		lines = append(lines, "🗓️ Effective policy: "+policy)
 	}
+
 	if reason := SchedulingReason(entry.Surface.Scheduling); reason != "" {
 		lines = append(lines, "⏳ Waiting: "+reason)
 	}
-	lines = append(lines,
+
+	lines = append(
+		lines,
 		"🔧 Phase: "+entry.PhaseLabel,
 		"📊 Run progress: "+entry.Progress.PercentLabel,
 	)
@@ -332,6 +443,7 @@ func renderGetJob(entry view.JobEntryView, found bool) string {
 	if entry.Surface.ErrorLine != "" {
 		lines = append(lines, "🧯 Error: "+entry.Surface.ErrorLine)
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -344,13 +456,16 @@ func renderProgressLines(progress view.ProgressSurface) []string {
 	if progress.Heading != "" {
 		lines = append(lines, "  "+progress.Heading)
 	}
+
 	if progress.BatchLine != "" {
 		lines = append(lines, "  "+progress.BatchLine)
 	}
+
 	lines = append(lines, BreakdownLines(progress.Breakdown)...)
 	if progress.ScopeLine != "" {
 		lines = append(lines, "  "+progress.ScopeLine)
 	}
+
 	return lines
 }
 
@@ -397,18 +512,26 @@ var outcomeKindPresentation = map[view.OutcomeKind]outcomePresentation{
 func BreakdownLines(breakdown view.OutcomeBreakdown) []string {
 	lines := make([]string, 0, 8)
 	if len(breakdown.FileRows) > 0 {
-		lines = append(lines, fmt.Sprintf(
-			"📄 %s of %s %s processed",
-			formatCountString(breakdown.Processed),
-			formatCountString(breakdown.ScopeTotal),
-			breakdown.ScopeLabel,
-		))
+		lines = append(
+			lines,
+			fmt.Sprintf(
+				"📄 %s of %s %s processed",
+				formatCountString(breakdown.Processed),
+				formatCountString(breakdown.ScopeTotal),
+				breakdown.ScopeLabel,
+			),
+		)
 		lines = append(lines, renderOutcomeRows(breakdown.FileRows)...)
 	}
+
 	if len(breakdown.ChunkRows) > 0 {
-		lines = append(lines, fmt.Sprintf("🧩 %s chunks processed", formatCountString(breakdown.ChunksTotal)))
+		lines = append(
+			lines,
+			fmt.Sprintf("🧩 %s chunks processed", formatCountString(breakdown.ChunksTotal)),
+		)
 		lines = append(lines, renderOutcomeRows(breakdown.ChunkRows)...)
 	}
+
 	return lines
 }
 
@@ -421,9 +544,20 @@ func renderOutcomeRows(rows []view.OutcomeRow) []string {
 		if index == len(rows)-1 {
 			connector = "└─"
 		}
+
 		pres := outcomeKindPresentation[row.Kind()]
-		out = append(out, fmt.Sprintf("%s %s %s %s", connector, pres.glyph, formatCountString(row.Count()), pres.label))
+		out = append(
+			out,
+			fmt.Sprintf(
+				"%s %s %s %s",
+				connector,
+				pres.glyph,
+				formatCountString(row.Count()),
+				pres.label,
+			),
+		)
 	}
+
 	return out
 }
 
@@ -435,9 +569,11 @@ func renderTimingLines(timing view.TimingView) []string {
 	if timing.CompletedLabel != "" {
 		lines = append(lines, "  Completed: "+timing.CompletedLabel)
 	}
+
 	if timing.DurationLabel != "" {
 		lines = append(lines, "  "+timing.DurationWord+": "+timing.DurationLabel)
 	}
+
 	return lines
 }
 
@@ -455,65 +591,102 @@ func appendJobEntries(lines []string, entries []view.JobEntryView) []string {
 		if index > 0 {
 			lines = append(lines, "", jobListDivider, "")
 		}
+
 		lines = append(lines, renderJobListEntry(entry)...)
 	}
+
 	return lines
 }
 
-func renderListJobs(summary view.ListSummary, active []view.JobEntryView, terminal []view.JobEntryView) string {
+func renderListJobs(
+	summary view.ListSummary,
+	active []view.JobEntryView,
+	terminal []view.JobEntryView,
+) string {
 	if summary.Total == 0 {
 		return "No tracked jobs."
 	}
 
 	lines := make([]string, 0, 32)
 	lines = append(lines, fmt.Sprintf("Tracked jobs: %d total", summary.Total))
-	lines = append(lines, fmt.Sprintf(
-		"Active: %d queued, %d running, %d paused, %d canceling",
-		summary.Queued,
-		summary.Running,
-		summary.Paused,
-		summary.Canceling,
-	))
-	lines = append(lines, fmt.Sprintf("Ended: %d completed, %d failed, %d superseded, %d canceled",
-		summary.Completed, summary.Failed, summary.Superseded, summary.Canceled))
+	lines = append(
+		lines,
+		fmt.Sprintf(
+			"Active: %d queued, %d running, %d paused, %d canceling",
+			summary.Queued,
+			summary.Running,
+			summary.Paused,
+			summary.Canceling,
+		),
+	)
+	lines = append(
+		lines,
+		fmt.Sprintf(
+			"Ended: %d completed, %d failed, %d superseded, %d canceled",
+			summary.Completed,
+			summary.Failed,
+			summary.Superseded,
+			summary.Canceled,
+		),
+	)
 	if len(active) == 0 {
 		lines = append(lines, "", "No active jobs.")
 	} else {
 		lines = append(lines, "", "Active jobs:", "")
 		lines = appendJobEntries(lines, active)
 	}
+
 	const recentTerminalLimit = 8
 	if len(terminal) == 0 {
 		return strings.Join(lines, "\n")
 	}
+
 	lines = append(lines, "")
 	if len(terminal) > recentTerminalLimit {
-		lines = append(lines, fmt.Sprintf("Recent ended jobs: showing %d of %d", recentTerminalLimit, len(terminal)), "")
+		lines = append(
+			lines,
+			fmt.Sprintf("Recent ended jobs: showing %d of %d", recentTerminalLimit, len(terminal)),
+			"",
+		)
 		lines = appendJobEntries(lines, terminal[:recentTerminalLimit])
 		lines = append(lines, "", "Use `job get JOB_ID` or `--json` for full history.")
+
 		return strings.Join(lines, "\n")
 	}
+
 	lines = append(lines, fmt.Sprintf("Ended jobs: %d", len(terminal)), "")
 	lines = appendJobEntries(lines, terminal)
+
 	return strings.Join(lines, "\n")
 }
 
 func renderJobListEntry(entry view.JobEntryView) []string {
 	// The bracket has no key of its own, so it carries the scoped label; the
 	// detail block above prints the bare figure under its own "Run progress" key.
-	lines := []string{fmt.Sprintf("- %s [%s · %s] %s %s",
-		entry.ID, entry.Surface.StateLabel, entry.Progress.PercentScopeLabel, entry.Operation, entry.CanonicalPath)}
+	lines := []string{
+		fmt.Sprintf(
+			"- %s [%s · %s] %s %s",
+			entry.ID,
+			entry.Surface.StateLabel,
+			entry.Progress.PercentScopeLabel,
+			entry.Operation,
+			entry.CanonicalPath,
+		),
+	}
 	if policy := SchedulingPolicy(entry.Surface.Scheduling); policy != "" {
 		lines = append(lines, "  Effective policy: "+policy)
 	}
+
 	if reason := SchedulingReason(entry.Surface.Scheduling); reason != "" {
 		lines = append(lines, "  Waiting: "+reason)
 	}
+
 	lines = append(lines, renderTimingLines(entry.Timing)...)
 	lines = append(lines, renderProgressLines(entry.Progress)...)
 	if entry.Surface.ErrorLine != "" {
 		lines = append(lines, "  Error: "+entry.Surface.ErrorLine)
 	}
+
 	return lines
 }
 
@@ -524,6 +697,7 @@ func formatCountString(value int32) string {
 	if len(digits) <= 3 {
 		return digits
 	}
+
 	var out strings.Builder
 	lead := len(digits) % 3
 	if lead > 0 {
@@ -532,12 +706,14 @@ func formatCountString(value int32) string {
 			out.WriteString(",")
 		}
 	}
+
 	for i := lead; i < len(digits); i += 3 {
 		out.WriteString(digits[i : i+3])
 		if i+3 < len(digits) {
 			out.WriteString(",")
 		}
 	}
+
 	return out.String()
 }
 
@@ -548,11 +724,14 @@ func renderDoctor(doctor view.DoctorView) string {
 	} else {
 		lines := make([]string, 0, len(doctor.Diagnostics)+1)
 		lines = append(lines, "Indexing diagnostics:")
+
 		for _, diagnostic := range doctor.Diagnostics {
 			lines = append(lines, "- "+diagnostic)
 		}
+
 		body = strings.Join(lines, "\n")
 	}
+
 	return body + "\n\n" + renderQuarantinedSection(doctor) + "\n\n" + renderDroppedSection(doctor)
 }
 
@@ -560,11 +739,20 @@ func renderQuarantinedSection(doctor view.DoctorView) string {
 	if len(doctor.Quarantined) == 0 {
 		return "Quarantined codebases (destructive sync paused after suspicious disappearance): none"
 	}
+
 	lines := make([]string, 0, len(doctor.Quarantined)+1)
-	lines = append(lines, fmt.Sprintf("Quarantined codebases (destructive sync paused after suspicious disappearance): %d", len(doctor.Quarantined)))
+
+	lines = append(
+		lines,
+		fmt.Sprintf(
+			"Quarantined codebases (destructive sync paused after suspicious disappearance): %d",
+			len(doctor.Quarantined),
+		),
+	)
 	for _, diagnostic := range doctor.Quarantined {
 		lines = append(lines, "- "+diagnostic)
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -574,10 +762,18 @@ func renderDroppedSection(doctor view.DoctorView) string {
 	}
 
 	lines := make([]string, 0, len(doctor.Dropped)+1)
-	lines = append(lines, fmt.Sprintf("Dropped codebases (completed index, now untracked, still on disk): %d", len(doctor.Dropped)))
+
+	lines = append(
+		lines,
+		fmt.Sprintf(
+			"Dropped codebases (completed index, now untracked, still on disk): %d",
+			len(doctor.Dropped),
+		),
+	)
 	for _, path := range doctor.Dropped {
 		lines = append(lines, "- "+path)
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -589,56 +785,83 @@ func renderSearch(searchView view.SearchView) string {
 	resolution := strings.Join(searchView.ResolutionLines, "\n")
 
 	if len(searchView.Results) == 0 {
-		noResults := fmt.Sprintf("No results found for query: %q in codebase '%s'", searchView.Query, searchView.CodebasePath)
+		noResults := fmt.Sprintf(
+			"No results found for query: %q in codebase '%s'",
+			searchView.Query,
+			searchView.CodebasePath,
+		)
+
 		return joinSearchSections(searchView, noResults, status, resolution, false)
 	}
 
 	formatted := make([]string, 0, len(searchView.Results))
 	for index, result := range searchView.Results {
 		language := orDefault(result.Language, "text")
-		formatted = append(formatted, fmt.Sprintf(
-			"%d. Code snippet (%s) [%s]\n   Location: %s:%d-%d\n   Rank: %d\n   Context:\n```%s\n%s\n```",
-			index+1,
-			language,
-			searchView.CodebaseName,
-			result.RelativePath,
-			result.StartLine,
-			result.EndLine,
-			index+1,
-			language,
-			strings.TrimSpace(truncateContent(result.Content, 5000)),
-		))
+		formatted = append(
+			formatted,
+			fmt.Sprintf(
+				"%d. Code snippet (%s) [%s]\n   Location: %s:%d-%d\n   Rank: %d\n   Context:\n```%s\n%s\n```",
+				index+1,
+				language,
+				searchView.CodebaseName,
+				result.RelativePath,
+				result.StartLine,
+				result.EndLine,
+				index+1,
+				language,
+				strings.TrimSpace(truncateContent(result.Content, 5000)),
+			),
+		)
 	}
 
 	// Lead with the result count and the results themselves so a client that
 	// shows only the first line or truncates long output still surfaces the
 	// answer. The in-progress warning and tip trail the results.
-	header := fmt.Sprintf("Found %d results for query: %q in codebase '%s'", len(searchView.Results), searchView.Query, searchView.CodebasePath)
+	header := fmt.Sprintf(
+		"Found %d results for query: %q in codebase '%s'",
+		len(searchView.Results),
+		searchView.Query,
+		searchView.CodebasePath,
+	)
 	body := header + "\n\n" + strings.Join(formatted, "\n\n")
+
 	return joinSearchSections(searchView, body, status, resolution, true)
 }
 
 func renderConversationSearch(conversationView view.ConversationSearchView) string {
 	if len(conversationView.Results) == 0 {
-		return fmt.Sprintf("No conversation results found for query: %q in collection '%s'", conversationView.Query, conversationView.CollectionID)
+		return fmt.Sprintf(
+			"No conversation results found for query: %q in collection '%s'",
+			conversationView.Query,
+			conversationView.CollectionID,
+		)
 	}
 
 	formatted := make([]string, 0, len(conversationView.Results))
 	for index, result := range conversationView.Results {
-		formatted = append(formatted, fmt.Sprintf(
-			"%d. Conversation message [%s]\n   Conversation: %s\n   Message index: %d\n   Role: %s\n   Timestamp Unix: %d\n   Rank: %d\n   Content:\n```\n%s\n```",
-			index+1,
-			conversationView.CollectionID,
-			result.ConversationID,
-			result.MessageIndex,
-			orDefault(result.Role, "unknown"),
-			result.TimestampUnix,
-			index+1,
-			strings.TrimSpace(truncateContent(result.Content, 5000)),
-		))
+		formatted = append(
+			formatted,
+			fmt.Sprintf(
+				"%d. Conversation message [%s]\n   Conversation: %s\n   Message index: %d\n   Role: %s\n   Timestamp Unix: %d\n   Rank: %d\n   Content:\n```\n%s\n```",
+				index+1,
+				conversationView.CollectionID,
+				result.ConversationID,
+				result.MessageIndex,
+				orDefault(result.Role, "unknown"),
+				result.TimestampUnix,
+				index+1,
+				strings.TrimSpace(truncateContent(result.Content, 5000)),
+			),
+		)
 	}
 
-	header := fmt.Sprintf("Found %d conversation results for query: %q in collection '%s'", len(conversationView.Results), conversationView.Query, conversationView.CollectionID)
+	header := fmt.Sprintf(
+		"Found %d conversation results for query: %q in collection '%s'",
+		len(conversationView.Results),
+		conversationView.Query,
+		conversationView.CollectionID,
+	)
+
 	return header + "\n\n" + strings.Join(formatted, "\n\n")
 }
 
@@ -646,22 +869,32 @@ func renderConversationSearch(conversationView view.ConversationSearchView) stri
 // trailing tip sections to a search response body. The resolution and status
 // lines show whether or not a run is in flight; the tip only trails an active
 // run that has no explicit state note.
-func joinSearchSections(searchView view.SearchView, base string, status string, resolution string, hasResults bool) string {
+func joinSearchSections(
+	searchView view.SearchView,
+	base string,
+	status string,
+	resolution string,
+	hasResults bool,
+) string {
 	if status == "" && searchView.StateNote == "" && resolution == "" {
 		return base
 	}
+
 	sections := []string{base}
 	if resolution != "" {
 		sections = append(sections, resolution)
 	}
+
 	if status != "" {
 		sections = append(sections, status)
 	}
+
 	if searchView.StateNote != "" {
 		sections = append(sections, searchView.StateNote)
 	} else if status != "" {
 		sections = append(sections, searchStatusTip(searchView, hasResults))
 	}
+
 	return strings.Join(sections, "\n\n")
 }
 
@@ -673,9 +906,11 @@ func searchStatusTip(searchView view.SearchView, hasResults bool) string {
 	if searchView.InFlightBackgroundSync {
 		return "💡 Results are current; a few changed files are still syncing in the background."
 	}
+
 	if hasResults {
 		return searchIndexingTip
 	}
+
 	return noResultsIndexingTip
 }
 
@@ -687,6 +922,7 @@ func renderSearchIndexingStatus(searchView view.SearchView) string {
 	if !searchView.InFlight {
 		return ""
 	}
+
 	// The symlink and worktree relation lines are appended once by renderSearch
 	// itself, idle or active, so they are not repeated here.
 	return renderStatusBody(searchView.InFlightStatus, searchView.InFlightTemplateName)
@@ -696,9 +932,11 @@ func truncateContent(content string, limit int) string {
 	if len(content) <= limit {
 		return content
 	}
+
 	if limit <= 3 {
 		return content[:limit]
 	}
+
 	return content[:limit-3] + "..."
 }
 
@@ -706,6 +944,7 @@ func orDefault(value string, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
 	}
+
 	return value
 }
 
@@ -717,5 +956,6 @@ func plural(word string, count int) string {
 	if count == 1 {
 		return word
 	}
+
 	return word + "s"
 }

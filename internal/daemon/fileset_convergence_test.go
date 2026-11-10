@@ -66,7 +66,14 @@ func TestMerkleCaptureConvergesAndAgreesWithIndexerFileSet(t *testing.T) {
 
 	runner := indexer.NewRunner()
 	for _, entry := range entries {
-		result, indexErr := runner.IndexOne(context.Background(), resolver, "cb", root, entry.relativePath, config)
+		result, indexErr := runner.IndexOne(
+			context.Background(),
+			resolver,
+			"cb",
+			root,
+			entry.relativePath,
+			config,
+		)
 		if indexErr != nil {
 			t.Fatalf("IndexOne(%q) returned error: %v", entry.relativePath, indexErr)
 		}
@@ -83,16 +90,36 @@ func TestMerkleCaptureConvergesAndAgreesWithIndexerFileSet(t *testing.T) {
 			)
 		}
 		if gotCaptured != entry.wantCaptured {
-			t.Fatalf("Capture HasFile(%q) = %t, want %t", entry.relativePath, gotCaptured, entry.wantCaptured)
+			t.Fatalf(
+				"Capture HasFile(%q) = %t, want %t",
+				entry.relativePath,
+				gotCaptured,
+				entry.wantCaptured,
+			)
 		}
 		if result.Skipped != entry.wantSkipped {
-			t.Fatalf("IndexOne(%q).Skipped = %t, want %t", entry.relativePath, result.Skipped, entry.wantSkipped)
+			t.Fatalf(
+				"IndexOne(%q).Skipped = %t, want %t",
+				entry.relativePath,
+				result.Skipped,
+				entry.wantSkipped,
+			)
 		}
 		if result.Removed != entry.wantRemoved {
-			t.Fatalf("IndexOne(%q).Removed = %t, want %t", entry.relativePath, result.Removed, entry.wantRemoved)
+			t.Fatalf(
+				"IndexOne(%q).Removed = %t, want %t",
+				entry.relativePath,
+				result.Removed,
+				entry.wantRemoved,
+			)
 		}
 		if entry.wantCaptured && (result.FileHash == "" || len(result.Chunks) == 0) {
-			t.Fatalf("IndexOne(%q) kept the file but returned hash=%q chunks=%d", entry.relativePath, result.FileHash, len(result.Chunks))
+			t.Fatalf(
+				"IndexOne(%q) kept the file but returned hash=%q chunks=%d",
+				entry.relativePath,
+				result.FileHash,
+				len(result.Chunks),
+			)
 		}
 		t.Logf(
 			"fileset fixture path=%s captured=%t skipped=%t removed=%t",
@@ -111,10 +138,17 @@ func TestMerkleCaptureConvergesAndAgreesWithIndexerFileSet(t *testing.T) {
 		t.Fatalf("Runner.Index walk returned error over the fixture: %v", walkErr)
 	}
 	if int(walkResult.IndexedFiles) != len(wantSnapshotPaths) {
-		t.Fatalf("Runner.Index IndexedFiles = %d, want %d (the captured regular files)", walkResult.IndexedFiles, len(wantSnapshotPaths))
+		t.Fatalf(
+			"Runner.Index IndexedFiles = %d, want %d (the captured regular files)",
+			walkResult.IndexedFiles,
+			len(wantSnapshotPaths),
+		)
 	}
 	if walkResult.SkippedOversize < 1 {
-		t.Fatalf("Runner.Index SkippedOversize = %d, want >= 1 (oversize.go)", walkResult.SkippedOversize)
+		t.Fatalf(
+			"Runner.Index SkippedOversize = %d, want >= 1 (oversize.go)",
+			walkResult.SkippedOversize,
+		)
 	}
 }
 
@@ -163,7 +197,12 @@ func writeFilesetFixture(t *testing.T, root string) []filesetFixtureEntry {
 
 	writeFixtureFile(t, root, "small.go", []byte("package p\nfunc small() {}\n"))
 	writeFixtureFile(t, root, "oversize.go", []byte(strings.Repeat("a", 65)))
-	writeFixtureFile(t, root, "invalid.go", []byte{'p', 'a', 'c', 'k', 'a', 'g', 'e', ' ', 0xff, '\n'})
+	writeFixtureFile(
+		t,
+		root,
+		"invalid.go",
+		[]byte{'p', 'a', 'c', 'k', 'a', 'g', 'e', ' ', 0xff, '\n'},
+	)
 	writeFixtureFile(t, root, "data.bin", []byte{0x00, 0x01, 0xff, 0xfe, 0x00, 'x'})
 
 	nestedDir := filepath.Join(root, "nested")
@@ -182,7 +221,12 @@ func writeFilesetFixture(t *testing.T, root string) []filesetFixtureEntry {
 		// converge gate reaches for any ignored path; it is still not captured.
 		{relativePath: "data.bin", wantCaptured: false, wantSkipped: false, wantRemoved: true},
 		{relativePath: "nested", wantCaptured: false, wantSkipped: false, wantRemoved: true},
-		{relativePath: "nested/nested.go", wantCaptured: true, wantSkipped: false, wantRemoved: false},
+		{
+			relativePath: "nested/nested.go",
+			wantCaptured: true,
+			wantSkipped:  false,
+			wantRemoved:  false,
+		},
 	}
 
 	symlinkPath := filepath.Join(root, "linked-dir.go")
@@ -190,12 +234,15 @@ func writeFilesetFixture(t *testing.T, root string) []filesetFixtureEntry {
 		t.Logf("skipping symlink-to-directory assertion because Symlink returned error: %v", err)
 		return entries
 	}
-	entries = append(entries, filesetFixtureEntry{
-		relativePath: "linked-dir.go",
-		wantCaptured: false,
-		wantSkipped:  false,
-		wantRemoved:  true,
-	})
+	entries = append(
+		entries,
+		filesetFixtureEntry{
+			relativePath: "linked-dir.go",
+			wantCaptured: false,
+			wantSkipped:  false,
+			wantRemoved:  true,
+		},
+	)
 	return entries
 }
 

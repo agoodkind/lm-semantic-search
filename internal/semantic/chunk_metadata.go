@@ -17,10 +17,12 @@ func encodeMetadata(chunk model.StoredChunk) string {
 	if chunk.Language == "" {
 		return "{}"
 	}
+
 	encoded, err := json.Marshal(chunkMetadata{Language: chunk.Language})
 	if err != nil {
 		return "{}"
 	}
+
 	return string(encoded)
 }
 
@@ -32,10 +34,12 @@ func decodeMetadata(metadata string) chunkMetadata {
 	if metadata == "" {
 		return emptyChunkMetadata()
 	}
+
 	var parsed chunkMetadata
 	if err := json.Unmarshal([]byte(metadata), &parsed); err != nil {
 		return emptyChunkMetadata()
 	}
+
 	return parsed
 }
 

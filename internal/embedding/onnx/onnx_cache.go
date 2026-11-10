@@ -52,15 +52,13 @@ func ensureModelFiles(
 			preset.Name,
 		)
 	}
-	modelDirectory := filepath.Join(
-		cacheRoot,
-		offlineModelCacheDirectory,
-		preset.Name,
-	)
+
+	modelDirectory := filepath.Join(cacheRoot, offlineModelCacheDirectory, preset.Name)
 	modelFilename, err := artifactFilename(preset.ModelONNXURL)
 	if err != nil {
 		return cachedModelFiles{}, err
 	}
+
 	modelPath := filepath.Join(modelDirectory, modelFilename)
 	if err := ensureArtifact(
 		ctx,
@@ -81,6 +79,7 @@ func ensureModelFiles(
 		if filenameErr != nil {
 			return cachedModelFiles{}, filenameErr
 		}
+
 		if err := ensureArtifact(
 			ctx,
 			httpClient,
@@ -100,6 +99,7 @@ func ensureModelFiles(
 	if err != nil {
 		return cachedModelFiles{}, err
 	}
+
 	tokenizerPath := filepath.Join(modelDirectory, tokenizerFilename)
 	if err := ensureArtifact(
 		ctx,
@@ -114,6 +114,7 @@ func ensureModelFiles(
 	); err != nil {
 		return cachedModelFiles{}, err
 	}
+
 	return cachedModelFiles{
 		modelPath:     modelPath,
 		tokenizerPath: tokenizerPath,
@@ -129,33 +130,51 @@ func ModelFilesPresent(cacheRoot string, modelName string) (bool, error) {
 		slog.Error("resolve offline embedding model failed", "model", modelName, "err", err)
 		return false, fmt.Errorf("resolve offline embedding model: %w", err)
 	}
+
 	modelDirectory := filepath.Join(cacheRoot, offlineModelCacheDirectory, preset.Name)
 	for _, rawURL := range []string{preset.ModelONNXURL, preset.ModelDataURL, preset.TokenizerURL} {
 		if rawURL == "" {
 			continue
 		}
+
 		filename, filenameErr := artifactFilename(rawURL)
 		if filenameErr != nil {
 			return false, filenameErr
 		}
+
 		info, statErr := os.Stat(filepath.Join(modelDirectory, filename))
 		if errors.Is(statErr, os.ErrNotExist) {
 			return false, nil
 		}
+
 		if statErr != nil {
-			slog.Error("inspect offline embedding artifact failed", "path", filepath.Join(modelDirectory, filename), "err", statErr)
+			slog.Error(
+				"inspect offline embedding artifact failed",
+				"path",
+				filepath.Join(modelDirectory, filename),
+				"err",
+				statErr,
+			)
+
 			return false, fmt.Errorf("inspect offline embedding artifact %s: %w", filename, statErr)
 		}
+
 		if !info.Mode().IsRegular() {
 			return false, nil
 		}
 	}
+
 	return true, nil
 }
 
 // InstallModelFiles downloads and checksum-verifies every missing or
 // mismatched artifact of the preset into cacheRoot through httpClient.
-func InstallModelFiles(ctx context.Context, httpClient *http.Client, cacheRoot string, modelName string) error {
+func InstallModelFiles(
+	ctx context.Context,
+	httpClient *http.Client,
+	cacheRoot string,
+	modelName string,
+) error {
 	return InstallModelFilesWithProgress(ctx, httpClient, cacheRoot, modelName, nil)
 }
 
@@ -170,10 +189,20 @@ func InstallModelFilesWithProgress(
 ) error {
 	preset, err := offlinemodel.Resolve(modelName)
 	if err != nil {
-		slog.ErrorContext(ctx, "resolve offline embedding model failed", "model", modelName, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"resolve offline embedding model failed",
+			"model",
+			modelName,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("resolve offline embedding model: %w", err)
 	}
+
 	_, err = ensureModelFiles(ctx, httpClient, cacheRoot, preset, progress, nil)
+
 	return err
 }
 
@@ -183,10 +212,12 @@ func artifactFilename(rawURL string) (string, error) {
 		slog.Error("parse offline model URL failed", "url", rawURL, "err", err)
 		return "", fmt.Errorf("parse offline model URL %q: %w", rawURL, err)
 	}
+
 	filename := path.Base(parsedURL.Path)
 	if filename == "." || filename == "/" || filename == "" {
 		return "", fmt.Errorf("offline model URL %q has no filename", rawURL)
 	}
+
 	return filename, nil
 }
 
@@ -220,12 +251,9 @@ func ensureArtifact(
 			"err",
 			err,
 		)
-		return fmt.Errorf(
-			"cache offline embedding %s %q: %w",
-			artifactKind,
-			modelName,
-			err,
-		)
+
+		return fmt.Errorf("cache offline embedding %s %q: %w", artifactKind, modelName, err)
 	}
+
 	return nil
 }

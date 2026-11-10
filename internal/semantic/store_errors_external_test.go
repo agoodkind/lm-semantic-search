@@ -22,16 +22,25 @@ func TestWrapStoreErrorClassifiesTransportOutage(t *testing.T) {
 	t.Parallel()
 
 	for _, code := range []codes.Code{codes.Unavailable, codes.DeadlineExceeded} {
-		cause := status.Error(code, `connection error: desc = "transport: Error while dialing: dial tcp [::1]:19530: connect: connection refused"`)
-		wrapped := semantic.WrapStoreErrorForTest(context.Background(), cause, "insert Milvus batch into hybrid_code_chunks_x")
+		cause := status.Error(
+			code,
+			`connection error: desc = "transport: Error while dialing: dial tcp [::1]:19530: connect: connection refused"`,
+		)
+		wrapped := semantic.WrapStoreErrorForTest(
+			context.Background(),
+			cause,
+			"insert Milvus batch into hybrid_code_chunks_x",
+		)
 
 		if !adapterr.IsInfraFailure(wrapped) {
 			t.Fatalf("code %s: store outage must be an infra failure, got %v", code, wrapped)
 		}
+
 		var adapterErr *adapterr.AdapterError
 		if !errors.As(wrapped, &adapterErr) || adapterErr.Class != adapterr.ClassMilvusUnavailable {
 			t.Fatalf("code %s: want ClassMilvusUnavailable, got %#v", code, wrapped)
 		}
+
 		if !errors.Is(wrapped, cause) {
 			t.Fatalf("code %s: wrapped error must preserve the cause chain", code)
 		}

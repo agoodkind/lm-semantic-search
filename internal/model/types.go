@@ -256,13 +256,16 @@ type IndexRunFailure struct {
 // inodes at registration time. When true, convergence falls back to
 // path-only file tracking instead of (device, inode, contentHash).
 type Codebase struct {
-	ID                string           `json:"id"`
-	Kind              CodebaseKind     `json:"kind,omitempty"`
-	CanonicalPath     string           `json:"canonical_path"`
-	Status            CodebaseStatus   `json:"status"`
-	ActiveJobID       string           `json:"active_job_id,omitempty"`
-	LastSuccessfulRun *IndexRunSummary `json:"last_successful_run,omitempty"`
-	LastFailedRun     *IndexRunFailure `json:"last_failed_run,omitempty"`
+	ID            string         `json:"id"`
+	Kind          CodebaseKind   `json:"kind,omitempty"`
+	CanonicalPath string         `json:"canonical_path"`
+	Status        CodebaseStatus `json:"status"`
+	ActiveJobID   string         `json:"active_job_id,omitempty"`
+	// AutoIndexingPaused prevents automatic indexing after explicit cancellation.
+	// An explicit index or sync request resumes automatic indexing.
+	AutoIndexingPaused bool             `json:"auto_indexing_paused,omitempty"`
+	LastSuccessfulRun  *IndexRunSummary `json:"last_successful_run,omitempty"`
+	LastFailedRun      *IndexRunFailure `json:"last_failed_run,omitempty"`
 	// LiveFileTotal and LiveChunkTotal track the latest known corpus size,
 	// updated during runs rather than only at completion.
 	LiveFileTotal               int32            `json:"liveFileTotal,omitempty"`

@@ -15,6 +15,7 @@ import (
 func isolateAmbient(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
+
 	for _, variable := range Env(t.TempDir()) {
 		t.Setenv(variable.Name, "")
 		if err := os.Unsetenv(variable.Name); err != nil {
@@ -70,6 +71,7 @@ func TestResolveKeepsTheModelCacheOutsideTheRoot(t *testing.T) {
 	if resolved.ModelCacheRoot == "" {
 		t.Fatal("ModelCacheRoot is empty; a sandbox would have nowhere to read a cached model from")
 	}
+
 	if strings.HasPrefix(filepath.Clean(resolved.ModelCacheRoot), filepath.Clean(root)) {
 		t.Errorf(
 			"ModelCacheRoot = %q, want a path outside the sandbox root %q so the model survives the run",
@@ -92,9 +94,11 @@ func TestResolveDefaultsToTheLocalBackends(t *testing.T) {
 	if resolved.Profile != config.ProfileOffline {
 		t.Errorf("Profile = %q, want %q", resolved.Profile, config.ProfileOffline)
 	}
+
 	if resolved.IndexBackend != config.IndexBackendLocal {
 		t.Errorf("IndexBackend = %q, want %q", resolved.IndexBackend, config.IndexBackendLocal)
 	}
+
 	if resolved.EmbeddingProvider != config.EmbeddingProviderONNX {
 		t.Errorf(
 			"EmbeddingProvider = %q, want %q",
@@ -102,8 +106,12 @@ func TestResolveDefaultsToTheLocalBackends(t *testing.T) {
 			config.EmbeddingProviderONNX,
 		)
 	}
+
 	if resolved.MilvusAddress != "" {
-		t.Errorf("MilvusAddress = %q, want empty so no sandbox dials the shared store", resolved.MilvusAddress)
+		t.Errorf(
+			"MilvusAddress = %q, want empty so no sandbox dials the shared store",
+			resolved.MilvusAddress,
+		)
 	}
 }
 
@@ -125,9 +133,11 @@ func TestResolveLeavesACallerSuppliedValueAlone(t *testing.T) {
 	if resolved.Profile != config.ProfileStandard {
 		t.Errorf("Profile = %q, want the caller's %q", resolved.Profile, config.ProfileStandard)
 	}
+
 	if resolved.ContextRoot != chosenContextRoot {
 		t.Errorf("ContextRoot = %q, want the caller's %q", resolved.ContextRoot, chosenContextRoot)
 	}
+
 	// The values the caller did not name are still isolated.
 	if !strings.HasPrefix(filepath.Clean(resolved.StateRoot), filepath.Clean(root)) {
 		t.Errorf("StateRoot = %q, want a path under %q", resolved.StateRoot, root)

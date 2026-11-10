@@ -25,25 +25,45 @@ func TestONNXEmbedBatchRefusesEmptyContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EmbedBatch returned error: %v", err)
 	}
+
 	if len(result.Vectors) != 2 {
 		t.Fatalf("vectors = %d, want 2 index-aligned with the inputs", len(result.Vectors))
 	}
+
 	for index, vector := range result.Vectors {
 		if vector != nil {
-			t.Fatalf("Vectors[%d] = %#v, want nil; content with nothing in it got a vector", index, vector)
+			t.Fatalf(
+				"Vectors[%d] = %#v, want nil; content with nothing in it got a vector",
+				index,
+				vector,
+			)
 		}
 	}
+
 	if len(result.Skipped) != 2 {
-		t.Fatalf("skipped = %d, want 2; a refusal must be reported, never silent", len(result.Skipped))
+		t.Fatalf(
+			"skipped = %d, want 2; a refusal must be reported, never silent",
+			len(result.Skipped),
+		)
 	}
+
 	for _, skip := range result.Skipped {
 		if skip.Reason != adapterr.EmbedRejectionEmptyContent {
-			t.Fatalf("skipped reason = %q, want %q", skip.Reason, adapterr.EmbedRejectionEmptyContent)
+			t.Fatalf(
+				"skipped reason = %q, want %q",
+				skip.Reason,
+				adapterr.EmbedRejectionEmptyContent,
+			)
 		}
+
 		// Nothing was measured and no ceiling was reached, so reporting the model's
 		// token window here would name a limit that had nothing to do with this.
 		if skip.MaxTokens.Reported || skip.ReportedTokens.Reported {
-			t.Fatalf("skipped carries token figures %+v/%+v, want none", skip.ReportedTokens, skip.MaxTokens)
+			t.Fatalf(
+				"skipped carries token figures %+v/%+v, want none",
+				skip.ReportedTokens,
+				skip.MaxTokens,
+			)
 		}
 	}
 }
@@ -58,17 +78,24 @@ func TestONNXEmbedRefusesEmptyContentAsAnError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Embed returned a vector for whitespace-only input")
 	}
+
 	if vector != nil {
 		t.Fatalf("Embed returned %d values alongside the rejection", len(vector))
 	}
+
 	var rejection *adapterr.AdapterError
 	if !asAdapterError(err, &rejection) {
 		t.Fatalf("error is not a typed adapter error: %v", err)
 	}
+
 	if rejection.Code != string(adapterr.EmbedRejectionEmptyContent) {
 		t.Fatalf("code = %q, want %q", rejection.Code, adapterr.EmbedRejectionEmptyContent)
 	}
+
 	if rejection.Hint != "" {
-		t.Fatalf("hint = %q, want none; no shorter input would help an already empty one", rejection.Hint)
+		t.Fatalf(
+			"hint = %q, want none; no shorter input would help an already empty one",
+			rejection.Hint,
+		)
 	}
 }

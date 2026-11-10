@@ -16,6 +16,7 @@ func TestFromSchedulingPolicyPatchPreservesOmissionAndExplicitFalse(t *testing.T
 	if err != nil {
 		t.Fatalf("FromSchedulingPolicyPatch(nil): %v", err)
 	}
+
 	if omitted.Priority != nil || omitted.Quiet != nil || omitted.IdleAfterSeconds != nil {
 		t.Fatalf("omitted patch = %+v, want every field nil", omitted)
 	}
@@ -25,9 +26,11 @@ func TestFromSchedulingPolicyPatchPreservesOmissionAndExplicitFalse(t *testing.T
 	if err != nil {
 		t.Fatalf("FromSchedulingPolicyPatch(false): %v", err)
 	}
+
 	if converted.Quiet == nil || *converted.Quiet {
 		t.Fatalf("quiet = %v, want explicit false", converted.Quiet)
 	}
+
 	if converted.Priority != nil || converted.IdleAfterSeconds != nil {
 		t.Fatalf("unprovided fields changed: %+v", converted)
 	}
@@ -64,13 +67,16 @@ func TestFromSchedulingPolicyPatchRejectsInvalidValues(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := FromSchedulingPolicyPatch(test.patch)
-			if err == nil || !strings.Contains(err.Error(), test.message) {
-				t.Fatalf("error = %v, want text %q", err, test.message)
-			}
-		})
+		t.Run(
+			test.name,
+			func(t *testing.T) {
+				t.Parallel()
+				_, err := FromSchedulingPolicyPatch(test.patch)
+				if err == nil || !strings.Contains(err.Error(), test.message) {
+					t.Fatalf("error = %v, want text %q", err, test.message)
+				}
+			},
+		)
 	}
 }
 
@@ -90,7 +96,11 @@ func TestSchedulingPolicyViewsCarryStoredAndEffectiveValues(t *testing.T) {
 		!codebase.GetSchedulingPolicy().GetQuiet() ||
 		codebase.GetSchedulingPolicy().GetIdleAfterSeconds() != 900 ||
 		!codebase.GetPolicyPendingInitialization() {
-		t.Fatalf("codebase policy view = %+v, pending=%v", codebase.GetSchedulingPolicy(), codebase.GetPolicyPendingInitialization())
+		t.Fatalf(
+			"codebase policy view = %+v, pending=%v",
+			codebase.GetSchedulingPolicy(),
+			codebase.GetPolicyPendingInitialization(),
+		)
 	}
 
 	job := ToJob(model.Job{
@@ -108,7 +118,12 @@ func TestSchedulingPolicyViewsCarryStoredAndEffectiveValues(t *testing.T) {
 		job.GetEffectiveSchedulingPolicy().GetIdleAfterSeconds() != 120 ||
 		job.GetQueueSequence() != 42 ||
 		job.GetSchedulingReason() != pb.SchedulingReason_SCHEDULING_REASON_USER_ACTIVE {
-		t.Fatalf("job policy view = %+v sequence=%d reason=%v", job.GetEffectiveSchedulingPolicy(), job.GetQueueSequence(), job.GetSchedulingReason())
+		t.Fatalf(
+			"job policy view = %+v sequence=%d reason=%v",
+			job.GetEffectiveSchedulingPolicy(),
+			job.GetQueueSequence(),
+			job.GetSchedulingReason(),
+		)
 	}
 }
 
@@ -121,7 +136,11 @@ func TestPausedJobReportsStalledReadReason(t *testing.T) {
 		SchedulingReason:          model.SchedulingReasonStalledRead,
 	})
 	if got := job.GetSchedulingReason(); got != pb.SchedulingReason_SCHEDULING_REASON_STALLED_READ {
-		t.Fatalf("job scheduling reason = %v, want %v", got, pb.SchedulingReason_SCHEDULING_REASON_STALLED_READ)
+		t.Fatalf(
+			"job scheduling reason = %v, want %v",
+			got,
+			pb.SchedulingReason_SCHEDULING_REASON_STALLED_READ,
+		)
 	}
 
 	scheduling := SchedulingFromProto(
@@ -130,7 +149,11 @@ func TestPausedJobReportsStalledReadReason(t *testing.T) {
 		job.GetSchedulingReason(),
 	)
 	if scheduling.Reason != view.SchedulingReasonStalledRead {
-		t.Fatalf("scheduling view reason = %q, want %q", scheduling.Reason, view.SchedulingReasonStalledRead)
+		t.Fatalf(
+			"scheduling view reason = %q, want %q",
+			scheduling.Reason,
+			view.SchedulingReasonStalledRead,
+		)
 	}
 }
 
@@ -149,14 +172,21 @@ func TestSchedulingReasonProtoConversionIsClosed(t *testing.T) {
 		if got := SchedulingReasonToProto(modelReason); got != protoReason {
 			t.Errorf("reason %q converts to %v, want %v", modelReason, got, protoReason)
 		}
+
 		if got := schedulingReasonFromProto(protoReason); got != modelReason {
 			t.Errorf("reason %v converts to %q, want %q", protoReason, got, modelReason)
 		}
 	}
-	if got := SchedulingReasonToProto(model.SchedulingReason("free-form")); got != pb.SchedulingReason_SCHEDULING_REASON_UNSPECIFIED {
+
+	if got := SchedulingReasonToProto(
+		model.SchedulingReason("free-form"),
+	); got != pb.SchedulingReason_SCHEDULING_REASON_UNSPECIFIED {
 		t.Fatalf("free-form model reason converts to %v, want unspecified", got)
 	}
-	if got := schedulingReasonFromProto(pb.SchedulingReason(99)); got != model.SchedulingReasonUnspecified {
+
+	if got := schedulingReasonFromProto(
+		pb.SchedulingReason(99),
+	); got != model.SchedulingReasonUnspecified {
 		t.Fatalf("unknown proto reason converts to %q, want unspecified", got)
 	}
 }
@@ -172,12 +202,15 @@ func TestToProgressBackfillsLegacyChunkCounters(t *testing.T) {
 	if got := progress.GetChunksEmbedded(); got != 7 {
 		t.Fatalf("ChunksEmbedded = %d, want legacy ChunksGenerated value 7", got)
 	}
+
 	if got := progress.GetChunksProcessed(); got != 10 {
 		t.Fatalf("ChunksProcessed = %d, want legacy generated + reused total 10", got)
 	}
+
 	if got := progress.GetChunksGenerated(); got != 7 {
 		t.Fatalf("ChunksGenerated = %d, want legacy value 7", got)
 	}
+
 	if got := progress.GetChunksReused(); got != 3 {
 		t.Fatalf("ChunksReused = %d, want 3", got)
 	}
@@ -197,15 +230,19 @@ func TestToProgressPreservesExplicitChunkCounters(t *testing.T) {
 	if got := progress.GetChunksEmbedded(); got != 2 {
 		t.Fatalf("ChunksEmbedded = %d, want explicit value 2", got)
 	}
+
 	if got := progress.GetChunksProcessed(); got != 5 {
 		t.Fatalf("ChunksProcessed = %d, want explicit value 5", got)
 	}
+
 	if got := progress.GetChunksGenerated(); got != 7 {
 		t.Fatalf("ChunksGenerated = %d, want legacy value 7", got)
 	}
+
 	if got := progress.GetChunksReused(); got != 3 {
 		t.Fatalf("ChunksReused = %d, want 3", got)
 	}
+
 	if got := progress.GetChunksDropped(); got != 4 {
 		t.Fatalf("ChunksDropped = %d, want 4", got)
 	}

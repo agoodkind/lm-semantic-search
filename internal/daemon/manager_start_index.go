@@ -28,6 +28,7 @@ func (manager *Manager) startIndexWithRecovery(
 	if err != nil {
 		return emptyJob, emptyCodebase, false, "", err
 	}
+
 	indexConfig = manager.enrichIndexConfig(indexConfig)
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
 	manager.policyMutationMutex.Lock()
@@ -37,6 +38,17 @@ func (manager *Manager) startIndexWithRecovery(
 			manager.policyMutationMutex.Unlock()
 		}
 	}()
+
+	manager.mu.Lock()
+	matches := manager.findCodebasesByCoverage(canonicalPath)
+	if len(matches) > 0 {
+		err = manager.prepareAutomaticIndexingLocked(ctx, matches[0])
+	}
+
+	manager.mu.Unlock()
+	if err != nil {
+		return emptyJob, emptyCodebase, false, "", err
+	}
 
 	for {
 		job, codebase, redirected, redirectErr := manager.redirectStartIndex(
@@ -51,25 +63,38 @@ func (manager *Manager) startIndexWithRecovery(
 			if redirectErr != nil || job.ID == "" {
 				return job, codebase, false, "", redirectErr
 			}
+
 			runContext := manager.indexJobContext(ctx, job)
 			manager.policyMutationMutex.Unlock()
 			policyLocked = false
 			manager.runJobAsync(runContext, job.ID)
+
 			return job, codebase, false, "", nil
 		}
+
 		if dedupedJob, dedupedCodebase, deduped := manager.dedupAgainstActiveJob(
 			canonicalPath,
 			indexConfig,
 		); deduped {
 			resolvedCodebase, resolveErr := manager.resolveDeduplicatedStartIndex(
-				ctx, sourceIntent, dedupedJob, dedupedCodebase,
-				requestedPath, canonicalPath, client, indexConfig, force, policyIntent,
+				ctx,
+				sourceIntent,
+				dedupedJob,
+				dedupedCodebase,
+				requestedPath,
+				canonicalPath,
+				client,
+				indexConfig,
+				force,
+				policyIntent,
 			)
 			if resolveErr != nil {
 				return emptyJob, emptyCodebase, false, "", resolveErr
 			}
+
 			return dedupedJob, resolvedCodebase, true, "", nil
 		}
+
 		if !force || !manager.hasActiveJobForExactPath(canonicalPath) {
 			break
 		}
@@ -104,13 +129,16 @@ func (manager *Manager) startIndexWithRecovery(
 	if err != nil || deduped {
 		return job, codebase, deduped, overlapsCodebaseID, err
 	}
+
 	if job.ID == "" {
 		return emptyJob, codebase, false, overlapsCodebaseID, nil
 	}
+
 	manager.notifyIndexCodebaseStart(ctx, codebase)
 	manager.policyMutationMutex.Unlock()
 	policyLocked = false
 	manager.runJobAsync(manager.indexJobContext(ctx, job), job.ID)
+
 	return job, codebase, false, overlapsCodebaseID, nil
 }
 
@@ -124,10 +152,12 @@ func (manager *Manager) startIndexTarget(
 	if err != nil {
 		return "", emptyIntent, err
 	}
+
 	sourceIntent, err := manager.resolveWorktreeSourceIntent(ctx, canonicalPath, source)
 	if err != nil {
 		return "", emptyIntent, err
 	}
+
 	return canonicalPath, sourceIntent, nil
 }
 
@@ -140,15 +170,19 @@ func (manager *Manager) startIndexCanonicalPath(
 		slog.ErrorContext(ctx, "canonicalize path failed", "path", requestedPath, "err", err)
 		return "", fmt.Errorf("canonicalize path %s: %w", requestedPath, err)
 	}
+
 	if err := manager.guardStateRoot(canonicalPath); err != nil {
 		return "", err
 	}
+
 	if err := manager.guardFilesystemRoot(canonicalPath); err != nil {
 		return "", err
 	}
+
 	if err := manager.guardDirectory(canonicalPath); err != nil {
 		return "", err
 	}
+
 	return canonicalPath, nil
 }
 
@@ -166,11 +200,33 @@ func (manager *Manager) redirectStartIndex(
 	if !found || manager.isWorktreeBoundary(canonicalPath, ancestor) {
 		return emptyJob, emptyCodebase, false, nil
 	}
+
 	if sourceIntent.sourcePath != "" || sourceIntent.startingCommit != "" {
-		refusal := adapterr.NewInvalidPath(fmt.Sprintf("worktree source fields for %q are invalid inside indexed codebase %q because the daemon syncs the covering codebase without recording a source for the requested path", canonicalPath, ancestor.CanonicalPath), nil)
-		slog.WarnContext(ctx, "index redirect refused worktree source fields", "path", canonicalPath, "covering_path", ancestor.CanonicalPath, "err", refusal)
-		return emptyJob, emptyCodebase, true, fmt.Errorf("redirect index to covering codebase: %w", refusal)
+		refusal := adapterr.NewInvalidPath(
+			fmt.Sprintf(
+				"worktree source fields for %q are invalid inside indexed codebase %q because the daemon syncs the covering codebase without recording a source for the requested path",
+				canonicalPath,
+				ancestor.CanonicalPath,
+			),
+			nil,
+		)
+		slog.WarnContext(
+			ctx,
+			"index redirect refused worktree source fields",
+			"path",
+			canonicalPath,
+			"covering_path",
+			ancestor.CanonicalPath,
+			"err",
+			refusal,
+		)
+
+		return emptyJob, emptyCodebase, true, fmt.Errorf(
+			"redirect index to covering codebase: %w",
+			refusal,
+		)
 	}
+
 	job, codebase, err := manager.redirectIndexToAncestor(
 		ctx,
 		requestedPath,
@@ -178,6 +234,7 @@ func (manager *Manager) redirectStartIndex(
 		client,
 		policyIntent,
 	)
+
 	return job, codebase, true, err
 }
 
@@ -197,13 +254,12 @@ func (manager *Manager) resolveDeduplicatedStartIndex(
 	if err := manager.recordWorktreeSource(ctx, codebase.ID, sourceIntent); err != nil {
 		return emptyCodebase, err
 	}
-	resolvedCodebase, err := manager.resolveAndPersistIndexPolicy(
-		codebase.ID,
-		policyIntent,
-	)
+
+	resolvedCodebase, err := manager.resolveAndPersistIndexPolicy(codebase.ID, policyIntent)
 	if err != nil {
 		return emptyCodebase, err
 	}
+
 	manager.queueDeduplicatedPolicyOverride(
 		job,
 		requestedPath,
@@ -213,6 +269,7 @@ func (manager *Manager) resolveDeduplicatedStartIndex(
 		force,
 		policyIntent.Patch,
 	)
+
 	return resolvedCodebase, nil
 }
 
@@ -224,7 +281,14 @@ func (manager *Manager) notifyIndexCodebaseStart(ctx context.Context, codebase m
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(notifyContext, "notify codebase added panic", "codebase_id", codebase.ID, "err", recovered)
+				slog.ErrorContext(
+					notifyContext,
+					"notify codebase added panic",
+					"codebase_id",
+					codebase.ID,
+					"err",
+					recovered,
+				)
 			}
 		}()
 		manager.notifyCodebaseAdded(notifyContext, codebase)
@@ -243,5 +307,6 @@ func (manager *Manager) hasActiveJobForExactPath(canonicalPath string) bool {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	codebase, found := manager.findCodebaseByExactRoot(canonicalPath)
+
 	return found && manager.activeJobSnapshotLocked(codebase) != nil
 }

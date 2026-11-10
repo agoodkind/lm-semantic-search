@@ -23,7 +23,10 @@ func TestRunApplySchedulerRecoversPanicPerIteration(t *testing.T) {
 		_ = overrides
 		return time.Millisecond
 	}
-	runScheduledApplyFunc = func(ctx context.Context, overrides Overrides, log *slog.Logger) (bool, error) {
+	runScheduledApplyFunc = func(ctx context.Context, overrides Overrides, log *slog.Logger) (
+		bool,
+		error,
+	) {
 		_ = ctx
 		_ = overrides
 		_ = log
@@ -31,7 +34,9 @@ func TestRunApplySchedulerRecoversPanicPerIteration(t *testing.T) {
 		if callCount == 1 {
 			panic("scheduled apply panic")
 		}
+
 		cancel()
+
 		return false, nil
 	}
 
@@ -47,7 +52,11 @@ func TestRunApplySchedulerRecoversPanicPerIteration(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatalf("RunApplyScheduler did not return after context cancellation")
 	}
+
 	if callCount < 2 {
-		t.Fatalf("scheduled apply call count = %d, want scheduler to continue after panic", callCount)
+		t.Fatalf(
+			"scheduled apply call count = %d, want scheduler to continue after panic",
+			callCount,
+		)
 	}
 }

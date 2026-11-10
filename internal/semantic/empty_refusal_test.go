@@ -29,18 +29,24 @@ func (embedder *emptyRefusingEmbedder) EmbedBatch(
 	embedder.batches = append(embedder.batches, append([]string(nil), texts...))
 	vectors := make([][]float32, len(texts))
 	var skipped []embedding.SkippedInput
+
 	for index, text := range texts {
 		if strings.TrimSpace(text) == "" {
-			skipped = append(skipped, embedding.SkippedInput{
-				Index:          index,
-				Reason:         adapterr.EmbedRejectionEmptyContent,
-				ReportedTokens: adapterr.UnreportedFigure(),
-				MaxTokens:      adapterr.UnreportedFigure(),
-			})
+			skipped = append(
+				skipped,
+				embedding.SkippedInput{
+					Index:          index,
+					Reason:         adapterr.EmbedRejectionEmptyContent,
+					ReportedTokens: adapterr.UnreportedFigure(),
+					MaxTokens:      adapterr.UnreportedFigure(),
+				},
+			)
 			continue
 		}
+
 		vectors[index] = []float32{float32(len(text))}
 	}
+
 	return embedding.BatchResult{Vectors: vectors, Skipped: skipped}, nil
 }
 
@@ -90,41 +96,60 @@ func TestInsertChunksBatchedNeverCountsAnEmptyRefusalAsADrop(t *testing.T) {
 	if len(reports) != 1 {
 		t.Fatalf("progress reports = %d, want 1", len(reports))
 	}
+
 	if reports[0].ChunksDropped != 0 {
-		t.Fatalf("ChunksDropped = %d, want 0; an input that carried nothing is not lost content", reports[0].ChunksDropped)
+		t.Fatalf(
+			"ChunksDropped = %d, want 0; an input that carried nothing is not lost content",
+			reports[0].ChunksDropped,
+		)
 	}
+
 	if reports[0].CollectionRowsWritten != 0 {
-		t.Fatalf("CollectionRowsWritten = %d, want 0; a refused input must not be stored", reports[0].CollectionRowsWritten)
+		t.Fatalf(
+			"CollectionRowsWritten = %d, want 0; a refused input must not be stored",
+			reports[0].CollectionRowsWritten,
+		)
 	}
 
 	// One batch only. A second would mean the refusal reached the splitter, which
 	// could only divide nothing and offer the same empty input again.
 	if len(embedder.batches) != 1 {
-		t.Fatalf("embed calls = %d, want 1; a refusal must not be retried through the splitter", len(embedder.batches))
+		t.Fatalf(
+			"embed calls = %d, want 1; a refusal must not be retried through the splitter",
+			len(embedder.batches),
+		)
 	}
 
 	if _, found := handler.find("semantic.embed_input_dropped"); found {
 		t.Fatal("a refusal was logged as a dropped input, which is the record of lost content")
 	}
+
 	if _, found := handler.find("semantic.embed_inputs_dropped_summary"); found {
 		t.Fatal("a refusal reached the dropped-inputs summary")
 	}
 
 	refusal, found := handler.find("semantic.embed_inputs_refused_empty")
 	if !found {
-		t.Fatal("no semantic.embed_inputs_refused_empty record; a refusal must be visible, not silent")
+		t.Fatal(
+			"no semantic.embed_inputs_refused_empty record; a refusal must be visible, not silent",
+		)
 	}
+
 	if refusal.Attrs["refused_inputs"] != "2" {
 		t.Fatalf("refused_inputs = %q, want \"2\"", refusal.Attrs["refused_inputs"])
 	}
+
 	if refusal.Attrs["relative_path"] != "notes/empty.md" {
 		t.Fatalf("relative_path = %q, want notes/empty.md", refusal.Attrs["relative_path"])
 	}
 
 	summary, found := handler.find("semantic.embed_inputs_refused_empty_summary")
 	if !found {
-		t.Fatal("no job-level refusal summary; a feeder sending these at volume must be visible per run")
+		t.Fatal(
+			"no job-level refusal summary; a feeder sending these at volume must be visible per run",
+		)
 	}
+
 	if summary.Attrs["refused_inputs"] != "2" {
 		t.Fatalf("summary refused_inputs = %q, want \"2\"", summary.Attrs["refused_inputs"])
 	}
@@ -152,6 +177,7 @@ func TestInsertChunksBatchedStillWritesContentBesideARefusal(t *testing.T) {
 	if len(keptChunks) != 1 || keptChunks[0].RelativePath != "conv/thread-2/1" {
 		t.Fatalf("kept %#v, want only the chunk that carried content", keptChunks)
 	}
+
 	if len(keptVectors) != 1 {
 		t.Fatalf("kept %d vectors, want 1 index-aligned with the kept chunk", len(keptVectors))
 	}
@@ -160,16 +186,23 @@ func TestInsertChunksBatchedStillWritesContentBesideARefusal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("embedChunkBatch returned error: %v", err)
 	}
+
 	if !embedded.refusedEmpty[0] {
 		t.Fatal("the empty chunk was not marked refused")
 	}
+
 	if embedded.refusedEmpty[1] {
 		t.Fatal("the chunk carrying content was marked refused")
 	}
+
 	if embedded.vectors[1] == nil {
 		t.Fatal("the chunk carrying content got no vector")
 	}
+
 	if oversized := collectOversizedChunks(chunks, embedded); len(oversized) != 0 {
-		t.Fatalf("collectOversizedChunks returned %#v, want none; a refusal must not enter the splitter", oversized)
+		t.Fatalf(
+			"collectOversizedChunks returned %#v, want none; a refusal must not enter the splitter",
+			oversized,
+		)
 	}
 }

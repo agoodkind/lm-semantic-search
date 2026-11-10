@@ -38,6 +38,7 @@ func offlineModelCacheRoot(t *testing.T) string {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatalf("create shared offline model cache %s: %v", root, err)
 	}
+
 	return root
 }
 
@@ -52,6 +53,7 @@ func TestONNXBGEProviderDeterministicNormalizedAndConfigured(t *testing.T) {
 		skipIfArtifactUnavailable(t, err)
 		t.Fatalf("NewProvider: %v", err)
 	}
+
 	if provider.ProviderName() != config.EmbeddingProviderONNX {
 		t.Fatalf(
 			"ProviderName = %q, want %q",
@@ -64,24 +66,30 @@ func TestONNXBGEProviderDeterministicNormalizedAndConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("embed first: %v", err)
 	}
+
 	second, err := provider.Embed(context.Background(), "package main\nfunc main() {}")
 	if err != nil {
 		t.Fatalf("embed second: %v", err)
 	}
+
 	if len(first) != 384 {
 		t.Fatalf("dimension = %d, want 384", len(first))
 	}
+
 	if !slices.Equal(first, second) {
 		t.Fatal("repeated ONNX embeddings differ")
 	}
 
 	var squaredNorm float64
+
 	for _, value := range first {
 		squaredNorm += float64(value) * float64(value)
 	}
+
 	if math.Abs(squaredNorm-1.0) > 1e-3 {
 		t.Fatalf("squared L2 norm = %v, want 1", squaredNorm)
 	}
+
 	if err := provider.Health(context.Background()); err != nil {
 		t.Fatalf("Health: %v", err)
 	}
@@ -92,6 +100,7 @@ func TestGenericTokenizerLoadsTokenizerJSONWithStableIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
+
 	tokenizerPath := filepath.Join(t.TempDir(), "tokenizer.json")
 	if err := ensureArtifact(
 		context.Background(),
@@ -107,10 +116,12 @@ func TestGenericTokenizerLoadsTokenizerJSONWithStableIDs(t *testing.T) {
 		skipIfArtifactUnavailable(t, err)
 		t.Fatalf("ensureArtifact: %v", err)
 	}
+
 	tokenizer, err := newGenericTokenizer(tokenizerPath, preset.MaximumTokens)
 	if err != nil {
 		t.Fatalf("newGenericTokenizer: %v", err)
 	}
+
 	t.Cleanup(func() {
 		if closeErr := tokenizer.Close(); closeErr != nil {
 			t.Errorf("Close: %v", closeErr)
@@ -121,10 +132,12 @@ func TestGenericTokenizerLoadsTokenizerJSONWithStableIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
+
 	want := []int64{101, 7427, 2364, 4569, 2278, 2364, 1006, 1007, 1063, 1065, 102}
 	if !slices.Equal(encoded.inputIDs, want) {
 		t.Fatalf("token ids = %v, want %v", encoded.inputIDs, want)
 	}
+
 	if len(encoded.attentionMask) != len(encoded.inputIDs) {
 		t.Fatalf(
 			"attention mask length = %d, want %d",
@@ -142,6 +155,7 @@ func loadPresetTokenizer(t *testing.T, presetName string) (*genericTokenizer, of
 	if err != nil {
 		t.Fatalf("Resolve %s: %v", presetName, err)
 	}
+
 	tokenizerPath := filepath.Join(offlineModelCacheRoot(t), presetName+"-tokenizer.json")
 	if err := ensureArtifact(
 		context.Background(),
@@ -157,52 +171,81 @@ func loadPresetTokenizer(t *testing.T, presetName string) (*genericTokenizer, of
 		skipIfArtifactUnavailable(t, err)
 		t.Fatalf("ensureArtifact %s: %v", presetName, err)
 	}
+
 	tokenizer, err := newGenericTokenizer(tokenizerPath, preset.MaximumTokens)
 	if err != nil {
 		t.Fatalf("newGenericTokenizer %s: %v", presetName, err)
 	}
+
 	t.Cleanup(func() {
 		if closeErr := tokenizer.Close(); closeErr != nil {
 			t.Errorf("Close %s: %v", presetName, closeErr)
 		}
 	})
+
 	return tokenizer, preset
 }
 
 func TestGenericTokenizerReportsOverLimitInsteadOfTruncating(t *testing.T) {
 	for _, presetName := range offlinemodel.Names() {
-		t.Run(presetName, func(t *testing.T) {
-			tokenizer, preset := loadPresetTokenizer(t, presetName)
+		t.Run(
+			presetName,
+			func(t *testing.T) {
+				tokenizer, preset := loadPresetTokenizer(t, presetName)
 
-			// One repeated line tokenizes to far more tokens than the preset allows,
-			// so the tokenizer must report the overflow rather than cutting the input
-			// down to the limit and letting the model embed only the head of it.
-			longText := strings.Repeat("func handleRequest(writer http.ResponseWriter) { return }\n", int(preset.MaximumTokens))
-			encoded, err := tokenizer.encode(longText)
-			if err != nil {
-				t.Fatalf("encode long input: %v", err)
-			}
-			if encoded.rejection != onnxInputOverTokenLimit {
-				t.Fatalf("long input reported rejection %q with %d token ids; the tokenizer truncated it silently", encoded.rejection, len(encoded.inputIDs))
-			}
-			if encoded.tokenCount <= int(preset.MaximumTokens) {
-				t.Fatalf("reported token count = %d, want more than the %d-token limit", encoded.tokenCount, preset.MaximumTokens)
-			}
-			if len(encoded.inputIDs) != 0 {
-				t.Fatalf("over-limit input still carries %d token ids, which the model could embed as a truncated copy", len(encoded.inputIDs))
-			}
+				// One repeated line tokenizes to far more tokens than the preset allows,
+				// so the tokenizer must report the overflow rather than cutting the input
+				// down to the limit and letting the model embed only the head of it.
+				longText := strings.Repeat(
+					"func handleRequest(writer http.ResponseWriter) { return }\n",
+					int(preset.MaximumTokens),
+				)
+				encoded, err := tokenizer.encode(longText)
+				if err != nil {
+					t.Fatalf("encode long input: %v", err)
+				}
 
-			shortEncoded, err := tokenizer.encode("package main\nfunc main() {}")
-			if err != nil {
-				t.Fatalf("encode short input: %v", err)
-			}
-			if shortEncoded.rejection != onnxInputAccepted {
-				t.Fatalf("short input reported rejection %q", shortEncoded.rejection)
-			}
-			if shortEncoded.tokenCount != len(shortEncoded.inputIDs) {
-				t.Fatalf("short input token count = %d, want %d", shortEncoded.tokenCount, len(shortEncoded.inputIDs))
-			}
-		})
+				if encoded.rejection != onnxInputOverTokenLimit {
+					t.Fatalf(
+						"long input reported rejection %q with %d token ids; the tokenizer truncated it silently",
+						encoded.rejection,
+						len(encoded.inputIDs),
+					)
+				}
+
+				if encoded.tokenCount <= int(preset.MaximumTokens) {
+					t.Fatalf(
+						"reported token count = %d, want more than the %d-token limit",
+						encoded.tokenCount,
+						preset.MaximumTokens,
+					)
+				}
+
+				if len(encoded.inputIDs) != 0 {
+					t.Fatalf(
+						"over-limit input still carries %d token ids, which the model could embed as a truncated copy",
+						len(encoded.inputIDs),
+					)
+				}
+
+				shortEncoded, err := tokenizer.encode("package main\nfunc main() {}")
+				if err != nil {
+					t.Fatalf("encode short input: %v", err)
+				}
+
+				if shortEncoded.rejection != onnxInputAccepted {
+					t.Fatalf("short input reported rejection %q", shortEncoded.rejection)
+				}
+
+				if shortEncoded.tokenCount != len(shortEncoded.inputIDs) {
+					t.Fatalf(
+						"short input token count = %d, want %d",
+						shortEncoded.tokenCount,
+						len(shortEncoded.inputIDs),
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -211,6 +254,7 @@ func TestONNXEmbedBatchSkipsOverLimitInputInsteadOfTruncating(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
+
 	cfg := config.ApplyProfile(config.Config{
 		Profile:               config.ProfileOffline,
 		OfflineEmbeddingModel: offlinemodel.BGESmall,
@@ -222,35 +266,60 @@ func TestONNXEmbedBatchSkipsOverLimitInputInsteadOfTruncating(t *testing.T) {
 		t.Fatalf("NewProvider: %v", err)
 	}
 
-	longText := strings.Repeat("func handleRequest(writer http.ResponseWriter) { return }\n", int(preset.MaximumTokens))
+	longText := strings.Repeat(
+		"func handleRequest(writer http.ResponseWriter) { return }\n",
+		int(preset.MaximumTokens),
+	)
 	result, err := provider.EmbedBatch(context.Background(), []string{"package main", longText})
 	if err != nil {
 		t.Fatalf("EmbedBatch: %v", err)
 	}
+
 	if len(result.Vectors) != 2 {
 		t.Fatalf("vectors = %d, want 2 (index-aligned with the inputs)", len(result.Vectors))
 	}
+
 	if result.Vectors[0] == nil {
 		t.Fatal("the input that fits got no vector")
 	}
+
 	if result.Vectors[1] != nil {
-		t.Fatal("the over-limit input got a vector, so its content was truncated and embedded anyway")
+		t.Fatal(
+			"the over-limit input got a vector, so its content was truncated and embedded anyway",
+		)
 	}
+
 	if len(result.Skipped) != 1 {
 		t.Fatalf("skipped = %d, want 1 (the over-limit input)", len(result.Skipped))
 	}
+
 	skip := result.Skipped[0]
 	if skip.Index != 1 {
 		t.Fatalf("skipped index = %d, want 1", skip.Index)
 	}
+
 	if skip.Reason != adapterr.EmbedRejectionContextLengthExceeded {
-		t.Fatalf("skipped reason = %q, want %q", skip.Reason, adapterr.EmbedRejectionContextLengthExceeded)
+		t.Fatalf(
+			"skipped reason = %q, want %q",
+			skip.Reason,
+			adapterr.EmbedRejectionContextLengthExceeded,
+		)
 	}
+
 	if skip.MaxTokens != adapterr.ReportedFigure(int(preset.MaximumTokens)) {
-		t.Fatalf("skipped MaxTokens = %+v, want a reported %d", skip.MaxTokens, preset.MaximumTokens)
+		t.Fatalf(
+			"skipped MaxTokens = %+v, want a reported %d",
+			skip.MaxTokens,
+			preset.MaximumTokens,
+		)
 	}
+
 	if !skip.ReportedTokens.Reported || skip.ReportedTokens.Value <= skip.MaxTokens.Value {
-		t.Fatalf("skipped ReportedTokens = %+v, want a reported count over the %d-token limit", skip.ReportedTokens, skip.MaxTokens.Value)
+		t.Fatalf(
+			"skipped ReportedTokens = %+v, want a reported count over the %d-token limit",
+			skip.ReportedTokens,
+			skip.MaxTokens.Value,
+		)
 	}
 
 	// A single-input Embed follows the same rule: an over-limit input is an error,
@@ -271,6 +340,7 @@ func newUnloadedONNXProvider(t *testing.T, presetName string) *onnxProvider {
 	if err != nil {
 		t.Fatalf("Resolve %s: %v", presetName, err)
 	}
+
 	return &onnxProvider{
 		runtime: &inProcessONNXRuntime{
 			session: nil,
@@ -293,8 +363,11 @@ func TestONNXRejectsInputWithNULByteInsteadOfEmbeddingItsPrefix(t *testing.T) {
 
 	vector, err := provider.Embed(context.Background(), nulInput)
 	if err == nil {
-		t.Fatal("Embed returned a vector for an input containing a NUL byte; that vector could only cover the prefix before it")
+		t.Fatal(
+			"Embed returned a vector for an input containing a NUL byte; that vector could only cover the prefix before it",
+		)
 	}
+
 	if vector != nil {
 		t.Fatalf("Embed returned %d values alongside the rejection", len(vector))
 	}
@@ -303,18 +376,30 @@ func TestONNXRejectsInputWithNULByteInsteadOfEmbeddingItsPrefix(t *testing.T) {
 	if batchErr != nil {
 		t.Fatalf("EmbedBatch: %v", batchErr)
 	}
+
 	if len(result.Vectors) != 1 {
 		t.Fatalf("vectors = %d, want 1 (index-aligned with the inputs)", len(result.Vectors))
 	}
+
 	if result.Vectors[0] != nil {
 		t.Fatal("the NUL-carrying input got a vector, so its prefix was embedded anyway")
 	}
+
 	if len(result.Skipped) != 1 {
-		t.Fatalf("skipped = %d, want 1; the input must be reported, never silently dropped", len(result.Skipped))
+		t.Fatalf(
+			"skipped = %d, want 1; the input must be reported, never silently dropped",
+			len(result.Skipped),
+		)
 	}
+
 	if result.Skipped[0].Reason != adapterr.EmbedRejectionInputContainsNUL {
-		t.Fatalf("skipped reason = %q, want %q", result.Skipped[0].Reason, adapterr.EmbedRejectionInputContainsNUL)
+		t.Fatalf(
+			"skipped reason = %q, want %q",
+			result.Skipped[0].Reason,
+			adapterr.EmbedRejectionInputContainsNUL,
+		)
 	}
+
 	if result.Skipped[0].Index != 0 {
 		t.Fatalf("skipped index = %d, want 0", result.Skipped[0].Index)
 	}
@@ -345,10 +430,14 @@ func TestONNXEmbedRejectsNULInputThatSharesAPrefixWithAnEmbeddableOne(t *testing
 	fullVector, fullErr := provider.Embed(context.Background(), fullInput)
 	if fullErr == nil {
 		if slices.Equal(fullVector, prefixVector) {
-			t.Fatal("Embed returned the prefix's own vector for an input whose tail follows a NUL byte")
+			t.Fatal(
+				"Embed returned the prefix's own vector for an input whose tail follows a NUL byte",
+			)
 		}
+
 		t.Fatal("Embed returned a vector for an input containing a NUL byte")
 	}
+
 	if fullVector != nil {
 		t.Fatalf("Embed returned %d values alongside the rejection", len(fullVector))
 	}
@@ -380,9 +469,11 @@ func TestONNXEmbedRejectsOversizedInputWithoutTakingTheRuntimeLock(t *testing.T)
 		if attempt.err == nil {
 			t.Fatal("Embed returned a vector for an input past the tokenizer byte bound")
 		}
+
 		if attempt.vector != nil {
 			t.Fatalf("Embed returned %d values alongside the rejection", len(attempt.vector))
 		}
+
 		if !strings.Contains(attempt.err.Error(), "over the") {
 			t.Fatalf("rejection does not name the bound it exceeded: %v", attempt.err)
 		}
@@ -400,35 +491,57 @@ func TestONNXEmbedBatchReportsOversizedInputAsSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EmbedBatch: %v", err)
 	}
+
 	if len(result.Vectors) != 1 {
 		t.Fatalf("vectors = %d, want 1 (index-aligned with the inputs)", len(result.Vectors))
 	}
+
 	if result.Vectors[0] != nil {
 		t.Fatal("the oversized input got a vector, so part of its content was embedded")
 	}
+
 	if len(result.Skipped) != 1 {
-		t.Fatalf("skipped = %d, want 1; the input must be reported, never silently dropped", len(result.Skipped))
+		t.Fatalf(
+			"skipped = %d, want 1; the input must be reported, never silently dropped",
+			len(result.Skipped),
+		)
 	}
+
 	if result.Skipped[0].Reason != adapterr.EmbedRejectionInputBytesExceeded {
-		t.Fatalf("skipped reason = %q, want %q", result.Skipped[0].Reason, adapterr.EmbedRejectionInputBytesExceeded)
+		t.Fatalf(
+			"skipped reason = %q, want %q",
+			result.Skipped[0].Reason,
+			adapterr.EmbedRejectionInputBytesExceeded,
+		)
 	}
+
 	// The byte ceiling refused this input, not the model's token window, so the
 	// skip carries no token limit. Reporting the model's 512 tokens here would
 	// name a figure that had nothing to do with the refusal.
 	if result.Skipped[0].MaxTokens.Reported {
-		t.Fatalf("skipped MaxTokens = %+v, want unreported; the token limit is not the limit that refused this input", result.Skipped[0].MaxTokens)
+		t.Fatalf(
+			"skipped MaxTokens = %+v, want unreported; the token limit is not the limit that refused this input",
+			result.Skipped[0].MaxTokens,
+		)
 	}
+
 	if result.Skipped[0].ReportedTokens.Reported {
-		t.Fatalf("skipped ReportedTokens = %+v, want unreported; the input was never tokenized", result.Skipped[0].ReportedTokens)
+		t.Fatalf(
+			"skipped ReportedTokens = %+v, want unreported; the input was never tokenized",
+			result.Skipped[0].ReportedTokens,
+		)
 	}
 }
 
 func TestPoolAndNormalizeUsesConfiguredPooling(t *testing.T) {
 	const dimension = 2
 	tokenEmbeddings := []float32{
-		3, 4,
-		0, 2,
-		100, 100,
+		3,
+		4,
+		0,
+		2,
+		100,
+		100,
 	}
 	attentionMask := []int64{1, 1, 0}
 
@@ -441,6 +554,7 @@ func TestPoolAndNormalizeUsesConfiguredPooling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CLS pool: %v", err)
 	}
+
 	assertVectorClose(t, clsVector, []float32{0.6, 0.8})
 
 	meanVector, err := poolAndNormalize(
@@ -452,6 +566,7 @@ func TestPoolAndNormalizeUsesConfiguredPooling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mean pool: %v", err)
 	}
+
 	inverseNorm := float32(1 / math.Sqrt(5))
 	assertVectorClose(t, meanVector, []float32{inverseNorm, 2 * inverseNorm})
 }
@@ -461,6 +576,7 @@ func assertVectorClose(t *testing.T, got []float32, want []float32) {
 	if len(got) != len(want) {
 		t.Fatalf("vector length = %d, want %d", len(got), len(want))
 	}
+
 	for index := range got {
 		if math.Abs(float64(got[index]-want[index])) > 1e-6 {
 			t.Fatalf("vector[%d] = %v, want %v", index, got[index], want[index])

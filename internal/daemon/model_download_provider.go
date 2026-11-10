@@ -23,13 +23,21 @@ func newModelGatedProvider(supervisor *modelDownloadSupervisor) *modelGatedProvi
 }
 
 func modelNotReadyError(snapshot modelDownloadSnapshot) *adapterr.AdapterError {
-	message := fmt.Sprintf("embedding model files are not installed; download state is %s", snapshot.State)
+	message := fmt.Sprintf(
+		"embedding model files are not installed; download state is %s",
+		snapshot.State,
+	)
 	if snapshot.ProgressKnown {
-		message += fmt.Sprintf(" artifact=%s downloaded_bytes=%d", snapshot.Artifact, snapshot.DownloadedBytes)
+		message += fmt.Sprintf(
+			" artifact=%s downloaded_bytes=%d",
+			snapshot.Artifact,
+			snapshot.DownloadedBytes,
+		)
 		if snapshot.TotalBytes > 0 {
 			message += fmt.Sprintf(" total_bytes=%d", snapshot.TotalBytes)
 		}
 	}
+
 	if snapshot.DecisionKnown {
 		message += fmt.Sprintf(
 			" network_classification=%s decision=%s",
@@ -37,10 +45,16 @@ func modelNotReadyError(snapshot modelDownloadSnapshot) *adapterr.AdapterError {
 			snapshot.Decision,
 		)
 	}
+
 	if snapshot.LastError != "" {
 		message += " last_error=" + snapshot.LastError
 	}
-	return adapterr.NewEmbeddingModelNotReady(message, "Retry after the download completes. If the download is deferred, use the profile command to set --model-download-network-override or change --model-download-network-policy.", nil)
+
+	return adapterr.NewEmbeddingModelNotReady(
+		message,
+		"Retry after the download completes. If the download is deferred, use the profile command to set --model-download-network-override or change --model-download-network-policy.",
+		nil,
+	)
 }
 
 func (provider *modelGatedProvider) ProviderName() model.EmbeddingProvider {
@@ -53,15 +67,26 @@ func (provider *modelGatedProvider) Provider(ctx context.Context) (embedding.Pro
 		if snapshot.State == modelDownloadDeferred {
 			provider.supervisor.requestRecheck()
 		}
+
 		notReady := modelNotReadyError(snapshot)
-		slog.WarnContext(ctx, "model_download.embedding_refused", "state", string(snapshot.State), "err", notReady)
+		slog.WarnContext(
+			ctx,
+			"model_download.embedding_refused",
+			"state",
+			string(snapshot.State),
+			"err",
+			notReady,
+		)
+
 		return nil, notReady
 	}
+
 	provider.mutex.Lock()
 	defer provider.mutex.Unlock()
 	if provider.provider != nil {
 		return provider.provider, nil
 	}
+
 	built, err := onnx.NewProviderForInstalledPreset(
 		provider.supervisor.cfg.ModelCacheRoot,
 		provider.supervisor.preset,
@@ -69,6 +94,8 @@ func (provider *modelGatedProvider) Provider(ctx context.Context) (embedding.Pro
 	if err != nil {
 		return nil, fmt.Errorf("create ONNX embedding provider: %w", err)
 	}
+
 	provider.provider = built
+
 	return built, nil
 }

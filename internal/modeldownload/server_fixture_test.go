@@ -44,14 +44,17 @@ type artifactServer struct {
 
 func newArtifactServer(t *testing.T, behaviors ...serverBehavior) *artifactServer {
 	t.Helper()
+
 	content := make([]byte, artifactSizeBytes)
 	for i := range content {
 		content[i] = byte((i * 31) % 251)
 	}
+
 	contentPath := filepath.Join(t.TempDir(), artifactName)
 	if err := os.WriteFile(contentPath, content, fixtureFilePermission); err != nil {
 		t.Fatalf("WriteFile %s: %v", contentPath, err)
 	}
+
 	fixture := &artifactServer{
 		server:       nil,
 		content:      content,
@@ -62,6 +65,7 @@ func newArtifactServer(t *testing.T, behaviors ...serverBehavior) *artifactServe
 	}
 	fixture.server = httptest.NewServer(http.HandlerFunc(fixture.serve))
 	t.Cleanup(fixture.server.Close)
+
 	return fixture
 }
 
@@ -72,8 +76,10 @@ func (fixture *artifactServer) nextBehavior(request *http.Request) serverBehavio
 	if len(fixture.behaviors) == 0 {
 		return behaviorServe
 	}
+
 	behavior := fixture.behaviors[0]
 	fixture.behaviors = fixture.behaviors[1:]
+
 	return behavior
 }
 
@@ -107,8 +113,10 @@ func (fixture *artifactServer) writeHalf(writer http.ResponseWriter, request *ht
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
+
 		start = parsed
 	}
+
 	remaining := fixture.content[start:]
 	writer.Header().Set("Content-Length", strconv.Itoa(len(remaining)))
 	if start > 0 {
@@ -117,6 +125,7 @@ func (fixture *artifactServer) writeHalf(writer http.ResponseWriter, request *ht
 		writer.Header().Set("Content-Range", contentRange)
 		writer.WriteHeader(http.StatusPartialContent)
 	}
+
 	_, _ = writer.Write(remaining[:len(remaining)/2])
 	flusher, ok := writer.(http.Flusher)
 	if ok {
@@ -127,6 +136,7 @@ func (fixture *artifactServer) writeHalf(writer http.ResponseWriter, request *ht
 func (fixture *artifactServer) ranges() []string {
 	fixture.mutex.Lock()
 	defer fixture.mutex.Unlock()
+
 	return slices.Clone(fixture.rangeHeaders)
 }
 

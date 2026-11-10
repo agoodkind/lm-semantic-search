@@ -12,13 +12,40 @@ import (
 
 func TestListModelViewShowsRecords(t *testing.T) {
 	codebases := []*pb.Codebase{
-		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed", DisplayStatus: "indexed", GlyphToken: "✓", StatusLabel: "indexed", LastSuccessfulRun: &pb.IndexRunSummary{IndexedFiles: 12}},
-		{Id: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: "stale", DisplayStatus: "stale", GlyphToken: "!", StatusLabel: "stale"},
+		{
+			Id:                "cb_1_aaaa",
+			CanonicalPath:     "/tmp/alpha",
+			Status:            "indexed",
+			DisplayStatus:     "indexed",
+			GlyphToken:        "✓",
+			StatusLabel:       "indexed",
+			LastSuccessfulRun: &pb.IndexRunSummary{IndexedFiles: 12},
+		},
+		{
+			Id:            "cb_2_bbbb",
+			CanonicalPath: "/tmp/beta",
+			Status:        "stale",
+			DisplayStatus: "stale",
+			GlyphToken:    "!",
+			StatusLabel:   "stale",
+		},
 	}
 	model := newListModel(cliOptions{}, codebases, nil)
 
 	view := model.View().Content
-	for _, want := range []string{"cb_1_aaaa", "cb_2_bbbb", "alpha", "beta", "indexed", "stale", "12", "NAME", "STATUS", "PATH"} {
+
+	for _, want := range []string{
+		"cb_1_aaaa",
+		"cb_2_bbbb",
+		"alpha",
+		"beta",
+		"indexed",
+		"stale",
+		"12",
+		"NAME",
+		"STATUS",
+		"PATH",
+	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() missing %q\n%s", want, view)
 		}
@@ -26,22 +53,25 @@ func TestListModelViewShowsRecords(t *testing.T) {
 }
 
 func TestListModelViewShowsStoredSchedulingPolicy(t *testing.T) {
-	codebases := []*pb.Codebase{{
-		Id:            "cb_1_aaaa",
-		CanonicalPath: "/tmp/alpha",
-		DisplayStatus: "indexed",
-		GlyphToken:    "✓",
-		StatusLabel:   "indexed",
-		SchedulingPolicy: &pb.SchedulingPolicy{
-			Priority:         pb.SchedulingPriority_SCHEDULING_PRIORITY_LOW,
-			Quiet:            true,
-			IdleAfterSeconds: 600,
+	codebases := []*pb.Codebase{
+		{
+			Id:            "cb_1_aaaa",
+			CanonicalPath: "/tmp/alpha",
+			DisplayStatus: "indexed",
+			GlyphToken:    "✓",
+			StatusLabel:   "indexed",
+			SchedulingPolicy: &pb.SchedulingPolicy{
+				Priority:         pb.SchedulingPriority_SCHEDULING_PRIORITY_LOW,
+				Quiet:            true,
+				IdleAfterSeconds: 600,
+			},
 		},
-	}}
+	}
 	model := newListModel(cliOptions{}, codebases, nil)
 	model.width = 160
 
 	output := model.View().Content
+
 	for _, want := range []string{
 		"Stored policy:",
 		"priority=low · quiet=on · idle_after=10m",
@@ -57,11 +87,19 @@ func TestListModelViewShowsStoredSchedulingPolicy(t *testing.T) {
 // status vocabulary including "waiting".
 func TestListRowRendersDaemonTokens(t *testing.T) {
 	codebases := []*pb.Codebase{
-		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexing", DisplayStatus: "waiting", GlyphToken: "⋯", StatusLabel: "waiting"},
+		{
+			Id:            "cb_1_aaaa",
+			CanonicalPath: "/tmp/alpha",
+			Status:        "indexing",
+			DisplayStatus: "waiting",
+			GlyphToken:    "⋯",
+			StatusLabel:   "waiting",
+		},
 	}
 	model := newListModel(cliOptions{}, codebases, nil)
 
 	view := model.View().Content
+
 	for _, want := range []string{"⋯", "waiting"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() missing daemon token %q\n%s", want, view)
@@ -89,13 +127,25 @@ func TestListRowDoesNotFallbackToRawStatusWithoutTokens(t *testing.T) {
 // surfaces.
 func TestListViewShowsDegradedBanner(t *testing.T) {
 	codebases := []*pb.Codebase{
-		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed", DisplayStatus: "waiting", GlyphToken: "⋯", StatusLabel: "waiting"},
+		{
+			Id:            "cb_1_aaaa",
+			CanonicalPath: "/tmp/alpha",
+			Status:        "indexed",
+			DisplayStatus: "waiting",
+			GlyphToken:    "⋯",
+			StatusLabel:   "waiting",
+		},
 	}
-	degraded := newListModel(cliOptions{}, codebases, &pb.DependencyHealth{Degraded: true, Mode: "embedder_unreachable"})
+	degraded := newListModel(
+		cliOptions{},
+		codebases,
+		&pb.DependencyHealth{Degraded: true, Mode: "embedder_unreachable"},
+	)
 	view := degraded.View().Content
 	if !strings.Contains(view, "🟥") {
 		t.Errorf("degraded list view missing banner marker:\n%s", view)
 	}
+
 	if !strings.Contains(view, "unreachable") {
 		t.Errorf("degraded list view missing banner headline:\n%s", view)
 	}
@@ -132,9 +182,11 @@ func TestFitHeadKeepsTail(t *testing.T) {
 	if !strings.HasSuffix(got, "lmd") {
 		t.Errorf("fitHead kept the wrong end: %q", got)
 	}
+
 	if !strings.HasPrefix(got, "…") {
 		t.Errorf("fitHead missing leading ellipsis: %q", got)
 	}
+
 	if utf8.RuneCountInString(got) != 8 {
 		t.Errorf("fitHead width = %d runes, want 8: %q", utf8.RuneCountInString(got), got)
 	}
@@ -155,6 +207,7 @@ func TestListModelNavigationMovesSelection(t *testing.T) {
 	if !ok {
 		t.Fatalf("Update did not return a listModel")
 	}
+
 	if moved.cursor != 1 {
 		t.Errorf("cursor after down = %d, want 1", moved.cursor)
 	}
@@ -164,6 +217,7 @@ func TestListModelNavigationMovesSelection(t *testing.T) {
 	if !ok {
 		t.Fatalf("Update did not return a listModel")
 	}
+
 	if back.cursor != 0 {
 		t.Errorf("cursor after up = %d, want 0", back.cursor)
 	}
@@ -183,9 +237,17 @@ func TestListModelRefreshPreservesSelectionByID(t *testing.T) {
 		{Id: "cb_2_bbbb", CanonicalPath: "/tmp/beta", Status: "indexed"},
 		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed"},
 	}
-	refreshed := model.applyRefresh(refreshedMsg{codebases: reordered, health: nil, err: nil})
+	refreshed := model.applyRefresh(refreshedMsg{
+		codebases: reordered,
+		health:    nil,
+		err:       nil,
+	})
 	if refreshed.codebases[refreshed.cursor].GetId() != "cb_2_bbbb" {
-		t.Errorf("cursor moved off cb_2_bbbb after refresh: index=%d id=%s", refreshed.cursor, refreshed.codebases[refreshed.cursor].GetId())
+		t.Errorf(
+			"cursor moved off cb_2_bbbb after refresh: index=%d id=%s",
+			refreshed.cursor,
+			refreshed.codebases[refreshed.cursor].GetId(),
+		)
 	}
 }
 
@@ -194,14 +256,19 @@ func TestListModelQuitKeySignalsQuit(t *testing.T) {
 		{Id: "cb_1_aaaa", CanonicalPath: "/tmp/alpha", Status: "indexed"},
 	}
 	model := newListModel(cliOptions{}, codebases, nil)
-	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	updated, cmd := model.Update(tea.KeyPressMsg{
+		Code: 'q',
+		Text: "q",
+	})
 	quit, ok := updated.(listModel)
 	if !ok {
 		t.Fatalf("Update did not return a listModel")
 	}
+
 	if !quit.quitting {
 		t.Error("q did not set quitting")
 	}
+
 	if cmd == nil {
 		t.Error("q did not return a quit command")
 	}

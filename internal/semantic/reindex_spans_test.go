@@ -34,6 +34,7 @@ func (handler *capturingHandler) Handle(_ context.Context, record slog.Record) e
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
 	handler.records = append(handler.records, capturedRecord{Message: record.Message, Attrs: attrs})
+
 	return nil
 }
 
@@ -51,11 +52,13 @@ func (handler *capturingHandler) reset() {
 func (handler *capturingHandler) find(message string) (capturedRecord, bool) {
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
+
 	for _, record := range handler.records {
 		if record.Message == message {
 			return record, true
 		}
 	}
+
 	return capturedRecord{}, false
 }
 
@@ -63,11 +66,13 @@ func (handler *capturingHandler) find(message string) (capturedRecord, bool) {
 func (handler *capturingHandler) findSpanCompletion(name string) (capturedRecord, bool) {
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
+
 	for _, record := range handler.records {
 		if record.Message == "daemon.span.completed" && record.Attrs["span"] == name {
 			return record, true
 		}
 	}
+
 	return capturedRecord{}, false
 }
 
@@ -79,6 +84,7 @@ func captureDefaultLogger(t *testing.T) *capturingHandler {
 	previous := slog.Default()
 	slog.SetDefault(slog.New(handler))
 	t.Cleanup(func() { slog.SetDefault(previous) })
+
 	return handler
 }
 
@@ -101,12 +107,15 @@ func TestEmbedPhaseSpanReportsInputCountsForRateAttribution(t *testing.T) {
 	if !found {
 		t.Fatal("no semantic.embed_batch_started record; the embedding phase is untimed")
 	}
+
 	if started.Attrs["inputs"] != "1" {
 		t.Fatalf("inputs = %q, want \"1\" (only the miss is sent)", started.Attrs["inputs"])
 	}
+
 	if started.Attrs["reused"] != "1" {
 		t.Fatalf("reused = %q, want \"1\"", started.Attrs["reused"])
 	}
+
 	// "fresh" is five bytes, which the packer's estimate rounds up to two tokens.
 	if started.Attrs["estimated_tokens"] != "2" {
 		t.Fatalf("estimated_tokens = %q, want \"2\"", started.Attrs["estimated_tokens"])
@@ -116,6 +125,7 @@ func TestEmbedPhaseSpanReportsInputCountsForRateAttribution(t *testing.T) {
 	if !found {
 		t.Fatal("no completed semantic.embedBatch span; embedding duration is not attributable")
 	}
+
 	if _, hasDuration := completed.Attrs["duration_ms"]; !hasDuration {
 		t.Fatalf("semantic.embedBatch completion has no duration_ms: %v", completed.Attrs)
 	}
@@ -139,6 +149,7 @@ func TestEmbedPhaseSpanIsSilentForAnAllReuseBatch(t *testing.T) {
 	if _, found := handler.find("semantic.embed_batch_started"); found {
 		t.Fatal("an all-reuse batch opened an embedding span; no embedder call happened")
 	}
+
 	if _, found := handler.findSpanCompletion("semantic.embedBatch"); found {
 		t.Fatal("an all-reuse batch completed a semantic.embedBatch span")
 	}
@@ -161,13 +172,16 @@ func TestEmbedPhaseSpanCountsEveryInputWhenNothingIsReused(t *testing.T) {
 	if !found {
 		t.Fatal("no semantic.embed_batch_started record for a cold batch")
 	}
+
 	if started.Attrs["inputs"] != "2" {
 		t.Fatalf("inputs = %q, want \"2\"", started.Attrs["inputs"])
 	}
+
 	// Two 400-byte chunks estimate at 100 tokens each.
 	if started.Attrs["estimated_tokens"] != "200" {
 		t.Fatalf("estimated_tokens = %q, want \"200\"", started.Attrs["estimated_tokens"])
 	}
+
 	if started.Attrs["reused"] != "0" {
 		t.Fatalf("reused = %q, want \"0\"", started.Attrs["reused"])
 	}

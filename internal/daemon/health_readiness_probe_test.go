@@ -48,6 +48,7 @@ func readinessSurfaces() []readinessSurface {
 				if err != nil {
 					return "", err
 				}
+
 				return response.GetDisplayText(), nil
 			},
 		},
@@ -58,6 +59,7 @@ func readinessSurfaces() []readinessSurface {
 				if err != nil {
 					return "", err
 				}
+
 				return response.GetDisplayText(), nil
 			},
 		},
@@ -68,6 +70,7 @@ func readinessSurfaces() []readinessSurface {
 				if err != nil {
 					return "", err
 				}
+
 				return response.GetDisplayText(), nil
 			},
 		},
@@ -85,6 +88,7 @@ func newReadinessManager(t *testing.T) (*Manager, *GRPCServer, string) {
 	if err != nil {
 		t.Fatalf("EvalSymlinks returned error: %v", err)
 	}
+
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	manager.mu.Lock()
@@ -92,21 +96,29 @@ func newReadinessManager(t *testing.T) (*Manager, *GRPCServer, string) {
 	manager.mu.Unlock()
 
 	manager.semantic = &fakeSemantic{
-		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
+		search: func(context.Context, string, string, int32, []string, string) (
+			[]model.StoredChunk,
+			error,
+		) {
 			return nil, semantic.ErrUnavailable
 		},
 	}
 	server := NewGRPCServer(manager, nil)
-	if _, searchErr := server.SearchCode(context.Background(), &pb.SearchCodeRequest{
-		Path:  repoPath,
-		Query: "anything",
-		Limit: 5,
-	}); searchErr == nil {
+	if _, searchErr := server.SearchCode(
+		context.Background(),
+		&pb.SearchCodeRequest{
+			Path:  repoPath,
+			Query: "anything",
+			Limit: 5,
+		},
+	); searchErr == nil {
 		t.Fatal("SearchCode succeeded against an unavailable store, so no outage was recorded")
 	}
+
 	if mode := manager.DependencyHealth().Mode; mode != dependencyStoreUnavailable {
 		t.Fatalf("setup: dependency mode = %q, want %q", mode, dependencyStoreUnavailable)
 	}
+
 	return manager, server, repoPath
 }
 
@@ -117,25 +129,38 @@ func newReadinessManager(t *testing.T) (*Manager, *GRPCServer, string) {
 // bound on staleness at all.
 func TestReadinessSurfacesReflectRecoveryWithoutAnotherCaller(t *testing.T) {
 	for _, surface := range readinessSurfaces() {
-		t.Run(surface.name, func(t *testing.T) {
-			manager, server, repoPath := newReadinessManager(t)
+		t.Run(
+			surface.name,
+			func(t *testing.T) {
+				manager, server, repoPath := newReadinessManager(t)
 
-			// The store returns. Nothing else runs: no search, no job, no other RPC.
-			manager.semantic = &fakeSemantic{}
-			resetProbeClock(manager)
+				// The store returns. Nothing else runs: no search, no job, no other RPC.
+				manager.semantic = &fakeSemantic{}
+				resetProbeClock(manager)
 
-			displayText, err := surface.call(context.Background(), server, repoPath)
-			if err != nil {
-				t.Fatalf("%s returned error: %v", surface.name, err)
-			}
-			if mode := manager.DependencyHealth().Mode; mode != dependencyHealthy {
-				t.Fatalf("dependency mode = %q after %s, want it cleared by the surface's own probe", mode, surface.name)
-			}
-			headline := status.BannerHeadlineFor(dependencyStoreUnavailable)
-			if strings.Contains(displayText, headline) {
-				t.Fatalf("%s still shows the store banner after the store recovered:\n%s", surface.name, displayText)
-			}
-		})
+				displayText, err := surface.call(context.Background(), server, repoPath)
+				if err != nil {
+					t.Fatalf("%s returned error: %v", surface.name, err)
+				}
+
+				if mode := manager.DependencyHealth().Mode; mode != dependencyHealthy {
+					t.Fatalf(
+						"dependency mode = %q after %s, want it cleared by the surface's own probe",
+						mode,
+						surface.name,
+					)
+				}
+
+				headline := status.BannerHeadlineFor(dependencyStoreUnavailable)
+				if strings.Contains(displayText, headline) {
+					t.Fatalf(
+						"%s still shows the store banner after the store recovered:\n%s",
+						surface.name,
+						displayText,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -143,30 +168,39 @@ func TestReadinessSurfacesReflectRecoveryWithoutAnotherCaller(t *testing.T) {
 // so the probe answers in both directions rather than only clearing.
 func TestReadinessSurfacesReportAnOutageTheRecordHasNotSeen(t *testing.T) {
 	for _, surface := range readinessSurfaces() {
-		t.Run(surface.name, func(t *testing.T) {
-			manager, _, repoPath := newTestManager(t)
-			canonicalPath, err := filepath.EvalSymlinks(repoPath)
-			if err != nil {
-				t.Fatalf("EvalSymlinks returned error: %v", err)
-			}
-			codebase := newCodebaseRecord(canonicalPath)
-			codebase.Status = model.CodebaseStatusIndexed
-			manager.mu.Lock()
-			manager.codebases[codebase.ID] = codebase
-			manager.mu.Unlock()
-			manager.semantic = &fakeSemantic{probeErr: adapterr.NewMilvusUnavailable(nil)}
-			resetProbeClock(manager)
-			server := NewGRPCServer(manager, nil)
+		t.Run(
+			surface.name,
+			func(t *testing.T) {
+				manager, _, repoPath := newTestManager(t)
+				canonicalPath, err := filepath.EvalSymlinks(repoPath)
+				if err != nil {
+					t.Fatalf("EvalSymlinks returned error: %v", err)
+				}
 
-			displayText, callErr := surface.call(context.Background(), server, repoPath)
-			if callErr != nil {
-				t.Fatalf("%s returned error: %v", surface.name, callErr)
-			}
-			headline := status.BannerHeadlineFor(dependencyStoreUnavailable)
-			if !strings.Contains(displayText, headline) {
-				t.Fatalf("%s did not report a live store outage:\n%s", surface.name, displayText)
-			}
-		})
+				codebase := newCodebaseRecord(canonicalPath)
+				codebase.Status = model.CodebaseStatusIndexed
+				manager.mu.Lock()
+				manager.codebases[codebase.ID] = codebase
+				manager.mu.Unlock()
+				manager.semantic = &fakeSemantic{probeErr: adapterr.NewMilvusUnavailable(nil)}
+				resetProbeClock(manager)
+				server := NewGRPCServer(manager, nil)
+
+				displayText, callErr := surface.call(context.Background(), server, repoPath)
+				if callErr != nil {
+					t.Fatalf("%s returned error: %v", surface.name, callErr)
+				}
+
+				headline := status.BannerHeadlineFor(dependencyStoreUnavailable)
+				if !strings.Contains(displayText, headline) {
+					t.Fatalf(
+						"%s did not report a live store outage:\n%s",
+						surface.name,
+						displayText,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -180,6 +214,7 @@ func TestReadinessProbeVolumeStaysOneProbePerInterval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvalSymlinks returned error: %v", err)
 	}
+
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	manager.mu.Lock()
@@ -195,24 +230,34 @@ func TestReadinessProbeVolumeStaysOneProbePerInterval(t *testing.T) {
 	surfaces := readinessSurfaces()
 	hammerAllSurfaces := func() {
 		var waitGroup sync.WaitGroup
+
 		for _, surface := range surfaces {
 			for range callsPerSurface {
 				waitGroup.Add(1)
 				go func() {
 					defer waitGroup.Done()
-					if _, callErr := surface.call(context.Background(), server, repoPath); callErr != nil {
+					if _, callErr := surface.call(
+						context.Background(),
+						server,
+						repoPath,
+					); callErr != nil {
 						t.Errorf("%s returned error: %v", surface.name, callErr)
 					}
 				}()
 			}
 		}
+
 		waitGroup.Wait()
 	}
 
 	callsPerInterval := int64(len(surfaces) * callsPerSurface)
 	hammerAllSurfaces()
 	if probes := backend.probeCount.Load(); probes != 1 {
-		t.Fatalf("%d readiness calls inside one debounce interval issued %d probes, want exactly 1", callsPerInterval, probes)
+		t.Fatalf(
+			"%d readiness calls inside one debounce interval issued %d probes, want exactly 1",
+			callsPerInterval,
+			probes,
+		)
 	}
 
 	// The interval elapses and the same load repeats. The rate is one probe per
@@ -221,7 +266,11 @@ func TestReadinessProbeVolumeStaysOneProbePerInterval(t *testing.T) {
 	resetProbeClock(manager)
 	hammerAllSurfaces()
 	if probes := backend.probeCount.Load(); probes != 2 {
-		t.Fatalf("%d readiness calls across two debounce intervals issued %d probes, want exactly 2", 2*callsPerInterval, probes)
+		t.Fatalf(
+			"%d readiness calls across two debounce intervals issued %d probes, want exactly 2",
+			2*callsPerInterval,
+			probes,
+		)
 	}
 }
 
@@ -235,6 +284,7 @@ func TestReadinessProbeIsBoundedByADeadline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvalSymlinks returned error: %v", err)
 	}
+
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	manager.mu.Lock()
@@ -249,10 +299,12 @@ func TestReadinessProbeIsBoundedByADeadline(t *testing.T) {
 				deadlines <- 0
 				return nil
 			}
+
 			deadlines <- time.Until(deadline)
 			// A store that accepts the connection and never answers: block until the
 			// bound expires rather than returning an error of our own.
 			<-ctx.Done()
+
 			return adapterr.NewMilvusUnavailable(ctx.Err())
 		},
 	}
@@ -270,15 +322,25 @@ func TestReadinessProbeIsBoundedByADeadline(t *testing.T) {
 	if budget <= 0 {
 		t.Fatal("the probe ran with no deadline; a hung store would block the surface indefinitely")
 	}
+
 	if budget > dependencyProbeTimeout {
 		t.Fatalf("probe deadline budget = %s, want no more than %s", budget, dependencyProbeTimeout)
 	}
+
 	if elapsed > dependencyProbeTimeout+5*time.Second {
-		t.Fatalf("ListIndexes took %s against a hung probe, want it bounded near %s", elapsed, dependencyProbeTimeout)
+		t.Fatalf(
+			"ListIndexes took %s against a hung probe, want it bounded near %s",
+			elapsed,
+			dependencyProbeTimeout,
+		)
 	}
+
 	headline := status.BannerHeadlineFor(dependencyStoreUnavailable)
 	if !strings.Contains(response.GetDisplayText(), headline) {
-		t.Fatalf("a probe that timed out left no store banner for the caller:\n%s", response.GetDisplayText())
+		t.Fatalf(
+			"a probe that timed out left no store banner for the caller:\n%s",
+			response.GetDisplayText(),
+		)
 	}
 }
 
@@ -292,6 +354,7 @@ func TestPassingProbeDoesNotClearAFailureRecordedWhileItWasInFlight(t *testing.T
 	if err != nil {
 		t.Fatalf("EvalSymlinks returned error: %v", err)
 	}
+
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	manager.mu.Lock()
@@ -304,9 +367,13 @@ func TestPassingProbeDoesNotClearAFailureRecordedWhileItWasInFlight(t *testing.T
 		probe: func(context.Context) error {
 			close(probeStarted)
 			<-releaseProbe
+
 			return nil
 		},
-		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
+		search: func(context.Context, string, string, int32, []string, string) (
+			[]model.StoredChunk,
+			error,
+		) {
 			return nil, semantic.ErrUnavailable
 		},
 	}
@@ -316,7 +383,10 @@ func TestPassingProbeDoesNotClearAFailureRecordedWhileItWasInFlight(t *testing.T
 	listDone := make(chan struct{})
 	go func() {
 		defer close(listDone)
-		if _, listErr := server.ListIndexes(context.Background(), &pb.ListIndexesRequest{}); listErr != nil {
+		if _, listErr := server.ListIndexes(
+			context.Background(),
+			&pb.ListIndexesRequest{},
+		); listErr != nil {
 			t.Errorf("ListIndexes returned error: %v", listErr)
 		}
 	}()
@@ -328,19 +398,33 @@ func TestPassingProbeDoesNotClearAFailureRecordedWhileItWasInFlight(t *testing.T
 	case <-time.After(probeStartTimeout):
 		close(releaseProbe)
 		<-listDone
-		t.Fatalf("ListIndexes never probed within %s, so it cannot answer a readiness question about now", probeStartTimeout)
+		t.Fatalf(
+			"ListIndexes never probed within %s, so it cannot answer a readiness question about now",
+			probeStartTimeout,
+		)
 	}
-	if _, searchErr := server.SearchCode(context.Background(), &pb.SearchCodeRequest{
-		Path:  repoPath,
-		Query: "anything",
-		Limit: 5,
-	}); searchErr == nil {
-		t.Fatal("SearchCode succeeded against an unavailable store, so no newer failure was recorded")
+
+	if _, searchErr := server.SearchCode(
+		context.Background(),
+		&pb.SearchCodeRequest{
+			Path:  repoPath,
+			Query: "anything",
+			Limit: 5,
+		},
+	); searchErr == nil {
+		t.Fatal(
+			"SearchCode succeeded against an unavailable store, so no newer failure was recorded",
+		)
 	}
+
 	close(releaseProbe)
 	<-listDone
 
 	if mode := manager.DependencyHealth().Mode; mode != dependencyStoreUnavailable {
-		t.Fatalf("dependency mode = %q, want %q; a probe that started before the failure must not clear it", mode, dependencyStoreUnavailable)
+		t.Fatalf(
+			"dependency mode = %q, want %q; a probe that started before the failure must not clear it",
+			mode,
+			dependencyStoreUnavailable,
+		)
 	}
 }

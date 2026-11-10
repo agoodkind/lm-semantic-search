@@ -29,6 +29,7 @@ func (source *activityTestSource) Sample(context.Context) platformactivity.Snaps
 	source.mutex.Lock()
 	defer source.mutex.Unlock()
 	source.samples++
+
 	return source.snapshot
 }
 
@@ -47,6 +48,7 @@ func (source *activityTestSource) setSnapshot(snapshot platformactivity.Snapshot
 func (source *activityTestSource) counts() (int, int) {
 	source.mutex.Lock()
 	defer source.mutex.Unlock()
+
 	return source.samples, source.closeCall
 }
 
@@ -67,16 +69,19 @@ func (source *panicActivitySource) Sample(
 	if shouldPanic {
 		panic("activity source sample panic")
 	}
+
 	return snapshot
 }
 
 func TestQuietAdmissionRequiresConfiguredInputIdle(t *testing.T) {
-	source := &activityTestSource{snapshot: platformactivity.Snapshot{
-		InputAvailable:   true,
-		InputIdleFor:     5*time.Minute - time.Second,
-		InputReason:      "input active",
-		ThermalAvailable: false,
-	}}
+	source := &activityTestSource{
+		snapshot: platformactivity.Snapshot{
+			InputAvailable:   true,
+			InputIdleFor:     5*time.Minute - time.Second,
+			InputReason:      "input active",
+			ThermalAvailable: false,
+		},
+	}
 	scheduler := New(context.Background(), 1, source)
 	defer scheduler.Close()
 
@@ -108,14 +113,7 @@ func TestQuietAdmissionPausesForActivityAndRecoversAutomatically(t *testing.T) {
 	source := &activityTestSource{snapshot: quietActivitySnapshot()}
 	scheduler := New(context.Background(), 1, source)
 	defer scheduler.Close()
-	lease := acquireQuietSchedulerLease(
-		t,
-		scheduler,
-		"quiet",
-		model.JobPriorityNormal,
-		1,
-		300,
-	)
+	lease := acquireQuietSchedulerLease(t, scheduler, "quiet", model.JobPriorityNormal, 1, 300)
 	defer lease.Release()
 
 	source.setSnapshot(platformactivity.Snapshot{
@@ -130,9 +128,11 @@ func TestQuietAdmissionPausesForActivityAndRecoversAutomatically(t *testing.T) {
 	if !requested || reason != ReasonWaitingForInputIdle {
 		t.Fatalf("activity pause = %v reason %q, want true and user active", requested, reason)
 	}
+
 	if !lease.Yield(reason) {
 		t.Fatal("quiet lease did not yield for activity")
 	}
+
 	reacquired := make(chan error, 1)
 	go func() {
 		reacquired <- lease.Reacquire(context.Background())
@@ -146,6 +146,7 @@ func TestQuietAdmissionPausesForActivityAndRecoversAutomatically(t *testing.T) {
 		if err != nil {
 			t.Fatalf("quiet Reacquire: %v", err)
 		}
+
 		if elapsed := time.Since(pollStarted); elapsed < time.Second {
 			t.Fatalf("automatic activity poll resumed after %s, want two-second cadence", elapsed)
 		}
@@ -155,16 +156,14 @@ func TestQuietAdmissionPausesForActivityAndRecoversAutomatically(t *testing.T) {
 }
 
 func TestActivityUnavailableKeepsQuietWorkQueuedWithStableReason(t *testing.T) {
-	source := &activityTestSource{snapshot: platformactivity.Snapshot{
-		InputAvailable:   false,
-		InputReason:      ReasonActivityUnavailable,
-		ThermalAvailable: false,
-	}}
-	scheduler := New(
-		context.Background(),
-		1,
-		source,
-	)
+	source := &activityTestSource{
+		snapshot: platformactivity.Snapshot{
+			InputAvailable:   false,
+			InputReason:      ReasonActivityUnavailable,
+			ThermalAvailable: false,
+		},
+	}
+	scheduler := New(context.Background(), 1, source)
 	defer scheduler.Close()
 	cancel, result := startQuietSchedulerAcquire(
 		scheduler,
@@ -183,27 +182,23 @@ func TestActivityUnavailableKeepsQuietWorkQueuedWithStableReason(t *testing.T) {
 			t.Fatalf("unavailable reason = %q, want activity unavailable", entry.Reason)
 		}
 	}
+
 	assertSchedulerAcquirePending(t, result)
 }
 
 func TestThermalSafetyMissingDataDoesNotBlockQuietAdmission(t *testing.T) {
-	source := &activityTestSource{snapshot: platformactivity.Snapshot{
-		InputAvailable:   true,
-		InputIdleFor:     5 * time.Minute,
-		ThermalAvailable: false,
-		ThermalUnsafe:    true,
-		ThermalReason:    "missing thermal data",
-	}}
+	source := &activityTestSource{
+		snapshot: platformactivity.Snapshot{
+			InputAvailable:   true,
+			InputIdleFor:     5 * time.Minute,
+			ThermalAvailable: false,
+			ThermalUnsafe:    true,
+			ThermalReason:    "missing thermal data",
+		},
+	}
 	scheduler := New(context.Background(), 1, source)
 	defer scheduler.Close()
-	lease := acquireQuietSchedulerLease(
-		t,
-		scheduler,
-		"quiet",
-		model.JobPriorityNormal,
-		1,
-		300,
-	)
+	lease := acquireQuietSchedulerLease(t, scheduler, "quiet", model.JobPriorityNormal, 1, 300)
 	lease.Release()
 }
 
@@ -211,14 +206,7 @@ func TestThermalSafetyPausesQuietWork(t *testing.T) {
 	source := &activityTestSource{snapshot: quietActivitySnapshot()}
 	scheduler := New(context.Background(), 1, source)
 	defer scheduler.Close()
-	lease := acquireQuietSchedulerLease(
-		t,
-		scheduler,
-		"quiet",
-		model.JobPriorityNormal,
-		1,
-		300,
-	)
+	lease := acquireQuietSchedulerLease(t, scheduler, "quiet", model.JobPriorityNormal, 1, 300)
 	defer lease.Release()
 
 	source.setSnapshot(platformactivity.Snapshot{
@@ -237,21 +225,16 @@ func TestThermalSafetyPausesQuietWork(t *testing.T) {
 }
 
 func TestHighBypassesIdleButNotThermalSafety(t *testing.T) {
-	source := &activityTestSource{snapshot: platformactivity.Snapshot{
-		InputAvailable:   false,
-		InputReason:      "input unavailable",
-		ThermalAvailable: false,
-	}}
+	source := &activityTestSource{
+		snapshot: platformactivity.Snapshot{
+			InputAvailable:   false,
+			InputReason:      "input unavailable",
+			ThermalAvailable: false,
+		},
+	}
 	scheduler := New(context.Background(), 1, source)
 	defer scheduler.Close()
-	lease := acquireQuietSchedulerLease(
-		t,
-		scheduler,
-		"high-quiet",
-		model.JobPriorityHigh,
-		1,
-		300,
-	)
+	lease := acquireQuietSchedulerLease(t, scheduler, "high-quiet", model.JobPriorityHigh, 1, 300)
 	defer lease.Release()
 
 	source.setSnapshot(platformactivity.Snapshot{
@@ -278,9 +261,11 @@ func TestActivitySnapshotReadsCacheAndCloseClosesSource(t *testing.T) {
 	if first != second || first != quietActivitySnapshot() {
 		t.Fatalf("cached activity snapshots = %+v and %+v", first, second)
 	}
+
 	if samples, _ := source.counts(); samples != 1 {
 		t.Fatalf("source samples after status reads = %d, want 1", samples)
 	}
+
 	scheduler.Close()
 	if _, closeCalls := source.counts(); closeCalls != 1 {
 		t.Fatalf("source close calls = %d, want 1", closeCalls)
@@ -315,6 +300,7 @@ func TestActivitySamplerContainsInitialSourcePanic(t *testing.T) {
 	if got := scheduler.Snapshot().Activity; got != unavailableActivitySnapshot() {
 		t.Fatalf("initial panic activity = %+v, want unavailable", got)
 	}
+
 	scheduler.sampleActivity(context.Background())
 	if got := scheduler.Snapshot().Activity; got != quietActivitySnapshot() {
 		t.Fatalf("sample after initial panic = %+v, want %+v", got, quietActivitySnapshot())
@@ -339,6 +325,7 @@ func TestActivitySamplerContinuesAfterPeriodicSourcePanic(t *testing.T) {
 	if got := scheduler.Snapshot().Activity; got != unavailableActivitySnapshot() {
 		t.Fatalf("panic activity = %+v, want unavailable", got)
 	}
+
 	scheduler.sampleActivity(context.Background())
 	if got := scheduler.Snapshot().Activity; got != updated {
 		t.Fatalf("sample after periodic panic = %+v, want %+v", got, updated)
@@ -355,19 +342,9 @@ func TestSchedulerFillsFourSlotsByWaitingPriority(t *testing.T) {
 	}
 	defer releaseSchedulerLeases(leases)
 
-	lowOneCancel, lowOneResult := startSchedulerAcquire(
-		scheduler,
-		"low-1",
-		model.JobPriorityLow,
-		5,
-	)
+	lowOneCancel, lowOneResult := startSchedulerAcquire(scheduler, "low-1", model.JobPriorityLow, 5)
 	defer lowOneCancel()
-	lowTwoCancel, lowTwoResult := startSchedulerAcquire(
-		scheduler,
-		"low-2",
-		model.JobPriorityLow,
-		6,
-	)
+	lowTwoCancel, lowTwoResult := startSchedulerAcquire(scheduler, "low-2", model.JobPriorityLow, 6)
 	defer lowTwoCancel()
 	waitForSchedulerCounts(t, scheduler, model.JobPriorityLow, 0, 2, 0)
 
@@ -403,19 +380,9 @@ func TestSchedulerGivesAllFourSlotsToHighPriority(t *testing.T) {
 		6,
 	)
 	defer normalTwoCancel()
-	lowOneCancel, lowOneResult := startSchedulerAcquire(
-		scheduler,
-		"low-1",
-		model.JobPriorityLow,
-		7,
-	)
+	lowOneCancel, lowOneResult := startSchedulerAcquire(scheduler, "low-1", model.JobPriorityLow, 7)
 	defer lowOneCancel()
-	lowTwoCancel, lowTwoResult := startSchedulerAcquire(
-		scheduler,
-		"low-2",
-		model.JobPriorityLow,
-		8,
-	)
+	lowTwoCancel, lowTwoResult := startSchedulerAcquire(scheduler, "low-2", model.JobPriorityLow, 8)
 	defer lowTwoCancel()
 	waitForSchedulerCounts(t, scheduler, model.JobPriorityNormal, 0, 2, 0)
 	waitForSchedulerCounts(t, scheduler, model.JobPriorityLow, 0, 2, 0)
@@ -454,12 +421,7 @@ func TestSchedulerGivesReleasedSlotToHighestWaitingPriority(t *testing.T) {
 		6,
 	)
 	defer normalTwoCancel()
-	lowCancel, lowResult := startSchedulerAcquire(
-		scheduler,
-		"low-1",
-		model.JobPriorityLow,
-		7,
-	)
+	lowCancel, lowResult := startSchedulerAcquire(scheduler, "low-1", model.JobPriorityLow, 7)
 	defer lowCancel()
 	waitForSchedulerCounts(t, scheduler, model.JobPriorityNormal, 0, 2, 0)
 	waitForSchedulerCounts(t, scheduler, model.JobPriorityLow, 0, 1, 0)
@@ -470,6 +432,7 @@ func TestSchedulerGivesReleasedSlotToHighestWaitingPriority(t *testing.T) {
 	if normalOneLease.jobID != "normal-1" {
 		t.Fatalf("released slot went to %q, want normal-1", normalOneLease.jobID)
 	}
+
 	assertSchedulerAcquirePending(t, normalTwoResult)
 	assertSchedulerAcquirePending(t, lowResult)
 }
@@ -484,29 +447,28 @@ func TestSchedulerPausesOnlyEnoughLowerJobs(t *testing.T) {
 	}
 	defer releaseSchedulerLeases(lowLeases)
 
-	highCancel, highResult := startSchedulerAcquire(
-		scheduler,
-		"high-1",
-		model.JobPriorityHigh,
-		5,
-	)
+	highCancel, highResult := startSchedulerAcquire(scheduler, "high-1", model.JobPriorityHigh, 5)
 	defer highCancel()
 	waitForSchedulerPauseRequest(t, lowLeases[3], true)
 
 	requested := 0
+
 	for _, lease := range lowLeases {
 		pauseRequested, reason := lease.Checkpoint()
 		if !pauseRequested {
 			continue
 		}
+
 		requested++
 		if reason != ReasonHigherPriorityWork {
 			t.Fatalf("pause reason = %q, want %q", reason, ReasonHigherPriorityWork)
 		}
 	}
+
 	if requested != 1 {
 		t.Fatalf("pause requests = %d, want 1", requested)
 	}
+
 	assertSchedulerAcquirePending(t, highResult)
 }
 
@@ -522,18 +484,14 @@ func TestSchedulerPausedJobKeepsFIFOPosition(t *testing.T) {
 		2,
 	)
 	defer newLowCancel()
-	highCancel, highResult := startSchedulerAcquire(
-		scheduler,
-		"high",
-		model.JobPriorityHigh,
-		3,
-	)
+	highCancel, highResult := startSchedulerAcquire(scheduler, "high", model.JobPriorityHigh, 3)
 	defer highCancel()
 	waitForSchedulerPauseRequest(t, oldLow, true)
 
 	if !oldLow.Yield(ReasonHigherPriorityWork) {
 		t.Fatal("old low lease did not yield")
 	}
+
 	highLease := receiveSchedulerLease(t, highResult)
 	defer highLease.Release()
 
@@ -547,6 +505,7 @@ func TestSchedulerPausedJobKeepsFIFOPosition(t *testing.T) {
 	if err := receiveSchedulerError(t, reacquired); err != nil {
 		t.Fatalf("reacquire old low lease: %v", err)
 	}
+
 	assertSchedulerAcquirePending(t, newLowResult)
 }
 
@@ -585,11 +544,13 @@ func TestSchedulerRetryRoundAdmitsHighestPriorityFirst(t *testing.T) {
 	if err := receiveSchedulerError(t, highRetry); err != nil {
 		t.Fatalf("high retry: %v", err)
 	}
+
 	select {
 	case err := <-lowRetry:
 		t.Fatalf("low retry completed before high released: %v", err)
 	default:
 	}
+
 	highLease.Release()
 	if err := receiveSchedulerError(t, lowRetry); err != nil {
 		t.Fatalf("low retry: %v", err)
@@ -609,19 +570,9 @@ func TestSchedulerPausesLowBeforeNormal(t *testing.T) {
 	}
 	defer releaseSchedulerLeases(lowLeases)
 
-	highOneCancel, _ := startSchedulerAcquire(
-		scheduler,
-		"high-1",
-		model.JobPriorityHigh,
-		5,
-	)
+	highOneCancel, _ := startSchedulerAcquire(scheduler, "high-1", model.JobPriorityHigh, 5)
 	defer highOneCancel()
-	highTwoCancel, _ := startSchedulerAcquire(
-		scheduler,
-		"high-2",
-		model.JobPriorityHigh,
-		6,
-	)
+	highTwoCancel, _ := startSchedulerAcquire(scheduler, "high-2", model.JobPriorityHigh, 6)
 	defer highTwoCancel()
 	waitForSchedulerPauseRequest(t, lowLeases[0], true)
 	waitForSchedulerPauseRequest(t, lowLeases[1], true)
@@ -641,12 +592,7 @@ func TestSchedulerClearsPauseRequestWhenSlotOpens(t *testing.T) {
 	newLow := acquireSchedulerLease(t, scheduler, "low-new", model.JobPriorityLow, 2)
 	defer newLow.Release()
 
-	highCancel, highResult := startSchedulerAcquire(
-		scheduler,
-		"high",
-		model.JobPriorityHigh,
-		3,
-	)
+	highCancel, highResult := startSchedulerAcquire(scheduler, "high", model.JobPriorityHigh, 3)
 	defer highCancel()
 	waitForSchedulerPauseRequest(t, newLow, true)
 
@@ -655,7 +601,11 @@ func TestSchedulerClearsPauseRequestWhenSlotOpens(t *testing.T) {
 	defer highLease.Release()
 	waitForSchedulerPauseRequest(t, newLow, false)
 	if pauseRequested, reason := newLow.Checkpoint(); pauseRequested || reason != "" {
-		t.Fatalf("obsolete pause request = %v reason %q, want false and empty", pauseRequested, reason)
+		t.Fatalf(
+			"obsolete pause request = %v reason %q, want false and empty",
+			pauseRequested,
+			reason,
+		)
 	}
 }
 
@@ -664,12 +614,7 @@ func TestSchedulerUpdatePolicyRecomputesVictimsAndPreservesFields(t *testing.T) 
 	low := acquireSchedulerLease(t, scheduler, "low", model.JobPriorityLow, 1)
 	defer low.Release()
 
-	normalCancel, _ := startSchedulerAcquire(
-		scheduler,
-		"normal",
-		model.JobPriorityNormal,
-		2,
-	)
+	normalCancel, _ := startSchedulerAcquire(scheduler, "normal", model.JobPriorityNormal, 2)
 	defer normalCancel()
 	waitForSchedulerPauseRequest(t, low, true)
 
@@ -680,12 +625,14 @@ func TestSchedulerUpdatePolicyRecomputesVictimsAndPreservesFields(t *testing.T) 
 	); err != nil {
 		t.Fatalf("UpdatePolicy: %v", err)
 	}
+
 	waitForSchedulerPauseRequest(t, low, false)
 
 	entry := schedulerEntryForTest(t, scheduler, "low")
 	if entry.Policy.Priority != model.JobPriorityHigh {
 		t.Fatalf("updated priority = %q, want high", entry.Policy.Priority)
 	}
+
 	if entry.Policy.Quiet || entry.Policy.IdleAfterSeconds != model.DefaultIdleAfterSeconds {
 		t.Fatalf("unrelated policy fields changed: %+v", entry.Policy)
 	}
@@ -698,9 +645,11 @@ func TestSchedulerLeaseOperationsAreIdempotent(t *testing.T) {
 	if !lease.Yield(model.SchedulingReasonUnspecified) {
 		t.Fatal("first yield = false, want true")
 	}
+
 	if lease.Yield(model.SchedulingReasonUnspecified) {
 		t.Fatal("second yield = true, want false")
 	}
+
 	assertSchedulerCount(t, scheduler.Snapshot().Paused, model.JobPriorityLow, 1)
 
 	cancelledContext, cancel := context.WithCancel(context.Background())
@@ -708,6 +657,7 @@ func TestSchedulerLeaseOperationsAreIdempotent(t *testing.T) {
 	if err := lease.Reacquire(cancelledContext); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Reacquire error = %v, want context canceled", err)
 	}
+
 	assertSchedulerCount(t, scheduler.Snapshot().Paused, model.JobPriorityLow, 1)
 
 	lease.Release()
@@ -725,6 +675,7 @@ func TestStaleLeaseCannotMutateReusedJobID(t *testing.T) {
 	if !claimed {
 		t.Fatal("ClaimYield = false, want true")
 	}
+
 	stale.Release()
 
 	current := acquireSchedulerLease(t, scheduler, "reused", model.JobPriorityHigh, 2)
@@ -733,6 +684,7 @@ func TestStaleLeaseCannotMutateReusedJobID(t *testing.T) {
 	if claim.Yield() {
 		t.Fatal("stale claim Yield = true, want false")
 	}
+
 	stale.Release()
 	priority := model.JobPriorityLow
 	if err := stale.UpdatePolicy(model.SchedulingPolicyPatch{Priority: &priority}); err == nil {
@@ -743,6 +695,7 @@ func TestStaleLeaseCannotMutateReusedJobID(t *testing.T) {
 	if entry.State != EntryRunning {
 		t.Fatalf("reused entry state = %d, want running", entry.State)
 	}
+
 	if entry.Policy.Priority != model.JobPriorityHigh {
 		t.Fatalf("reused entry priority = %q, want high", entry.Policy.Priority)
 	}
@@ -756,10 +709,14 @@ func acquireSchedulerLease(
 	queueSequence uint64,
 ) *Lease {
 	t.Helper()
-	lease, err := scheduler.Acquire(context.Background(), schedulerTestEntry(jobID, priority, queueSequence))
+	lease, err := scheduler.Acquire(
+		context.Background(),
+		schedulerTestEntry(jobID, priority, queueSequence),
+	)
 	if err != nil {
 		t.Fatalf("Acquire %s: %v", jobID, err)
 	}
+
 	return lease
 }
 
@@ -775,6 +732,7 @@ func startSchedulerAcquire(
 		lease, err := scheduler.Acquire(ctx, schedulerTestEntry(jobID, priority, queueSequence))
 		result <- schedulerAcquireResult{lease: lease, err: err}
 	}()
+
 	return cancel, result
 }
 
@@ -785,6 +743,7 @@ func schedulerTestEntry(
 ) Entry {
 	policy := model.DefaultSchedulingPolicy()
 	policy.Priority = priority
+
 	return Entry{
 		JobID:         jobID,
 		Policy:        policy,
@@ -812,16 +771,12 @@ func acquireQuietSchedulerLease(
 	t.Helper()
 	lease, err := scheduler.Acquire(
 		context.Background(),
-		quietSchedulerTestEntry(
-			jobID,
-			priority,
-			queueSequence,
-			idleAfterSeconds,
-		),
+		quietSchedulerTestEntry(jobID, priority, queueSequence, idleAfterSeconds),
 	)
 	if err != nil {
 		t.Fatalf("Acquire quiet %s: %v", jobID, err)
 	}
+
 	return lease
 }
 
@@ -837,15 +792,11 @@ func startQuietSchedulerAcquire(
 	go func() {
 		lease, err := scheduler.Acquire(
 			ctx,
-			quietSchedulerTestEntry(
-				jobID,
-				priority,
-				queueSequence,
-				idleAfterSeconds,
-			),
+			quietSchedulerTestEntry(jobID, priority, queueSequence, idleAfterSeconds),
 		)
 		result <- schedulerAcquireResult{lease: lease, err: err}
 	}()
+
 	return cancel, result
 }
 
@@ -860,6 +811,7 @@ func quietSchedulerTestEntry(
 		Quiet:            true,
 		IdleAfterSeconds: idleAfterSeconds,
 	}
+
 	return Entry{JobID: jobID, Policy: policy, QueueSequence: queueSequence}
 }
 
@@ -873,6 +825,7 @@ func receiveSchedulerLease(
 		if acquired.err != nil {
 			t.Fatalf("Acquire: %v", acquired.err)
 		}
+
 		return acquired.lease
 	case <-time.After(schedulerTestTimeout):
 		t.Fatal("timed out waiting for scheduler lease")
@@ -901,6 +854,7 @@ func assertSchedulerAcquirePending(
 		if acquired.err != nil {
 			t.Fatalf("pending Acquire returned error: %v", acquired.err)
 		}
+
 		acquired.lease.Release()
 		t.Fatal("Acquire completed while entry should remain queued")
 	default:
@@ -916,12 +870,16 @@ func waitForSchedulerCounts(
 	paused int,
 ) {
 	t.Helper()
-	waitForSchedulerCondition(t, func() bool {
-		snapshot := scheduler.Snapshot()
-		return snapshot.Running[priority] == running &&
-			snapshot.Queued[priority] == queued &&
-			snapshot.Paused[priority] == paused
-	})
+	waitForSchedulerCondition(
+		t,
+		func() bool {
+			snapshot := scheduler.Snapshot()
+
+			return snapshot.Running[priority] == running &&
+				snapshot.Queued[priority] == queued &&
+				snapshot.Paused[priority] == paused
+		},
+	)
 }
 
 func waitForSchedulerPauseRequest(
@@ -930,10 +888,13 @@ func waitForSchedulerPauseRequest(
 	want bool,
 ) {
 	t.Helper()
-	waitForSchedulerCondition(t, func() bool {
-		requested, _ := lease.Checkpoint()
-		return requested == want
-	})
+	waitForSchedulerCondition(
+		t,
+		func() bool {
+			requested, _ := lease.Checkpoint()
+			return requested == want
+		},
+	)
 }
 
 func waitForSchedulerEntryState(
@@ -943,21 +904,27 @@ func waitForSchedulerEntryState(
 	want EntryState,
 ) {
 	t.Helper()
-	waitForSchedulerCondition(t, func() bool {
-		scheduler.mutex.Lock()
-		defer scheduler.mutex.Unlock()
-		entry, found := scheduler.entries[jobID]
-		return found && entry.State == want
-	})
+	waitForSchedulerCondition(
+		t,
+		func() bool {
+			scheduler.mutex.Lock()
+			defer scheduler.mutex.Unlock()
+			entry, found := scheduler.entries[jobID]
+
+			return found && entry.State == want
+		},
+	)
 }
 
 func waitForSchedulerCondition(t *testing.T, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(schedulerTestTimeout)
+
 	for !condition() {
 		if time.Now().After(deadline) {
 			t.Fatal("timed out waiting for scheduler state")
 		}
+
 		time.Sleep(time.Millisecond)
 	}
 }
@@ -974,6 +941,7 @@ func schedulerEntryForTest(
 	if !found {
 		t.Fatalf("scheduler entry %q is missing", jobID)
 	}
+
 	return *entry
 }
 

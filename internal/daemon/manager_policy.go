@@ -62,10 +62,13 @@ func newQueuedJob(
 			EmbeddingBatchesTotal:     0,
 			EmbeddingBatchesCompleted: 0,
 			CollectionRowsWritten:     0,
-			WriteTotals:               &model.WriteTotals{CollectionRowsWritten: 0, EmbeddingBatchesCompleted: 0},
-			LastEventAt:               now,
-			HeartbeatAt:               now,
-			ModelDownload:             nil,
+			WriteTotals: &model.WriteTotals{
+				CollectionRowsWritten:     0,
+				EmbeddingBatchesCompleted: 0,
+			},
+			LastEventAt:   now,
+			HeartbeatAt:   now,
+			ModelDownload: nil,
 		},
 		Config:                    indexConfig,
 		Budget:                    budget,
@@ -99,12 +102,18 @@ func (manager *Manager) resolveIndexPolicyLocked(
 	)
 	if err != nil {
 		slog.Warn("resolve scheduling policy failed", "codebase_id", codebase.ID, "err", err)
-		return model.Codebase{}, model.SchedulingPolicy{}, fmt.Errorf("apply scheduling policy patch: %w", err)
+
+		return model.Codebase{}, model.SchedulingPolicy{}, fmt.Errorf(
+			"apply scheduling policy patch: %w",
+			err,
+		)
 	}
+
 	if intent.Initialize && codebase.PolicyPendingInitialization {
 		codebase.SchedulingPolicy = effectivePolicy
 		codebase.PolicyPendingInitialization = false
 	}
+
 	return codebase, effectivePolicy, nil
 }
 
@@ -118,31 +127,42 @@ func (manager *Manager) resolveAndPersistIndexPolicy(
 	if !found {
 		return model.Codebase{}, fmt.Errorf("codebase %s is missing", codebaseID)
 	}
+
 	resolved, _, err := manager.resolveIndexPolicyLocked(codebase, intent)
 	if err != nil {
 		return model.Codebase{}, err
 	}
+
 	if resolved.SchedulingPolicy == codebase.SchedulingPolicy &&
 		resolved.PolicyPendingInitialization == codebase.PolicyPendingInitialization {
 		return resolved, nil
 	}
+
 	manager.codebases[resolved.ID] = resolved
 	if err := manager.saveLocked(); err != nil {
 		manager.codebases[codebase.ID] = codebase
 		return model.Codebase{}, err
 	}
+
 	return resolved, nil
 }
 
-func (manager *Manager) persistResolvedIndexPolicyLocked(original model.Codebase, resolved model.Codebase) error {
-	if resolved.SchedulingPolicy == original.SchedulingPolicy && resolved.PolicyPendingInitialization == original.PolicyPendingInitialization && worktreeSourceEqual(original, resolved) {
+func (manager *Manager) persistResolvedIndexPolicyLocked(
+	original model.Codebase,
+	resolved model.Codebase,
+) error {
+	if resolved.SchedulingPolicy == original.SchedulingPolicy &&
+		resolved.PolicyPendingInitialization == original.PolicyPendingInitialization &&
+		worktreeSourceEqual(original, resolved) {
 		return nil
 	}
+
 	manager.codebases[resolved.ID] = resolved
 	if err := manager.saveLocked(); err != nil {
 		manager.codebases[original.ID] = original
 		return err
 	}
+
 	return nil
 }
 
@@ -154,22 +174,27 @@ func mergeSchedulingPolicyPatches(
 	if incoming.Priority != nil {
 		merged.Priority = incoming.Priority
 	}
+
 	if incoming.Quiet != nil {
 		merged.Quiet = incoming.Quiet
 	}
+
 	if incoming.IdleAfterSeconds != nil {
 		merged.IdleAfterSeconds = incoming.IdleAfterSeconds
 	}
+
 	return merged
 }
 
 func (manager *Manager) nextQueueSequenceLocked() uint64 {
 	var highest uint64
+
 	for _, job := range manager.jobs {
 		if job.QueueSequence > highest {
 			highest = job.QueueSequence
 		}
 	}
+
 	return highest + 1
 }
 
@@ -218,30 +243,40 @@ func (manager *Manager) UpdateCodebasePolicy(
 	if patch.Priority == nil && patch.Quiet == nil && patch.IdleAfterSeconds == nil {
 		return model.Codebase{}, errors.New("scheduling policy patch must set at least one field")
 	}
+
 	if _, err := model.ApplySchedulingPolicyPatch(
 		model.DefaultSchedulingPolicy(),
 		patch,
 	); err != nil {
 		wrappedErr := fmt.Errorf("validate scheduling policy patch: %w", err)
 		slog.WarnContext(ctx, "validate scheduling policy patch failed", "err", wrappedErr)
+
 		return model.Codebase{}, wrappedErr
 	}
+
 	canonicalPath, err := manager.resolveCanonicalPath(requestedPath)
 	if err != nil {
-		wrappedErr := fmt.Errorf(
-			"canonicalize path %s: %w",
+		wrappedErr := fmt.Errorf("canonicalize path %s: %w", requestedPath, err)
+		slog.WarnContext(
+			ctx,
+			"canonicalize policy path failed",
+			"path",
 			requestedPath,
-			err,
+			"err",
+			wrappedErr,
 		)
-		slog.WarnContext(ctx, "canonicalize policy path failed", "path", requestedPath, "err", wrappedErr)
+
 		return model.Codebase{}, wrappedErr
 	}
 
 	manager.policyMutationMutex.Lock()
 	defer manager.policyMutationMutex.Unlock()
 	if manager.policyMutationBlocked {
-		return model.Codebase{}, errors.New("scheduling policy mutations are blocked after a rollback failure")
+		return model.Codebase{}, errors.New(
+			"scheduling policy mutations are blocked after a rollback failure",
+		)
 	}
+
 	manager.transitionMutex.Lock()
 	defer manager.transitionMutex.Unlock()
 
@@ -255,34 +290,17 @@ func (manager *Manager) UpdateCodebasePolicy(
 		if !markerWritten {
 			return model.Codebase{}, err
 		}
-		return model.Codebase{}, manager.failPolicyUpdate(
-			ctx,
-			err,
-			plan,
-			false,
-			nil,
-			false,
-		)
+
+		return model.Codebase{}, manager.failPolicyUpdate(ctx, err, plan, false, nil, false)
 	}
 
 	if err := manager.persistPolicyUpdateJobs(ctx, plan.updatedJobs); err != nil {
-		return model.Codebase{}, manager.failPolicyUpdate(
-			ctx,
-			err,
-			plan,
-			true,
-			nil,
-			false,
-		)
+		return model.Codebase{}, manager.failPolicyUpdate(ctx, err, plan, true, nil, false)
 	}
 
 	manager.publishPolicyUpdate(&plan, patch)
 
-	schedulerUpdates, schedulerErr := manager.updateSchedulerPolicies(
-		ctx,
-		plan.updatedJobs,
-		patch,
-	)
+	schedulerUpdates, schedulerErr := manager.updateSchedulerPolicies(ctx, plan.updatedJobs, patch)
 	if schedulerErr != nil {
 		return model.Codebase{}, manager.failPolicyUpdate(
 			ctx,
@@ -296,6 +314,7 @@ func (manager *Manager) UpdateCodebasePolicy(
 
 	if err := removePolicyUpdateTransaction(plan.markerPath); err != nil {
 		failure := fmt.Errorf("remove policy update transaction: %w", err)
+
 		return model.Codebase{}, manager.failPolicyUpdate(
 			ctx,
 			failure,
@@ -305,6 +324,7 @@ func (manager *Manager) UpdateCodebasePolicy(
 			true,
 		)
 	}
+
 	return plan.updatedCodebase, nil
 }
 
@@ -320,10 +340,19 @@ func (manager *Manager) persistPolicyUpdateJobs(
 		}
 		if err := manager.writeJobTransition(jobEvent); err != nil {
 			wrappedErr := fmt.Errorf("persist updated job policy: %w", err)
-			slog.ErrorContext(ctx, "persist updated job policy failed", "job_id", updatedJob.ID, "err", wrappedErr)
+			slog.ErrorContext(
+				ctx,
+				"persist updated job policy failed",
+				"job_id",
+				updatedJob.ID,
+				"err",
+				wrappedErr,
+			)
+
 			return wrappedErr
 		}
 	}
+
 	return nil
 }
 
@@ -338,8 +367,10 @@ func (manager *Manager) updateSchedulerPolicies(
 		if err != nil {
 			return updates, err
 		}
+
 		updates = append(updates, update)
 	}
+
 	return updates, nil
 }
 
@@ -356,16 +387,23 @@ func (manager *Manager) preparePolicyUpdate(
 	if len(matches) == 0 {
 		return policyUpdatePlan{}, false, errors.New("codebase not tracked: " + requestedPath)
 	}
+
 	originalCodebase := matches[0]
-	updatedPolicy, err := model.ApplySchedulingPolicyPatch(
-		originalCodebase.SchedulingPolicy,
-		patch,
-	)
+	updatedPolicy, err := model.ApplySchedulingPolicyPatch(originalCodebase.SchedulingPolicy, patch)
 	if err != nil {
 		wrappedErr := fmt.Errorf("apply scheduling policy patch: %w", err)
-		slog.WarnContext(ctx, "apply scheduling policy patch failed", "codebase_id", originalCodebase.ID, "err", wrappedErr)
+		slog.WarnContext(
+			ctx,
+			"apply scheduling policy patch failed",
+			"codebase_id",
+			originalCodebase.ID,
+			"err",
+			wrappedErr,
+		)
+
 		return policyUpdatePlan{}, false, wrappedErr
 	}
+
 	updatedCodebase := originalCodebase
 	updatedCodebase.SchedulingPolicy = updatedPolicy
 	updatedCodebase.PolicyPendingInitialization = false
@@ -395,8 +433,16 @@ func (manager *Manager) preparePolicyUpdate(
 	}
 	if err := writePolicyUpdateTransaction(plan.markerPath, plan.transaction); err != nil {
 		wrappedErr := fmt.Errorf("write policy update transaction: %w", err)
-		slog.ErrorContext(ctx, "write policy update transaction failed", "codebase_id", originalCodebase.ID, "err", wrappedErr)
+		slog.ErrorContext(
+			ctx,
+			"write policy update transaction failed",
+			"codebase_id",
+			originalCodebase.ID,
+			"err",
+			wrappedErr,
+		)
 		markerMayExist := errors.Is(err, store.ErrPolicyUpdateMarkerMayExist)
+
 		return plan, markerMayExist, wrappedErr
 	}
 
@@ -405,9 +451,18 @@ func (manager *Manager) preparePolicyUpdate(
 	manager.codebases[originalCodebase.ID] = originalCodebase
 	if registryErr != nil {
 		wrappedErr := fmt.Errorf("persist updated codebase policy: %w", registryErr)
-		slog.ErrorContext(ctx, "persist updated codebase policy failed", "codebase_id", originalCodebase.ID, "err", wrappedErr)
+		slog.ErrorContext(
+			ctx,
+			"persist updated codebase policy failed",
+			"codebase_id",
+			originalCodebase.ID,
+			"err",
+			wrappedErr,
+		)
+
 		return plan, true, wrappedErr
 	}
+
 	return plan, true, nil
 }
 
@@ -419,6 +474,7 @@ func (manager *Manager) findPolicyUpdateCodebasesLocked(
 			return []model.Codebase{codebase}
 		}
 	}
+
 	return manager.findCodebasesByCoverage(canonicalPath)
 }
 
@@ -432,11 +488,13 @@ func (manager *Manager) preparePolicyUpdateJobsLocked(
 	updatedAt time.Time,
 ) (policyUpdateJobs, error) {
 	jobIDs := make([]string, 0)
+
 	for jobID, job := range manager.jobs {
 		if job.CodebaseID == codebase.ID && policyUpdateAppliesToJob(job) {
 			jobIDs = append(jobIDs, jobID)
 		}
 	}
+
 	sort.Strings(jobIDs)
 
 	jobs := policyUpdateJobs{
@@ -444,6 +502,7 @@ func (manager *Manager) preparePolicyUpdateJobsLocked(
 		oldDetachedJobs: nil,
 		updatedJobs:     nil,
 	}
+
 	for _, jobID := range jobIDs {
 		oldJob := manager.jobs[jobID]
 		updatedJob := oldJob
@@ -453,14 +512,21 @@ func (manager *Manager) preparePolicyUpdateJobsLocked(
 			patch,
 		)
 		if err != nil {
-			wrappedErr := fmt.Errorf(
-				"apply scheduling policy patch to job %s: %w",
+			wrappedErr := fmt.Errorf("apply scheduling policy patch to job %s: %w", oldJob.ID, err)
+			slog.WarnContext(
+				ctx,
+				"apply scheduling policy patch to job failed",
+				"codebase_id",
+				codebase.ID,
+				"job_id",
 				oldJob.ID,
-				err,
+				"err",
+				wrappedErr,
 			)
-			slog.WarnContext(ctx, "apply scheduling policy patch to job failed", "codebase_id", codebase.ID, "job_id", oldJob.ID, "err", wrappedErr)
+
 			return policyUpdateJobs{}, wrappedErr
 		}
+
 		updatedJob.SchedulingOverride = clearPatchedSchedulingOverrides(
 			oldJob.SchedulingOverride,
 			patch,
@@ -472,8 +538,10 @@ func (manager *Manager) preparePolicyUpdateJobsLocked(
 			jobs.oldActiveJob = &activeJob
 			continue
 		}
+
 		jobs.oldDetachedJobs = append(jobs.oldDetachedJobs, oldJob)
 	}
+
 	return jobs, nil
 }
 
@@ -488,16 +556,15 @@ func (manager *Manager) publishPolicyUpdate(
 	for _, updatedJob := range plan.updatedJobs {
 		manager.jobs[updatedJob.ID] = updatedJob
 	}
+
 	pending, found := manager.pendingCodeJobs[plan.updatedCodebase.ID]
 	if !found {
 		return
 	}
+
 	originalPending := pending
 	plan.originalPendingCodeRequest = &originalPending
-	pending.policyPatch = clearPatchedSchedulingOverrides(
-		pending.policyPatch,
-		patch,
-	)
+	pending.policyPatch = clearPatchedSchedulingOverrides(pending.policyPatch, patch)
 	manager.pendingCodeJobs[plan.updatedCodebase.ID] = pending
 }
 
@@ -523,12 +590,15 @@ func clearPatchedSchedulingOverrides(
 	if patch.Priority != nil {
 		cleared.Priority = nil
 	}
+
 	if patch.Quiet != nil {
 		cleared.Quiet = nil
 	}
+
 	if patch.IdleAfterSeconds != nil {
 		cleared.IdleAfterSeconds = nil
 	}
+
 	return cleared
 }
 
@@ -558,11 +628,10 @@ func (manager *Manager) failPolicyUpdate(
 	if rollbackErr == nil {
 		return failure
 	}
+
 	manager.policyMutationBlocked = true
-	return errors.Join(
-		failure,
-		fmt.Errorf("roll back policy update: %w", rollbackErr),
-	)
+
+	return errors.Join(failure, fmt.Errorf("roll back policy update: %w", rollbackErr))
 }
 
 func (manager *Manager) rollbackPolicyUpdate(
@@ -578,6 +647,7 @@ func (manager *Manager) rollbackPolicyUpdate(
 	if err := ensurePolicyUpdateTransaction(plan.markerPath, transaction); err != nil {
 		return err
 	}
+
 	manager.mu.Lock()
 	manager.codebases[transaction.CodebaseID] = transaction.OldCodebase
 	if restoreJobs {
@@ -585,15 +655,15 @@ func (manager *Manager) rollbackPolicyUpdate(
 			manager.jobs[oldJob.ID] = oldJob
 		}
 	}
+
 	if restorePending && plan.originalPendingCodeRequest != nil {
 		manager.pendingCodeJobs[transaction.CodebaseID] = *plan.originalPendingCodeRequest
 	}
+
 	if err := manager.saveLocked(); err != nil {
-		rollbackErrors = append(
-			rollbackErrors,
-			fmt.Errorf("restore codebase registry: %w", err),
-		)
+		rollbackErrors = append(rollbackErrors, fmt.Errorf("restore codebase registry: %w", err))
 	}
+
 	manager.mu.Unlock()
 
 	if restoreJobs {
@@ -610,10 +680,12 @@ func (manager *Manager) rollbackPolicyUpdate(
 			}
 		}
 	}
+
 	oldJobsByID := make(map[string]model.Job, len(oldJobs))
 	for _, oldJob := range oldJobs {
 		oldJobsByID[oldJob.ID] = oldJob
 	}
+
 	for _, schedulerUpdate := range schedulerUpdates {
 		oldJob, found := oldJobsByID[schedulerUpdate.jobID]
 		if !found {
@@ -626,6 +698,7 @@ func (manager *Manager) rollbackPolicyUpdate(
 			)
 			continue
 		}
+
 		var err error
 		if schedulerUpdate.receipt != nil {
 			err = manager.jobScheduler.RollbackPolicyUpdate(
@@ -638,6 +711,7 @@ func (manager *Manager) rollbackPolicyUpdate(
 				fullSchedulingPolicyPatch(oldJob.EffectiveSchedulingPolicy),
 			)
 		}
+
 		if err != nil {
 			rollbackErrors = append(
 				rollbackErrors,
@@ -645,6 +719,7 @@ func (manager *Manager) rollbackPolicyUpdate(
 			)
 		}
 	}
+
 	if len(rollbackErrors) > 0 {
 		joined := errors.Join(rollbackErrors...)
 		slog.ErrorContext(
@@ -655,12 +730,15 @@ func (manager *Manager) rollbackPolicyUpdate(
 			"err",
 			joined,
 		)
+
 		return joined
 	}
+
 	markerPath := store.PolicyUpdatePath(manager.config.RegistryPath)
 	if err := removePolicyUpdateTransaction(markerPath); err != nil {
 		return fmt.Errorf("remove rolled-back policy update transaction: %w", err)
 	}
+
 	return nil
 }
 
@@ -673,16 +751,26 @@ func ensurePolicyUpdateTransaction(
 		if err := writePolicyUpdateTransaction(markerPath, transaction); err != nil {
 			return fmt.Errorf("restore policy update transaction marker: %w", err)
 		}
+
 		return nil
 	}
+
 	if markerErr != nil {
 		wrappedErr := fmt.Errorf(
 			"read policy update transaction marker before rollback: %w",
 			markerErr,
 		)
-		slog.Error("read policy update transaction marker before rollback failed", "path", markerPath, "err", wrappedErr)
+		slog.Error(
+			"read policy update transaction marker before rollback failed",
+			"path",
+			markerPath,
+			"err",
+			wrappedErr,
+		)
+
 		return wrappedErr
 	}
+
 	return nil
 }
 
@@ -694,25 +782,36 @@ func (manager *Manager) updateSchedulerPolicy(
 	if job.State == model.JobStateQueued {
 		receipt, err := manager.jobScheduler.StagePolicyUpdate(job.ID, patch)
 		if err != nil {
-			wrappedErr := fmt.Errorf(
-				"stage scheduler policy for job %s: %w",
+			wrappedErr := fmt.Errorf("stage scheduler policy for job %s: %w", job.ID, err)
+			slog.ErrorContext(
+				ctx,
+				"stage scheduler policy failed",
+				"job_id",
 				job.ID,
-				err,
+				"err",
+				wrappedErr,
 			)
-			slog.ErrorContext(ctx, "stage scheduler policy failed", "job_id", job.ID, "err", wrappedErr)
+
 			return schedulerPolicyUpdate{}, wrappedErr
 		}
+
 		return schedulerPolicyUpdate{jobID: job.ID, receipt: &receipt}, nil
 	}
+
 	if err := manager.jobScheduler.UpdatePolicy(job.ID, patch); err != nil {
-		wrappedErr := fmt.Errorf(
-			"update scheduler policy for job %s: %w",
+		wrappedErr := fmt.Errorf("update scheduler policy for job %s: %w", job.ID, err)
+		slog.ErrorContext(
+			ctx,
+			"update scheduler policy failed",
+			"job_id",
 			job.ID,
-			err,
+			"err",
+			wrappedErr,
 		)
-		slog.ErrorContext(ctx, "update scheduler policy failed", "job_id", job.ID, "err", wrappedErr)
+
 		return schedulerPolicyUpdate{}, wrappedErr
 	}
+
 	return schedulerPolicyUpdate{jobID: job.ID, receipt: nil}, nil
 }
 
@@ -723,11 +822,14 @@ func policyUpdateTransactionJobs(
 	if transaction.OldActiveJob != nil {
 		jobCount++
 	}
+
 	jobs := make([]model.Job, 0, jobCount)
 	if transaction.OldActiveJob != nil {
 		jobs = append(jobs, *transaction.OldActiveJob)
 	}
+
 	jobs = append(jobs, transaction.OldDetachedJobs...)
+
 	return jobs
 }
 
@@ -737,6 +839,7 @@ func fullSchedulingPolicyPatch(
 	priority := policy.Priority
 	quiet := policy.Quiet
 	idleAfterSeconds := policy.IdleAfterSeconds
+
 	return model.SchedulingPolicyPatch{
 		Priority:         &priority,
 		Quiet:            &quiet,
@@ -750,82 +853,169 @@ func (manager *Manager) recoverPendingPolicyUpdate(ctx context.Context) error {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
+
 	if err != nil {
 		wrappedErr := fmt.Errorf("read pending policy update: %w", err)
-		slog.ErrorContext(ctx, "read pending policy update failed", "path", markerPath, "err", wrappedErr)
+		slog.ErrorContext(
+			ctx,
+			"read pending policy update failed",
+			"path",
+			markerPath,
+			"err",
+			wrappedErr,
+		)
+
 		return wrappedErr
 	}
+
 	if transaction.CodebaseID == "" ||
 		transaction.OldCodebase.ID != transaction.CodebaseID {
 		identityErr := fmt.Errorf("pending policy update has inconsistent codebase identity")
-		slog.ErrorContext(ctx, "validate pending policy update failed", "path", markerPath, "err", identityErr)
+		slog.ErrorContext(
+			ctx,
+			"validate pending policy update failed",
+			"path",
+			markerPath,
+			"err",
+			identityErr,
+		)
+
 		return identityErr
 	}
 
 	registry, err := store.ReadRegistry(manager.config.RegistryPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		wrappedErr := fmt.Errorf("read registry for pending policy rollback: %w", err)
-		slog.ErrorContext(ctx, "read registry for pending policy rollback failed", "path", manager.config.RegistryPath, "err", wrappedErr)
+		slog.ErrorContext(
+			ctx,
+			"read registry for pending policy rollback failed",
+			"path",
+			manager.config.RegistryPath,
+			"err",
+			wrappedErr,
+		)
+
 		return wrappedErr
 	}
+
 	replaced := false
+
 	for index := range registry.Codebases {
 		if registry.Codebases[index].ID != transaction.CodebaseID {
 			continue
 		}
+
 		registry.Codebases[index] = transaction.OldCodebase
 		replaced = true
 		break
 	}
+
 	if !replaced {
 		registry.Codebases = append(registry.Codebases, transaction.OldCodebase)
 	}
+
 	registry.UpdatedAt = clock.Now()
 	if err := store.WriteRegistry(manager.config.RegistryPath, registry); err != nil {
 		wrappedErr := fmt.Errorf("restore registry from pending policy update: %w", err)
-		slog.ErrorContext(ctx, "restore registry from pending policy update failed", "codebase_id", transaction.CodebaseID, "err", wrappedErr)
+		slog.ErrorContext(
+			ctx,
+			"restore registry from pending policy update failed",
+			"codebase_id",
+			transaction.CodebaseID,
+			"err",
+			wrappedErr,
+		)
+
 		return wrappedErr
 	}
+
 	for _, oldJob := range policyUpdateTransactionJobs(transaction) {
 		if oldJob.CodebaseID != transaction.CodebaseID {
 			identityErr := fmt.Errorf(
 				"pending policy update job %s has inconsistent codebase identity",
 				oldJob.ID,
 			)
-			slog.ErrorContext(ctx, "validate pending policy update job failed", "path", markerPath, "err", identityErr)
+			slog.ErrorContext(
+				ctx,
+				"validate pending policy update job failed",
+				"path",
+				markerPath,
+				"err",
+				identityErr,
+			)
+
 			return identityErr
 		}
-		if err := store.AppendJobEventSync(manager.config.JobsPath, model.JobEvent{
-			Event:      "job_policy_update_rolled_back",
-			OccurredAt: clock.Now(),
-			Job:        oldJob,
-		}); err != nil {
+
+		if err := store.AppendJobEventSync(
+			manager.config.JobsPath,
+			model.JobEvent{
+				Event:      "job_policy_update_rolled_back",
+				OccurredAt: clock.Now(),
+				Job:        oldJob,
+			},
+		); err != nil {
 			wrappedErr := fmt.Errorf("restore job from pending policy update: %w", err)
-			slog.ErrorContext(ctx, "restore job from pending policy update failed", "codebase_id", transaction.CodebaseID, "job_id", oldJob.ID, "err", wrappedErr)
+			slog.ErrorContext(
+				ctx,
+				"restore job from pending policy update failed",
+				"codebase_id",
+				transaction.CodebaseID,
+				"job_id",
+				oldJob.ID,
+				"err",
+				wrappedErr,
+			)
+
 			return wrappedErr
 		}
 	}
+
 	if err := removePolicyUpdateTransaction(markerPath); err != nil {
 		wrappedErr := fmt.Errorf("remove recovered policy update transaction: %w", err)
-		slog.ErrorContext(ctx, "remove recovered policy update transaction failed", "codebase_id", transaction.CodebaseID, "err", wrappedErr)
+		slog.ErrorContext(
+			ctx,
+			"remove recovered policy update transaction failed",
+			"codebase_id",
+			transaction.CodebaseID,
+			"err",
+			wrappedErr,
+		)
+
 		return wrappedErr
 	}
-	slog.InfoContext(
-		ctx,
-		"recovered pending policy update",
-		"codebase_id",
-		transaction.CodebaseID,
-	)
+
+	slog.InfoContext(ctx, "recovered pending policy update", "codebase_id", transaction.CodebaseID)
+
 	return nil
 }
 
-func (manager *Manager) startRecoveredIndex(ctx context.Context, plan resumePlan, client model.ClientInfo) error {
-	job, codebase, deduplicated, overlapsCodebaseID, err := manager.startIndexWithRecovery(ctx, plan.canonicalPath, client, plan.config, false, emptyAdmissionBudget, indexPolicyIntent{
-		Patch:      plan.schedulingOverride,
-		Initialize: false,
-	}, model.WorktreeSourceRequest{SourcePath: "", StartingCommit: ""}, &plan)
+func (manager *Manager) startRecoveredIndex(
+	ctx context.Context,
+	plan resumePlan,
+	client model.ClientInfo,
+) error {
+	job, codebase, deduplicated, overlapsCodebaseID, err := manager.startIndexWithRecovery(
+		automaticIndexingContext(ctx),
+		plan.canonicalPath,
+		client,
+		plan.config,
+		false,
+		emptyAdmissionBudget,
+		indexPolicyIntent{
+			Patch:      plan.schedulingOverride,
+			Initialize: false,
+		},
+		model.WorktreeSourceRequest{SourcePath: "", StartingCommit: ""},
+		&plan,
+	)
 	if err == nil && job.ID == "" && !deduplicated {
-		return fmt.Errorf("resume did not queue job for codebase %s (overlap %s)", codebase.ID, overlapsCodebaseID)
+		return fmt.Errorf(
+			"resume did not queue job for codebase %s (overlap %s)",
+			codebase.ID,
+			overlapsCodebaseID,
+		)
 	}
+
 	return err
 }

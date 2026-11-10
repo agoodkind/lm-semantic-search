@@ -29,6 +29,7 @@ func (store *Store) denseIndex() index.Index {
 	if store.options.DenseIndex != nil {
 		return store.options.DenseIndex
 	}
+
 	return index.NewAutoIndex(entity.COSINE)
 }
 
@@ -37,6 +38,7 @@ func (store *Store) denseAnnRequest(depth int, vector []float32) *milvusclient.A
 	if len(store.options.DenseSearchParams) > 0 {
 		request = request.WithAnnParam(denseAnnParam(store.options.DenseSearchParams))
 	}
+
 	return request
 }
 
@@ -46,13 +48,16 @@ func (store *Store) denseAnnRequest(depth int, vector []float32) *milvusclient.A
 // value that parses as an integer is sent as a JSON number.
 func denseAnnParam(params map[string]string) index.AnnParam {
 	annParam := index.NewCustomAnnParam()
+
 	for key, value := range params {
 		if number, err := strconv.Atoi(value); err == nil {
 			annParam.WithExtraParam(key, number)
 			continue
 		}
+
 		annParam.WithExtraParam(key, value)
 	}
+
 	return annParam
 }
 

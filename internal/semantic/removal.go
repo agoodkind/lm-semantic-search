@@ -42,37 +42,52 @@ func RemovePaths(paths []string) Removal {
 // DeleteItemRows deletes the rows removal selects from a document collection.
 // It serves an explicit item delete, and a missing collection deletes nothing.
 // DeleteItemRows prepares the collection before an item removal.
-func (service *Service) DeleteItemRows(ctx context.Context, collectionName string, removal Removal) (err error) {
+func (service *Service) DeleteItemRows(
+	ctx context.Context,
+	collectionName string,
+	removal Removal,
+) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.deleteItemRows")
 	defer done(&err)
 
 	if !service.Available() {
 		return ErrUnavailable
 	}
+
 	trimmedCollectionName := strings.TrimSpace(collectionName)
 	if trimmedCollectionName == "" {
 		return errors.New("document collection name is required")
 	}
+
 	if removal.Empty() {
 		return errors.New("item removal selects no rows")
 	}
-	hasCollection, err := service.hasCollection(ctx, trimmedCollectionName, "check Milvus collection "+trimmedCollectionName)
+
+	hasCollection, err := service.hasCollection(
+		ctx,
+		trimmedCollectionName,
+		"check Milvus collection "+trimmedCollectionName,
+	)
 	if err != nil {
 		return err
 	}
+
 	if !hasCollection {
 		return nil
 	}
+
 	if len(removal.ItemIDs) > 0 {
 		if err := service.PrepareCollection(ctx, trimmedCollectionName); err != nil {
 			return err
 		}
 	}
+
 	lease, err := service.AcquireCollection(ctx, trimmedCollectionName)
 	if err != nil {
 		return err
 	}
 	defer lease.Release()
+
 	return service.deleteByRemoval(ctx, trimmedCollectionName, removal)
 }
 
@@ -84,36 +99,49 @@ func (service *Service) DeleteItemRows(ctx context.Context, collectionName strin
 // The span separates the delete from the embed and insert phases of the same
 // reindex. semantic.removal_completed reports the rows the store removed after
 // every delete succeeds.
-func (service *Service) deleteByRemoval(ctx context.Context, collectionName string, removal Removal) (err error) {
+func (service *Service) deleteByRemoval(
+	ctx context.Context,
+	collectionName string,
+	removal Removal,
+) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.deleteByRemoval")
 	defer done(&err)
 
 	var pathRowsRemoved int64
 	if len(removal.Paths) > 0 {
-		pathRowsRemoved, err = service.deleteByRelativePaths(
-			ctx,
-			collectionName,
-			removal.Paths,
-		)
+		pathRowsRemoved, err = service.deleteByRelativePaths(ctx, collectionName, removal.Paths)
 		if err != nil {
 			return err
 		}
 	}
+
 	store := service.collectionStore()
 	declaration := collection.Declaration{ItemIDColumn: removal.ItemColumn, Scalars: nil}
 	var itemRowsRemoved int64
 	if len(removal.ItemIDs) > 0 {
-		itemRowsRemoved, err = store.DeleteItems(ctx, collection.DeleteItemsRequest{
-			Collection:   collectionName,
-			Declaration:  declaration,
-			ItemIDs:      removal.ItemIDs,
-			PathPrefixes: nil,
-		})
+		itemRowsRemoved, err = store.DeleteItems(
+			ctx,
+			collection.DeleteItemsRequest{
+				Collection:   collectionName,
+				Declaration:  declaration,
+				ItemIDs:      removal.ItemIDs,
+				PathPrefixes: nil,
+			},
+		)
 		if err != nil {
-			slog.ErrorContext(ctx, "delete item rows failed", "collection", collectionName, "err", err)
+			slog.ErrorContext(
+				ctx,
+				"delete item rows failed",
+				"collection",
+				collectionName,
+				"err",
+				err,
+			)
+
 			return fmt.Errorf("delete items from %s: %w", collectionName, err)
 		}
 	}
+
 	slog.InfoContext(
 		ctx,
 		"semantic.removal_completed",
@@ -126,6 +154,7 @@ func (service *Service) deleteByRemoval(ctx context.Context, collectionName stri
 		"rows_removed",
 		pathRowsRemoved+itemRowsRemoved,
 	)
+
 	return nil
 }
 

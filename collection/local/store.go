@@ -31,10 +31,12 @@ func Open(options Options) (*Store, error) {
 	if root == "" {
 		return nil, errors.New("local collection store requires a root directory")
 	}
+
 	store, err := localvec.OpenGeneric(root, options.EmbeddingModel)
 	if err != nil {
 		slog.Error("open local collection store failed", "root", root, "err", err)
 		return nil, fmt.Errorf("open local collection store at %s: %w", root, err)
 	}
+
 	return store, nil
 }

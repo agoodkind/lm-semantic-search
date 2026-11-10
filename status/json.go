@@ -32,11 +32,13 @@ func WriteJSON(writer io.Writer, snapshot Snapshot) error {
 	if err := encoding.snapshot(snapshot); err != nil {
 		return err
 	}
+
 	encoding.buffer.WriteString("\n")
 	if _, err := writer.Write(encoding.buffer.Bytes()); err != nil {
 		slog.Error("write status snapshot failed", "err", err)
 		return fmt.Errorf("write status snapshot: %w", err)
 	}
+
 	return nil
 }
 
@@ -49,6 +51,7 @@ func newJSONEncoding() jsonEncoding {
 	buffer := &bytes.Buffer{}
 	encoder := json.NewEncoder(buffer)
 	encoder.SetEscapeHTML(false)
+
 	return jsonEncoding{buffer: buffer, encoder: encoder}
 }
 
@@ -58,22 +61,27 @@ func (e jsonEncoding) snapshot(snapshot Snapshot) error {
 	if err := e.notices(snapshot.Notices); err != nil {
 		return err
 	}
+
 	e.buffer.WriteString(",")
 	e.key(jsonIdentityKey)
 	if err := e.fields(snapshot.Identity); err != nil {
 		return err
 	}
+
 	e.buffer.WriteString(",")
 	e.key(jsonCountersKey)
 	if err := e.fields(snapshot.Counters); err != nil {
 		return err
 	}
+
 	e.buffer.WriteString(",")
 	e.key(jsonActivityKey)
 	if err := e.activity(snapshot.Activity); err != nil {
 		return err
 	}
+
 	e.buffer.WriteString("}")
+
 	return nil
 }
 
@@ -84,43 +92,55 @@ func (e jsonEncoding) key(name string) {
 
 func (e jsonEncoding) notices(notices []string) error {
 	e.buffer.WriteString("[")
+
 	for index, notice := range notices {
 		if index > 0 {
 			e.buffer.WriteString(",")
 		}
+
 		if err := e.text(notice); err != nil {
 			return err
 		}
 	}
+
 	e.buffer.WriteString("]")
+
 	return nil
 }
 
 func (e jsonEncoding) activity(rows [][]Field) error {
 	e.buffer.WriteString("[")
+
 	for index, row := range rows {
 		if index > 0 {
 			e.buffer.WriteString(",")
 		}
+
 		if err := e.fields(row); err != nil {
 			return err
 		}
 	}
+
 	e.buffer.WriteString("]")
+
 	return nil
 }
 
 func (e jsonEncoding) fields(fields []Field) error {
 	e.buffer.WriteString("{")
+
 	for index, field := range fields {
 		if index > 0 {
 			e.buffer.WriteString(",")
 		}
+
 		if err := e.field(field); err != nil {
 			return err
 		}
 	}
+
 	e.buffer.WriteString("}")
+
 	return nil
 }
 
@@ -128,11 +148,13 @@ func (e jsonEncoding) field(field Field) error {
 	if err := e.text(field.Name); err != nil {
 		return err
 	}
+
 	e.buffer.WriteString(":{")
 	e.key(jsonValueKey)
 	if err := e.value(field.Value); err != nil {
 		return err
 	}
+
 	if field.Unit != "" {
 		e.buffer.WriteString(",")
 		e.key(jsonUnitKey)
@@ -140,7 +162,9 @@ func (e jsonEncoding) field(field Field) error {
 			return err
 		}
 	}
+
 	e.buffer.WriteString("}")
+
 	return nil
 }
 
@@ -178,6 +202,8 @@ func (e jsonEncoding) trimLine(err error) error {
 		slog.Error("encode status snapshot failed", "err", err)
 		return fmt.Errorf("encode status snapshot: %w", err)
 	}
+
 	e.buffer.Truncate(e.buffer.Len() - 1)
+
 	return nil
 }
