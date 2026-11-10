@@ -692,6 +692,11 @@ func (manager *Manager) syncIndexWithPolicy(ctx context.Context, requestedPath s
 		return emptyJob, emptyCodebase, false, errors.New("codebase not tracked: " + requestedPath)
 	}
 	codebase := matches[0]
+	if err := manager.prepareAutomaticIndexingLocked(ctx, codebase); err != nil {
+		manager.mu.Unlock()
+		return model.Job{}, model.Codebase{}, false, err
+	}
+	codebase = manager.codebases[codebase.ID]
 	resolvedCodebase, _, policyErr := manager.resolveIndexPolicyLocked(codebase, indexPolicyIntent{
 		Patch:      policyPatch,
 		Initialize: false,

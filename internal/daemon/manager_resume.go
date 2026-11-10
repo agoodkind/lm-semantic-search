@@ -64,6 +64,9 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 	manager.mu.Lock()
 	plans := make([]resumePlan, 0)
 	for _, codebase := range manager.codebases {
+		if codebase.AutoIndexingPaused {
+			continue
+		}
 		if codebase.Kind == model.CodebaseKindDocument {
 			// A conversation codebase recovers through its own ingest trigger;
 			// its chat:// path is not a directory the index runner can walk.
@@ -95,7 +98,7 @@ func (manager *Manager) ResumeOrphanedJobs(ctx context.Context) {
 	}
 	for _, interrupted := range manager.interruptedConvergeJobs {
 		codebase, found := manager.codebases[interrupted.CodebaseID]
-		if !found || codebase.Kind == model.CodebaseKindDocument {
+		if !found || codebase.AutoIndexingPaused || codebase.Kind == model.CodebaseKindDocument {
 			continue
 		}
 		plans = append(plans, resumePlan{

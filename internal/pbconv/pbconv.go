@@ -103,6 +103,7 @@ func ToCodebase(codebase model.Codebase) *pb.Codebase {
 		CanonicalPath:               codebase.CanonicalPath,
 		Status:                      string(codebase.Status),
 		ActiveJobId:                 codebase.ActiveJobID,
+		AutoIndexingPaused:          codebase.AutoIndexingPaused,
 		EffectiveConfig:             toIndexConfig(codebase.EffectiveConfig),
 		CollectionName:              codebase.CollectionName,
 		LegacyCollectionNames:       append([]string{}, codebase.LegacyCollectionNames...),

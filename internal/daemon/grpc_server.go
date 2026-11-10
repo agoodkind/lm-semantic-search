@@ -284,9 +284,12 @@ func (server *GRPCServer) CancelJob(ctx context.Context, request *pb.CancelJobRe
 	}
 	job, callErr := server.manager.CancelJob(ctx, request.GetJobId())
 	if callErr != nil {
-		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewJobNotFound(request.GetJobId())))
+		if _, found := server.manager.GetJob(request.GetJobId()); !found {
+			return nil, status.Error(adapterr.Respond(ctx, adapterr.NewJobNotFound(request.GetJobId())))
+		}
+		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInternal("cancel indexing job", callErr)))
 	}
-	ack := resolveCancelJobAck(job)
+	ack := resolveCancelJobAck(job, server.manager.automaticIndexingPaused(job.CodebaseID))
 	health := server.manager.DependencyHealth()
 	return &pb.CancelJobResponse{
 		JobId:       job.ID,

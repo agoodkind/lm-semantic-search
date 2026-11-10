@@ -178,6 +178,9 @@ func (manager *Manager) drainPendingJobLocked(ctx context.Context, codebaseID st
 		delete(manager.pendingCodeJobs, codebaseID)
 		return "", false
 	}
+	if current.AutoIndexingPaused {
+		return "", false
+	}
 	if current.ActiveJobID != "" {
 		// A successor is already active for this codebase, so the depth-1 slot waits
 		// for the next terminal transition rather than double-queue.

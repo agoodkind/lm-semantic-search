@@ -70,9 +70,10 @@ func newJobGetCmd(options *rootOptions) *cobra.Command {
 func newJobCancelCmd(options *rootOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "cancel JOB_ID",
-		Short: "Cancel one tracked job",
+		Short: "Cancel a job and pause automatic indexing for its codebase",
 		Long: strings.Join([]string{
-			"Cancel one tracked job.",
+			"Cancel one tracked job and pause automatic indexing for its codebase.",
+			"Existing code searches remain available. Run codebase sync PATH or codebase index PATH to resume indexing.",
 			"",
 			"Arguments:",
 			"  JOB_ID    Daemon job identifier",

@@ -38,6 +38,16 @@ func (manager *Manager) startIndexWithRecovery(
 		}
 	}()
 
+	manager.mu.Lock()
+	matches := manager.findCodebasesByCoverage(canonicalPath)
+	if len(matches) > 0 {
+		err = manager.prepareAutomaticIndexingLocked(ctx, matches[0])
+	}
+	manager.mu.Unlock()
+	if err != nil {
+		return emptyJob, emptyCodebase, false, "", err
+	}
+
 	for {
 		job, codebase, redirected, redirectErr := manager.redirectStartIndex(
 			ctx,

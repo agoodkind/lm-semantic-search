@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -186,7 +187,10 @@ func (manager *Manager) startAutomaticIndex(
 		slog.InfoContext(ctx, "automatic build waits for the first build of the recorded source", "path", canonicalPath, "client", client.Name)
 		return automaticStart{job: noJob, codebase: noCodebase, deduplicated: false, held: true, paused: false}, nil
 	}
-	job, codebase, deduplicated, _, err := manager.startIndexWithIntent(ctx, canonicalPath, client, indexConfig, false, emptyAdmissionBudget, policyIntent)
+	job, codebase, deduplicated, _, err := manager.startIndexWithIntent(automaticIndexingContext(ctx), canonicalPath, client, indexConfig, false, emptyAdmissionBudget, policyIntent)
+	if errors.Is(err, errAutomaticIndexingPaused) {
+		return automaticStart{job: noJob, codebase: noCodebase, deduplicated: false, held: false, paused: true}, nil
+	}
 	if err != nil {
 		return automaticStart{job: noJob, codebase: noCodebase, deduplicated: false, held: false, paused: false}, err
 	}
@@ -202,7 +206,10 @@ func (manager *Manager) startAutomaticSync(ctx context.Context, codebase model.C
 		slog.InfoContext(ctx, "automatic sync waits for the first build of the recorded source", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "client", client.Name)
 		return
 	}
-	job, _, deduplicated, err := manager.SyncIndex(ctx, codebase.CanonicalPath, client)
+	job, _, deduplicated, err := manager.SyncIndex(automaticIndexingContext(ctx), codebase.CanonicalPath, client)
+	if errors.Is(err, errAutomaticIndexingPaused) {
+		return
+	}
 	if err != nil {
 		if !syncConflictError(err) {
 			slog.ErrorContext(ctx, "start sync job failed", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "client", client.Name, "err", err)

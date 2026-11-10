@@ -820,7 +820,7 @@ func (manager *Manager) recoverPendingPolicyUpdate(ctx context.Context) error {
 }
 
 func (manager *Manager) startRecoveredIndex(ctx context.Context, plan resumePlan, client model.ClientInfo) error {
-	job, codebase, deduplicated, overlapsCodebaseID, err := manager.startIndexWithRecovery(ctx, plan.canonicalPath, client, plan.config, false, emptyAdmissionBudget, indexPolicyIntent{
+	job, codebase, deduplicated, overlapsCodebaseID, err := manager.startIndexWithRecovery(automaticIndexingContext(ctx), plan.canonicalPath, client, plan.config, false, emptyAdmissionBudget, indexPolicyIntent{
 		Patch:      plan.schedulingOverride,
 		Initialize: false,
 	}, model.WorktreeSourceRequest{SourcePath: "", StartingCommit: ""}, &plan)
