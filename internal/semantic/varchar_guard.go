@@ -24,12 +24,7 @@ const milvusVarcharMaxBytes = 65000
 // path, the operation that requested the embed, and the relative path of
 // the offending file so the regression can be diagnosed without losing
 // the data.
-func (service *Service) guardrailExpand(
-	ctx context.Context,
-	codebasePath string,
-	chunks []model.StoredChunk,
-	operation string,
-) []model.StoredChunk {
+func (service *Service) guardrailExpand(ctx context.Context, codebasePath string, chunks []model.StoredChunk, operation string) []model.StoredChunk {
 	ctx, done := spans.Open(ctx, "semantic.guardrailExpand")
 	defer done(nil)
 
@@ -42,41 +37,13 @@ func (service *Service) guardrailExpand(
 	if !changed {
 		return chunks
 	}
-
 	offenders := make([]string, 0)
-
 	for _, chunk := range chunks {
 		if len(chunk.Content) > milvusVarcharMaxBytes {
-			offenders = append(
-				offenders,
-				fmt.Sprintf(
-					"%s:%d-%d (%d bytes)",
-					chunk.RelativePath,
-					chunk.StartLine,
-					chunk.EndLine,
-					len(chunk.Content),
-				),
-			)
+			offenders = append(offenders, fmt.Sprintf("%s:%d-%d (%d bytes)", chunk.RelativePath, chunk.StartLine, chunk.EndLine, len(chunk.Content)))
 		}
 	}
-
-	slog.WarnContext(
-		ctx,
-		"semantic.expanded_oversize_chunks",
-		"codebase_path",
-		codebasePath,
-		"operation",
-		operation,
-		"expanded_from",
-		len(chunks),
-		"expanded_to",
-		len(expanded),
-		"max_bytes",
-		milvusVarcharMaxBytes,
-		"offenders",
-		offenders,
-	)
-
+	slog.WarnContext(ctx, "semantic.expanded_oversize_chunks", "codebase_path", codebasePath, "operation", operation, "expanded_from", len(chunks), "expanded_to", len(expanded), "max_bytes", milvusVarcharMaxBytes, "offenders", offenders)
 	return expanded
 }
 
@@ -86,27 +53,22 @@ func (service *Service) guardrailExpand(
 // happened so the caller can log the upstream regression.
 func expandOversizeChunks(chunks []model.StoredChunk) ([]model.StoredChunk, bool) {
 	expanded := false
-
 	for _, chunk := range chunks {
 		if len(chunk.Content) > milvusVarcharMaxBytes {
 			expanded = true
 			break
 		}
 	}
-
 	if !expanded {
 		return chunks, false
 	}
-
 	out := make([]model.StoredChunk, 0, len(chunks))
 	for _, chunk := range chunks {
 		if len(chunk.Content) <= milvusVarcharMaxBytes {
 			out = append(out, chunk)
 			continue
 		}
-
 		out = append(out, splitChunkAtBudget(chunk, milvusVarcharMaxBytes)...)
 	}
-
 	return out, true
 }

@@ -84,7 +84,6 @@ func resetPromotionRecoveryServer() *promotionRecoveryServer {
 	server.loadCollectionCalls = 0
 	server.renameCollectionCalls = 0
 	server.describeCalls = make(map[string]int)
-
 	return server
 }
 
@@ -98,7 +97,6 @@ func (server *promotionRecoveryServer) GetLoadState(
 	if configuredState, ok := server.loadStates[collectionName]; ok {
 		state = configuredState
 	}
-
 	shouldBlock := collectionName == server.blockLoadState
 	loadStateStarted := server.loadStateStarted
 	resumeLoadState := server.resumeLoadState
@@ -113,11 +111,9 @@ func (server *promotionRecoveryServer) GetLoadState(
 			return nil, ctx.Err()
 		}
 	}
-
 	if shouldSignalAfter {
 		close(afterLoadStateStarted)
 	}
-
 	return &milvuspb.GetLoadStateResponse{
 		Status: promotionSuccessStatus(),
 		State:  state,
@@ -131,7 +127,6 @@ func (server *promotionRecoveryServer) LoadCollection(
 	server.mutex.Lock()
 	server.loadCollectionCalls++
 	server.mutex.Unlock()
-
 	return promotionSuccessStatus(), nil
 }
 
@@ -151,7 +146,6 @@ func (server *promotionRecoveryServer) Query(
 			return nil, ctx.Err()
 		}
 	}
-
 	return &milvuspb.QueryResults{
 		Status: promotionSuccessStatus(),
 		FieldsData: []*schemapb.FieldData{
@@ -176,7 +170,6 @@ func (server *promotionRecoveryServer) Delete(
 			return nil, ctx.Err()
 		}
 	}
-
 	return &milvuspb.MutationResult{Status: promotionSuccessStatus(), DeleteCnt: 1}, nil
 }
 
@@ -197,7 +190,6 @@ func (server *promotionRecoveryServer) AddCollectionField(
 			return nil, ctx.Err()
 		}
 	}
-
 	return promotionSuccessStatus(), nil
 }
 
@@ -217,7 +209,6 @@ func (server *promotionRecoveryServer) CreateCollection(
 			return nil, ctx.Err()
 		}
 	}
-
 	return promotionSuccessStatus(), nil
 }
 
@@ -253,7 +244,6 @@ func (server *promotionRecoveryServer) HasCollection(
 ) (*milvuspb.BoolResponse, error) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
-
 	return &milvuspb.BoolResponse{
 		Status: promotionSuccessStatus(),
 		Value:  server.collections[request.GetCollectionName()],
@@ -275,18 +265,14 @@ func (server *promotionRecoveryServer) DescribeCollection(
 			},
 		}, nil
 	}
-
-	schema := &schemapb.CollectionSchema{
-		Fields: []*schemapb.FieldSchema{
-			{Name: splitPartFieldName},
-			{Name: contentHashFieldName},
-			{Name: embeddingModelFieldName},
-		},
-	}
+	schema := &schemapb.CollectionSchema{Fields: []*schemapb.FieldSchema{
+		{Name: splitPartFieldName},
+		{Name: contentHashFieldName},
+		{Name: embeddingModelFieldName},
+	}}
 	if server.missingSchema {
 		schema = &schemapb.CollectionSchema{}
 	}
-
 	return &milvuspb.DescribeCollectionResponse{
 		Status:         promotionSuccessStatus(),
 		CollectionName: request.GetCollectionName(),
@@ -299,7 +285,6 @@ func (server *promotionRecoveryServer) describeCallCount(
 ) int {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
-
 	return server.describeCalls[collectionName]
 }
 
@@ -309,14 +294,11 @@ func (server *promotionRecoveryServer) ShowCollections(
 ) (*milvuspb.ShowCollectionsResponse, error) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
-
 	names := make([]string, 0, len(server.collections))
 	for name := range server.collections {
 		names = append(names, name)
 	}
-
 	sort.Strings(names)
-
 	return &milvuspb.ShowCollectionsResponse{
 		Status:          promotionSuccessStatus(),
 		CollectionNames: names,
@@ -332,22 +314,18 @@ func (server *promotionRecoveryServer) RenameCollection(
 	if request.GetOldName() == server.failRenameOld {
 		server.failRenameOld = ""
 		server.mutex.Unlock()
-
 		return &commonpb.Status{
 			ErrorCode: commonpb.ErrorCode_UnexpectedError,
 			Reason:    "injected rename failure",
 		}, nil
 	}
-
 	if !server.collections[request.GetOldName()] {
 		server.mutex.Unlock()
-
 		return &commonpb.Status{
 			ErrorCode: commonpb.ErrorCode_CollectionNotExists,
 			Reason:    "collection not found",
 		}, nil
 	}
-
 	shouldBlock := request.GetOldName() == server.blockRename
 	renameStarted := server.renameStarted
 	resumeRename := server.resumeRename
@@ -356,12 +334,10 @@ func (server *promotionRecoveryServer) RenameCollection(
 		close(renameStarted)
 		<-resumeRename
 	}
-
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 	delete(server.collections, request.GetOldName())
 	server.collections[request.GetNewName()] = true
-
 	return promotionSuccessStatus(), nil
 }
 
@@ -381,18 +357,15 @@ func (server *promotionRecoveryServer) DropCollection(
 			return nil, ctx.Err()
 		}
 	}
-
 	server.mutex.Lock()
 	delete(server.collections, request.GetCollectionName())
 	server.mutex.Unlock()
-
 	return promotionSuccessStatus(), nil
 }
 
 func (server *promotionRecoveryServer) setCollections(names ...string) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
-
 	server.collections = make(map[string]bool, len(names))
 	for _, name := range names {
 		server.collections[name] = true
@@ -408,28 +381,24 @@ func (server *promotionRecoveryServer) failNextRenameFrom(collectionName string)
 func (server *promotionRecoveryServer) hasCollection(collectionName string) bool {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
-
 	return server.collections[collectionName]
 }
 
 func (server *promotionRecoveryServer) loadCallCount() int {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
-
 	return server.loadCollectionCalls
 }
 
 func (server *promotionRecoveryServer) addStartedSnapshot() <-chan struct{} {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
-
 	return server.addStarted
 }
 
 func (server *promotionRecoveryServer) renameCallCount() int {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
-
 	return server.renameCollectionCalls
 }
 
@@ -446,7 +415,6 @@ func newPromotionTestService(
 	if err := service.publishClient(context.Background(), client); err != nil {
 		t.Fatalf("publish fake Milvus client: %v", err)
 	}
-
 	return service
 }
 
@@ -458,24 +426,20 @@ func newDisconnectedPromotionTestService(
 	if server != sharedPromotionRecoveryServer {
 		t.Fatal("promotion test did not use the registered fake Milvus server")
 	}
-
 	if promotionRecoveryServerAddress == "" {
 		t.Fatal("promotion fake Milvus server address is empty")
 	}
-
 	service := &Service{cfg: config.Config{MilvusAddress: promotionRecoveryServerAddress}}
 	service.initializeResidencyController()
 	client, err := service.dialMilvus(context.Background())
 	if err != nil {
 		t.Fatalf("dial fake Milvus: %v", err)
 	}
-
 	t.Cleanup(func() {
 		if closeErr := service.Close(context.Background()); closeErr != nil {
 			t.Errorf("Close returned error: %v", closeErr)
 		}
 	})
-
 	return service, client
 }
 
@@ -493,15 +457,12 @@ func TestPromoteStagingRestoresLiveWhenStagingRenameFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("PromoteStaging returned nil after the staging rename failed")
 	}
-
 	if !server.hasCollection(liveName) {
 		t.Fatal("failed promotion left the prior live collection unavailable")
 	}
-
 	if !server.hasCollection(stagingName) {
 		t.Fatal("failed promotion removed the staging collection needed for retry")
 	}
-
 	if server.hasCollection(recoveryName) {
 		t.Fatal("failed promotion left the prior live collection under the recovery name")
 	}
@@ -516,18 +477,15 @@ func TestPromoteStagingRejectsIrreversibleRecoveryNameBeforeRename(t *testing.T)
 	if len(liveName) != maxCollectionNameLength {
 		t.Fatalf("live name length = %d, want %d", len(liveName), maxCollectionNameLength)
 	}
-
 	stagingName := stagingCollectionName(liveName)
 	server.setCollections(liveName, stagingName)
 
 	if err := service.PromoteStaging(context.Background(), codebasePath); err == nil {
 		t.Fatal("PromoteStaging accepted an irreversible recovery name")
 	}
-
 	if calls := server.renameCallCount(); calls != 0 {
 		t.Fatalf("RenameCollection calls = %d, want 0", calls)
 	}
-
 	if !server.hasCollection(liveName) || !server.hasCollection(stagingName) {
 		t.Fatal("rejected promotion changed live or staging collection presence")
 	}
@@ -554,49 +512,40 @@ func TestRecoverInterruptedPromotionsUsesCollectionPresence(t *testing.T) {
 		},
 	}
 	for _, testCase := range testCases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				server := resetPromotionRecoveryServer()
-				service := newPromotionTestService(t, server)
-				liveName := service.CollectionName(t.TempDir())
-				stagingName := stagingCollectionName(liveName)
-				recoveryName := liveName + recoveryCollectionSuffix
-				initialNames := []string{recoveryName}
-				if testCase.initialLive {
-					initialNames = append(initialNames, liveName)
-				}
+		t.Run(testCase.name, func(t *testing.T) {
+			server := resetPromotionRecoveryServer()
+			service := newPromotionTestService(t, server)
+			liveName := service.CollectionName(t.TempDir())
+			stagingName := stagingCollectionName(liveName)
+			recoveryName := liveName + recoveryCollectionSuffix
+			initialNames := []string{recoveryName}
+			if testCase.initialLive {
+				initialNames = append(initialNames, liveName)
+			}
+			if testCase.initialStg {
+				initialNames = append(initialNames, stagingName)
+			}
+			server.setCollections(initialNames...)
 
-				if testCase.initialStg {
-					initialNames = append(initialNames, stagingName)
-				}
-
-				server.setCollections(initialNames...)
-
-				if err := service.recoverInterruptedPromotions(context.Background()); err != nil {
-					t.Fatalf("recoverInterruptedPromotions returned error: %v", err)
-				}
-
-				if !server.hasCollection(liveName) {
-					t.Fatal("recovery did not leave an authoritative live collection")
-				}
-
-				if server.hasCollection(recoveryName) {
-					t.Fatal("recovery left the reserved recovery collection present")
-				}
-
-				if got := server.hasCollection(stagingName); got != testCase.wantStg {
-					t.Fatalf("staging present = %t, want %t", got, testCase.wantStg)
-				}
-			},
-		)
+			if err := service.recoverInterruptedPromotions(context.Background()); err != nil {
+				t.Fatalf("recoverInterruptedPromotions returned error: %v", err)
+			}
+			if !server.hasCollection(liveName) {
+				t.Fatal("recovery did not leave an authoritative live collection")
+			}
+			if server.hasCollection(recoveryName) {
+				t.Fatal("recovery left the reserved recovery collection present")
+			}
+			if got := server.hasCollection(stagingName); got != testCase.wantStg {
+				t.Fatalf("staging present = %t, want %t", got, testCase.wantStg)
+			}
+		})
 	}
 }
 
 func TestRecoverInterruptedPromotionsRestoresEveryAcceptedRecoveryNameLength(t *testing.T) {
 	server := resetPromotionRecoveryServer()
 	service := newPromotionTestService(t, server)
-
 	maxLiveLength := maxCollectionNameLength - len(recoveryCollectionSuffix)
 	for liveLength := 1; liveLength <= maxLiveLength; liveLength++ {
 		liveName := strings.Repeat("x", liveLength)
@@ -606,11 +555,9 @@ func TestRecoverInterruptedPromotionsRestoresEveryAcceptedRecoveryNameLength(t *
 		if err := service.recoverInterruptedPromotions(context.Background()); err != nil {
 			t.Fatalf("recover length %d returned error: %v", liveLength, err)
 		}
-
 		if !server.hasCollection(liveName) {
 			t.Fatalf("recover length %d did not restore the exact live name", liveLength)
 		}
-
 		if server.hasCollection(recoveryName) {
 			t.Fatalf("recover length %d retained the recovery name", liveLength)
 		}
@@ -636,20 +583,16 @@ func TestPublishClientWaitsForPromotionRecoveryBeforeAvailability(t *testing.T) 
 	case <-publishResult:
 		t.Fatal("client publication returned before promotion recovery started")
 	}
-
 	if service.Available() {
 		t.Fatal("semantic service became available before promotion recovery completed")
 	}
-
 	close(server.resumeRename)
 	if err := <-publishResult; err != nil {
 		t.Fatalf("publishClient returned error: %v", err)
 	}
-
 	if !service.Available() {
 		t.Fatal("semantic service stayed unavailable after promotion recovery completed")
 	}
-
 	if !server.hasCollection(liveName) || server.hasCollection(recoveryName) {
 		t.Fatal("client publication did not restore the authoritative live collection")
 	}
@@ -661,7 +604,6 @@ func TestPromoteStagingTransfersActivePinToLiveResidency(t *testing.T) {
 	if err := service.residency.Close(context.Background()); err != nil {
 		t.Fatalf("close initial residency controller: %v", err)
 	}
-
 	clock := newTestResidencyClock()
 	unloads := make(chan string, 1)
 	service.residency = newCollectionResidencyController(residencyControllerConfig{
@@ -685,7 +627,6 @@ func TestPromoteStagingTransfersActivePinToLiveResidency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acquire staging returned error: %v", err)
 	}
-
 	lease.Release()
 	pin, err := service.residency.Pin(stagingName)
 	if err != nil {
@@ -695,14 +636,12 @@ func TestPromoteStagingTransfersActivePinToLiveResidency(t *testing.T) {
 	if err := service.PromoteStaging(context.Background(), codebasePath); err != nil {
 		t.Fatalf("PromoteStaging returned error: %v", err)
 	}
-
 	clock.Advance(2 * time.Minute)
 	select {
 	case collectionName := <-unloads:
 		t.Fatalf("unloaded %q while the staging build pin remained active", collectionName)
 	default:
 	}
-
 	pin.Release()
 	clock.Advance(time.Minute)
 	if collectionName := <-unloads; collectionName != liveName {
@@ -716,7 +655,6 @@ func TestCountHoldsLeaseThroughQuery(t *testing.T) {
 	if err := service.residency.Close(context.Background()); err != nil {
 		t.Fatalf("close initial residency controller: %v", err)
 	}
-
 	clock := newTestResidencyClock()
 	unloads := make(chan string, 1)
 	service.residency = newCollectionResidencyController(residencyControllerConfig{
@@ -739,7 +677,6 @@ func TestCountHoldsLeaseThroughQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acquire returned error: %v", err)
 	}
-
 	lease.Release()
 	server.queryStarted = make(chan struct{})
 	server.resumeQuery = make(chan struct{})
@@ -751,7 +688,6 @@ func TestCountHoldsLeaseThroughQuery(t *testing.T) {
 		if countErr == nil && count != 42 {
 			countErr = fmt.Errorf("Count returned %d, want 42", count)
 		}
-
 		countResult <- countErr
 	}()
 	<-server.queryStarted
@@ -762,12 +698,10 @@ func TestCountHoldsLeaseThroughQuery(t *testing.T) {
 		t.Fatalf("unloaded %q while Count query remained active", unloaded)
 	default:
 	}
-
 	close(server.resumeQuery)
 	if err := <-countResult; err != nil {
 		t.Fatal(err)
 	}
-
 	waitForLeaseCount(t, service.residency, collectionName, 0)
 	clock.Advance(time.Minute)
 	select {
@@ -786,7 +720,6 @@ func TestInspectCollectionPreservesIdleDeadline(t *testing.T) {
 	if err := service.residency.Close(context.Background()); err != nil {
 		t.Fatalf("close initial residency controller: %v", err)
 	}
-
 	clock := newTestResidencyClock()
 	service.residency = newCollectionResidencyController(residencyControllerConfig{
 		clock:       clock,
@@ -811,7 +744,6 @@ func TestInspectCollectionPreservesIdleDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acquire returned error: %v", err)
 	}
-
 	lease.Release()
 	before := service.residency.ResidencySnapshot().Collections[0].IdleDeadlineUnixMS
 	clock.Advance(30 * time.Second)
@@ -820,11 +752,9 @@ func TestInspectCollectionPreservesIdleDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectCollection returned error: %v", err)
 	}
-
 	if !facts.Exists || !facts.RowsKnown || facts.Rows != 42 {
 		t.Fatalf("InspectCollection facts = %+v, want 42 ready rows", facts)
 	}
-
 	after := service.residency.ResidencySnapshot().Collections[0].IdleDeadlineUnixMS
 	if after != before {
 		t.Fatalf("inspection moved idle deadline from %d to %d", before, after)
@@ -844,11 +774,9 @@ func TestInspectCollectionDoesNotLoadColdCollection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectCollection returned error: %v", err)
 	}
-
 	if !facts.Exists || facts.RowsKnown {
 		t.Fatalf("InspectCollection facts = %+v, want existing cold collection", facts)
 	}
-
 	if calls := server.loadCallCount(); calls != 0 {
 		t.Fatalf("cold inspection load calls = %d, want 0", calls)
 	}
@@ -861,7 +789,6 @@ func TestRecoveryCollectionNameRejectsTruncationCollisions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("maximum reversible live name returned error: %v", err)
 	}
-
 	if recoveryName != maxLiveName+recoveryCollectionSuffix {
 		t.Fatalf("recovery name = %q, want exact reversible suffix", recoveryName)
 	}
@@ -882,7 +809,6 @@ func mustRecoveryCollectionName(t *testing.T, liveName string) string {
 	if err != nil {
 		t.Fatalf("recoveryCollectionName(%q) returned error: %v", liveName, err)
 	}
-
 	return recoveryName
 }
 
@@ -900,7 +826,6 @@ func TestReservedCollectionsStayWithinLimitAndOutOfListings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCollections returned error: %v", err)
 	}
-
 	if len(collections) != 1 || collections[0] != liveName {
 		t.Fatalf("ListCollections returned reserved names: %v", collections)
 	}
@@ -918,11 +843,9 @@ func TestPromoteStagingRepairsInterruptedSwapBeforePromotion(t *testing.T) {
 	if err := service.PromoteStaging(context.Background(), codebasePath); err != nil {
 		t.Fatalf("PromoteStaging returned error: %v", err)
 	}
-
 	if !server.hasCollection(liveName) {
 		t.Fatal("promotion did not leave an authoritative live collection")
 	}
-
 	if server.hasCollection(stagingName) || server.hasCollection(recoveryName) {
 		t.Fatal("promotion left a reserved collection after repairing the prior swap")
 	}
@@ -934,7 +857,6 @@ func TestPruneToCurrentHoldsLeaseThroughDelete(t *testing.T) {
 	if err := service.residency.Close(context.Background()); err != nil {
 		t.Fatalf("close initial residency controller: %v", err)
 	}
-
 	service.residency = newCollectionResidencyController(residencyControllerConfig{
 		waitTimeout: 15 * time.Second,
 		loadCeiling: time.Minute,
@@ -959,7 +881,6 @@ func TestPruneToCurrentHoldsLeaseThroughDelete(t *testing.T) {
 	if err := <-pruneResult; err != nil {
 		t.Fatalf("PruneToCurrent returned error: %v", err)
 	}
-
 	waitForLeaseCount(t, service.residency, collectionName, 0)
 }
 
@@ -983,7 +904,6 @@ func TestDropUsesExclusiveMaintenance(t *testing.T) {
 	if err := <-dropResult; err != nil {
 		t.Fatalf("Drop returned error: %v", err)
 	}
-
 	service.residency.mutex.Lock()
 	_, retained := service.residency.entries[collectionName]
 	service.residency.mutex.Unlock()
@@ -1005,7 +925,10 @@ func TestSchemaMigrationUsesExclusiveMaintenance(t *testing.T) {
 	t.Cleanup(cancelMigration)
 	migrationResult := make(chan error, 1)
 	go func() {
-		migrationResult <- service.ensureSplitPartColumnOnce(migrationContext, collectionName)
+		migrationResult <- service.ensureSplitPartColumnOnce(
+			migrationContext,
+			collectionName,
+		)
 	}()
 	<-addStarted
 	waitForMaintenance(t, service.residency, collectionName)
@@ -1028,7 +951,6 @@ func TestCreateCollectionUsesExclusiveMaintenance(t *testing.T) {
 		if lease != nil {
 			lease.Release()
 		}
-
 		createResult <- createErr
 	}()
 	<-server.createStarted
@@ -1057,7 +979,6 @@ func TestReconciliationRejectsStaleStateWithoutOrphaningProtection(t *testing.T)
 	if err != nil {
 		t.Fatalf("initial Acquire returned error: %v", err)
 	}
-
 	initialLease.Release()
 	controller.mutex.Lock()
 	entry := controller.entries[collectionName]
@@ -1068,12 +989,10 @@ func TestReconciliationRejectsStaleStateWithoutOrphaningProtection(t *testing.T)
 	if err != nil {
 		t.Fatalf("Acquire during reconciliation returned error: %v", err)
 	}
-
 	pin, err := controller.Pin(collectionName)
 	if err != nil {
 		t.Fatalf("Pin during reconciliation returned error: %v", err)
 	}
-
 	controller.applyReconciliation(
 		context.Background(),
 		generation,
@@ -1090,15 +1009,12 @@ func TestReconciliationRejectsStaleStateWithoutOrphaningProtection(t *testing.T)
 	if gotEntry != entry {
 		t.Fatal("reconciliation replaced the existing residency entry")
 	}
-
 	if gotState != collectionResidencyReady {
 		t.Fatalf("state = %d, want newer ready state", gotState)
 	}
-
 	if gotLeases != 1 || gotPins != 1 {
 		t.Fatalf("protection = (%d leases, %d pins), want (1, 1)", gotLeases, gotPins)
 	}
-
 	lease.Release()
 	pin.Release()
 }
@@ -1127,7 +1043,6 @@ func TestReconciliationExcludesRecoveryEntriesFromStateAndTimers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acquire returned error: %v", err)
 	}
-
 	lease.Release()
 
 	generation := controller.beginReconciliation()
@@ -1149,11 +1064,9 @@ func TestReconciliationExcludesRecoveryEntriesFromStateAndTimers(t *testing.T) {
 	if state != collectionResidencyReady {
 		t.Fatalf("recovery state = %d, want unchanged ready state", state)
 	}
-
 	if reconciliation != 0 {
 		t.Fatalf("recovery reconciliation generation = %d, want 0", reconciliation)
 	}
-
 	if idleTimer != nil || !idleDeadline.IsZero() {
 		t.Fatal("reconciliation admitted a recovery idle timer")
 	}
@@ -1165,7 +1078,6 @@ func TestPublishReconcilesAsynchronouslyWithoutWarmingOrStaleOverwrite(t *testin
 	if err := service.residency.Close(context.Background()); err != nil {
 		t.Fatalf("close initial residency controller: %v", err)
 	}
-
 	service.residency = newCollectionResidencyController(residencyControllerConfig{
 		waitTimeout: time.Second,
 		loadCeiling: time.Second,
@@ -1198,27 +1110,22 @@ func TestPublishReconcilesAsynchronouslyWithoutWarmingOrStaleOverwrite(t *testin
 	case <-time.After(time.Second):
 		t.Fatal("publishClient waited for asynchronous reconciliation")
 	}
-
 	if !service.Available() {
 		t.Fatal("service stayed unavailable while reconciliation ran")
 	}
-
 	select {
 	case <-server.loadStateStarted:
 	case <-time.After(time.Second):
 		t.Fatal("asynchronous reconciliation did not inspect load state")
 	}
-
 	lease, err := service.residency.Acquire(context.Background(), liveName)
 	if err != nil {
 		t.Fatalf("Acquire during reconciliation returned error: %v", err)
 	}
-
 	pin, err := service.residency.Pin(liveName)
 	if err != nil {
 		t.Fatalf("Pin during reconciliation returned error: %v", err)
 	}
-
 	close(server.resumeLoadState)
 	select {
 	case <-server.afterLoadStateStarted:
@@ -1235,15 +1142,12 @@ func TestPublishReconcilesAsynchronouslyWithoutWarmingOrStaleOverwrite(t *testin
 	if state != collectionResidencyReady {
 		t.Fatalf("state = %d, want newer ready state", state)
 	}
-
 	if leases != 1 || pins != 1 {
 		t.Fatalf("protection = (%d leases, %d pins), want (1, 1)", leases, pins)
 	}
-
 	if calls := server.loadCallCount(); calls != 0 {
 		t.Fatalf("LoadCollection calls = %d, want 0", calls)
 	}
-
 	lease.Release()
 	pin.Release()
 }

@@ -27,7 +27,6 @@ func selectRetainedJobEvents(
 ) []model.JobEvent {
 	nonTerminal := make([]model.JobEvent, 0)
 	terminal := make([]model.JobEvent, 0)
-
 	for _, event := range latest {
 		state := event.Job.State
 		isTerminal := state == model.JobStateCompleted ||
@@ -42,27 +41,27 @@ func selectRetainedJobEvents(
 
 	sortJobEventsByRecency(terminal)
 	terminalPerCodebase := make(map[string]int)
-
 	retainedTerminal := make([]model.JobEvent, 0, len(terminal))
 	for _, event := range terminal {
 		codebaseID := event.Job.CodebaseID
 		if terminalPerCodebase[codebaseID] >= jobJournalRetainedTerminalPerCodebase {
 			continue
 		}
-
 		terminalPerCodebase[codebaseID]++
 		retainedTerminal = append(retainedTerminal, event)
 	}
-
 	if len(retainedTerminal) > jobJournalRetainedTerminalTotal {
 		retainedTerminal = retainedTerminal[:jobJournalRetainedTerminalTotal]
 	}
 
-	retained := make([]model.JobEvent, 0, len(nonTerminal)+len(retainedTerminal))
+	retained := make(
+		[]model.JobEvent,
+		0,
+		len(nonTerminal)+len(retainedTerminal),
+	)
 	retained = append(retained, nonTerminal...)
 	retained = append(retained, retainedTerminal...)
 	sortJobEventsByRecency(retained)
-
 	return retained
 }
 
@@ -82,10 +81,12 @@ func compactJobJournal(path string) (kept int, dropped int, err error) {
 			"err",
 			err,
 		)
-
-		return 0, 0, fmt.Errorf("read jobs journal %s for compaction: %w", path, err)
+		return 0, 0, fmt.Errorf(
+			"read jobs journal %s for compaction: %w",
+			path,
+			err,
+		)
 	}
-
 	beforeInfo, err := os.Stat(path)
 	if err != nil {
 		slog.Error(
@@ -99,10 +100,12 @@ func compactJobJournal(path string) (kept int, dropped int, err error) {
 			"err",
 			err,
 		)
-
-		return 0, 0, fmt.Errorf("stat jobs journal %s before compaction: %w", path, err)
+		return 0, 0, fmt.Errorf(
+			"stat jobs journal %s before compaction: %w",
+			path,
+			err,
+		)
 	}
-
 	retained := selectRetainedJobEvents(latest)
 	afterBytes, err := marshalJobEventsSize(retained)
 	if err != nil {
@@ -117,10 +120,12 @@ func compactJobJournal(path string) (kept int, dropped int, err error) {
 			"err",
 			err,
 		)
-
-		return 0, 0, fmt.Errorf("measure compacted jobs journal %s: %w", path, err)
+		return 0, 0, fmt.Errorf(
+			"measure compacted jobs journal %s: %w",
+			path,
+			err,
+		)
 	}
-
 	if err := store.WriteJobEvents(path, retained); err != nil {
 		slog.Error(
 			"write compacted jobs journal failed",
@@ -133,8 +138,11 @@ func compactJobJournal(path string) (kept int, dropped int, err error) {
 			"err",
 			err,
 		)
-
-		return 0, 0, fmt.Errorf("write compacted jobs journal %s: %w", path, err)
+		return 0, 0, fmt.Errorf(
+			"write compacted jobs journal %s: %w",
+			path,
+			err,
+		)
 	}
 
 	kept = len(retained)
@@ -156,25 +164,20 @@ func compactJobJournal(path string) (kept int, dropped int, err error) {
 		"bytes_after",
 		afterBytes,
 	)
-
 	return kept, dropped, nil
 }
 
 // sortJobEventsByRecency makes rewrites stable while preserving newest records
 // first for both recovery and operator history.
 func sortJobEventsByRecency(events []model.JobEvent) {
-	sort.Slice(
-		events,
-		func(i int, j int) bool {
-			leftTime := jobEventRecency(events[i])
-			rightTime := jobEventRecency(events[j])
-			if leftTime.Equal(rightTime) {
-				return events[i].Job.ID < events[j].Job.ID
-			}
-
-			return leftTime.After(rightTime)
-		},
-	)
+	sort.Slice(events, func(i int, j int) bool {
+		leftTime := jobEventRecency(events[i])
+		rightTime := jobEventRecency(events[j])
+		if leftTime.Equal(rightTime) {
+			return events[i].Job.ID < events[j].Job.ID
+		}
+		return leftTime.After(rightTime)
+	})
 }
 
 // jobEventRecency uses completion time when available because a terminal job's
@@ -183,7 +186,6 @@ func jobEventRecency(event model.JobEvent) time.Time {
 	if event.Job.CompletedAt != nil {
 		return *event.Job.CompletedAt
 	}
-
 	return event.Job.UpdatedAt
 }
 
@@ -191,7 +193,6 @@ func jobEventRecency(event model.JobEvent) time.Time {
 // measurement failure cannot follow a successful rewrite.
 func marshalJobEventsSize(events []model.JobEvent) (int64, error) {
 	var size int64
-
 	for _, event := range events {
 		encoded, err := json.Marshal(event)
 		if err != nil {
@@ -206,12 +207,9 @@ func marshalJobEventsSize(events []model.JobEvent) (int64, error) {
 				"err",
 				err,
 			)
-
 			return 0, fmt.Errorf("marshal job event %s: %w", event.Job.ID, err)
 		}
-
 		size += int64(len(encoded) + 1)
 	}
-
 	return size, nil
 }

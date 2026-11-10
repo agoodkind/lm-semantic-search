@@ -29,13 +29,11 @@ func (manager *Manager) journalJobProgressLocked(job model.Job) {
 	if manager.lastJobJournalAt == nil {
 		manager.lastJobJournalAt = map[string]time.Time{}
 	}
-
 	now := clock.Now()
 	last := manager.lastJobJournalAt[job.ID]
 	if !last.IsZero() && now.Sub(last) < jobProgressJournalInterval {
 		return
 	}
-
 	// Advance the throttle once the event enters the ordered journal queue, which
 	// is what success means now that the writer owns the disk. An error here is
 	// the full-queue path, where the write ran synchronously and genuinely failed,
@@ -46,17 +44,9 @@ func (manager *Manager) journalJobProgressLocked(job model.Job) {
 	// journals again on its own, so a failed write costs at most one interval of
 	// delay rather than the progress detail itself.
 	if err := manager.appendJobLocked("job_progress", job); err != nil {
-		slog.Warn(
-			"journal job progress failed; will retry on next update",
-			"job_id",
-			job.ID,
-			"err",
-			err,
-		)
-
+		slog.Warn("journal job progress failed; will retry on next update", "job_id", job.ID, "err", err)
 		return
 	}
-
 	manager.lastJobJournalAt[job.ID] = now
 }
 
@@ -79,27 +69,20 @@ func (manager *Manager) forgetJobJournalLocked(jobID string) {
 func (manager *Manager) reconcileJournalOnStartLocked() {
 	now := clock.Now()
 	registryChanged := false
-
 	for id, job := range manager.jobs {
 		switch job.State {
-		case model.JobStateQueued,
-			model.JobStateRunning,
-			model.JobStatePaused,
-			model.JobStateCancelling:
+		case model.JobStateQueued, model.JobStateRunning, model.JobStatePaused, model.JobStateCancelling:
 		case model.JobStateCompleted, model.JobStateFailed, model.JobStateCancelled:
 			if manager.clearTerminalJobOwnershipLocked(id, job, now) {
 				registryChanged = true
 			}
-
 			continue
 		default:
 			continue
 		}
-
 		if job.Operation == "converge" {
 			manager.interruptedConvergeJobs[id] = job
 		}
-
 		job.State = model.JobStateCancelled
 		job.UpdatedAt = now
 		completedAt := now
@@ -108,17 +91,13 @@ func (manager *Manager) reconcileJournalOnStartLocked() {
 		job.Progress.LastEventAt = now
 		job.Progress.HeartbeatAt = now
 		manager.jobs[id] = job
-		if err := store.AppendJobEvent(
-			manager.config.JobsPath,
-			model.JobEvent{
-				Event:      "job_orphan_recovered",
-				OccurredAt: now,
-				Job:        job,
-			},
-		); err != nil {
+		if err := store.AppendJobEvent(manager.config.JobsPath, model.JobEvent{
+			Event:      "job_orphan_recovered",
+			OccurredAt: now,
+			Job:        job,
+		}); err != nil {
 			slog.Error("append orphan recovery event failed", "job_id", id, "err", err)
 		}
-
 		codebase, found := manager.codebases[job.CodebaseID]
 		if found && codebase.Kind == model.CodebaseKindDocument && codebase.ActiveJobID == id {
 			codebase.Status = model.CodebaseStatusIndexed
@@ -127,20 +106,8 @@ func (manager *Manager) reconcileJournalOnStartLocked() {
 			manager.codebases[codebase.ID] = codebase
 			registryChanged = true
 		}
-
-		slog.Warn(
-			"orphan job sanitized in journal after restart",
-			"job_id",
-			id,
-			"codebase_id",
-			job.CodebaseID,
-			"files_processed",
-			job.Progress.FilesProcessed,
-			"chunks_embedded",
-			job.Progress.ChunksEmbedded,
-		)
+		slog.Warn("orphan job sanitized in journal after restart", "job_id", id, "codebase_id", job.CodebaseID, "files_processed", job.Progress.FilesProcessed, "chunks_embedded", job.Progress.ChunksEmbedded)
 	}
-
 	if registryChanged {
 		if err := manager.saveLocked(); err != nil {
 			slog.Error("write registry after journal recovery failed", "err", err)
@@ -157,7 +124,6 @@ func (manager *Manager) clearTerminalJobOwnershipLocked(
 	if !found || codebase.ActiveJobID != jobID {
 		return false
 	}
-
 	codebase.ActiveJobID = ""
 	switch job.State {
 	case model.JobStateCompleted:
@@ -172,9 +138,7 @@ func (manager *Manager) clearTerminalJobOwnershipLocked(
 		model.JobStateCancelling:
 		return false
 	}
-
 	codebase.UpdatedAt = now
 	manager.codebases[codebase.ID] = codebase
-
 	return true
 }

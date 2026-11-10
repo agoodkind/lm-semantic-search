@@ -25,7 +25,6 @@ type capturedLogs struct {
 func (logs *capturedLogs) Write(data []byte) (int, error) {
 	logs.mu.Lock()
 	defer logs.mu.Unlock()
-
 	return logs.buffer.Write(data)
 }
 
@@ -33,7 +32,6 @@ func (logs *capturedLogs) Write(data []byte) (int, error) {
 func (logs *capturedLogs) text() string {
 	logs.mu.Lock()
 	defer logs.mu.Unlock()
-
 	return logs.buffer.String()
 }
 
@@ -41,13 +39,11 @@ func (logs *capturedLogs) text() string {
 // matches. An empty result means no single line carried all of them.
 func (logs *capturedLogs) linesContaining(matches ...string) []string {
 	found := make([]string, 0)
-
 	for _, line := range strings.Split(logs.text(), "\n") {
 		if lineContainsAll(line, matches) {
 			found = append(found, line)
 		}
 	}
-
 	return found
 }
 
@@ -57,7 +53,6 @@ func lineContainsAll(line string, matches []string) bool {
 			return false
 		}
 	}
-
 	return true
 }
 
@@ -70,10 +65,7 @@ func captureLogs(t *testing.T) *capturedLogs {
 
 	logs := &capturedLogs{}
 	previousLogger := slog.Default()
-	slog.SetDefault(
-		slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
-	)
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
-
 	return logs
 }

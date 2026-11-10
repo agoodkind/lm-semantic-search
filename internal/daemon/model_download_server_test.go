@@ -55,7 +55,6 @@ func newModelArtifactServer(t *testing.T, holdModel bool) *modelArtifactServer {
 		artifacts.release()
 		artifacts.server.Close()
 	})
-
 	return artifacts
 }
 
@@ -76,12 +75,8 @@ func (artifacts *modelArtifactServer) serveModelRange(
 		http.Error(writer, "unsatisfiable range", http.StatusRequestedRangeNotSatisfiable)
 		return
 	}
-
 	total := len(artifacts.modelContent)
-	writer.Header().Set(
-		"Content-Range",
-		"bytes "+strconv.Itoa(offset)+"-"+strconv.Itoa(total-1)+"/"+strconv.Itoa(total),
-	)
+	writer.Header().Set("Content-Range", "bytes "+strconv.Itoa(offset)+"-"+strconv.Itoa(total-1)+"/"+strconv.Itoa(total))
 	writer.Header().Set("Content-Length", strconv.Itoa(total-offset))
 	writer.WriteHeader(http.StatusPartialContent)
 	_, _ = writer.Write(artifacts.modelContent[offset:])
@@ -97,29 +92,24 @@ func (artifacts *modelArtifactServer) serve(writer http.ResponseWriter, request 
 			http.NotFound(writer, request)
 			return
 		}
-
 		rangeHeader := request.Header.Get("Range")
 		dropping := artifacts.dropModel.Load()
 		if rangeHeader != "" && dropping {
 			panic(http.ErrAbortHandler)
 		}
-
 		if rangeHeader != "" {
 			artifacts.serveModelRange(writer, rangeHeader)
 			return
 		}
-
 		half := len(artifacts.modelContent) / 2
 		writer.Header().Set("Content-Length", strconv.Itoa(len(artifacts.modelContent)))
 		_, _ = writer.Write(artifacts.modelContent[:half])
 		if flusher, ok := writer.(http.Flusher); ok {
 			flusher.Flush()
 		}
-
 		if dropping {
 			panic(http.ErrAbortHandler)
 		}
-
 		if artifacts.holding.Load() {
 			select {
 			case <-artifacts.holdModel:
@@ -127,7 +117,6 @@ func (artifacts *modelArtifactServer) serve(writer http.ResponseWriter, request 
 				return
 			}
 		}
-
 		_, _ = writer.Write(artifacts.modelContent[half:])
 	default:
 		http.NotFound(writer, request)
@@ -137,20 +126,16 @@ func (artifacts *modelArtifactServer) serve(writer http.ResponseWriter, request 
 func (artifacts *modelArtifactServer) registry() *offlinemodel.Registry {
 	modelSum := sha256.Sum256(artifacts.modelContent)
 	tokenizerSum := sha256.Sum256(artifacts.tokenizerContent)
-
-	return offlinemodel.NewRegistry(
-		offlinemodel.EmbeddingGemma,
-		offlinemodel.Preset{
-			Name:            offlinemodel.EmbeddingGemma,
-			ModelONNXURL:    artifacts.server.URL + "/" + testModelArtifactName,
-			ModelSHA256:     hex.EncodeToString(modelSum[:]),
-			TokenizerURL:    artifacts.server.URL + "/" + testTokenizerName,
-			TokenizerSHA256: hex.EncodeToString(tokenizerSum[:]),
-			Dimension:       4,
-			Pooling:         offlinemodel.PoolingMean,
-			MaximumTokens:   16,
-		},
-	)
+	return offlinemodel.NewRegistry(offlinemodel.EmbeddingGemma, offlinemodel.Preset{
+		Name:            offlinemodel.EmbeddingGemma,
+		ModelONNXURL:    artifacts.server.URL + "/" + testModelArtifactName,
+		ModelSHA256:     hex.EncodeToString(modelSum[:]),
+		TokenizerURL:    artifacts.server.URL + "/" + testTokenizerName,
+		TokenizerSHA256: hex.EncodeToString(tokenizerSum[:]),
+		Dimension:       4,
+		Pooling:         offlinemodel.PoolingMean,
+		MaximumTokens:   16,
+	})
 }
 
 func (artifacts *modelArtifactServer) options(

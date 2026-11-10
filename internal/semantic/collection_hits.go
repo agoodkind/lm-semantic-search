@@ -10,20 +10,16 @@ import (
 // current client and configuration. The store is a value over the client. The
 // reconnector replaces the client, and each call reads the current one.
 func (service *Service) collectionStore() *milvusstore.Store {
-	return milvusstore.New(
-		service.milvus,
-		milvusstore.Options{
-			Hybrid:         service.cfg.HybridMode,
-			EmbeddingModel: service.cfg.EmbeddingModel,
-		},
-	)
+	return milvusstore.New(service.milvus, milvusstore.Options{
+		Hybrid:         service.cfg.HybridMode,
+		EmbeddingModel: service.cfg.EmbeddingModel,
+	})
 }
 
 // chunkFromHit converts one store hit to a stored chunk. The chunk decodes the
 // language from the metadata JSON.
 func chunkFromHit(hit collection.Hit) model.StoredChunk {
 	metadata := decodeMetadata(hit.Metadata)
-
 	return model.StoredChunk{
 		Content:           hit.Content,
 		RelativePath:      hit.RelativePath,
@@ -43,6 +39,5 @@ func chunksFromHits(hits []collection.Hit) []model.StoredChunk {
 	for _, hit := range hits {
 		chunks = append(chunks, chunkFromHit(hit))
 	}
-
 	return chunks
 }

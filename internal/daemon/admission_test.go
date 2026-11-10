@@ -31,37 +31,24 @@ func TestBootstrapAdmissionHaltDropsStagingAndDoesNotPromote(t *testing.T) {
 	cfg.IgnoreDigest = "sha256:admission-bootstrap"
 	codebaseID, job := seedBootstrapCodebase(t, manager, repoPath, cfg)
 
-	runBootstrapAndGraph(
-		t,
-		manager,
-		job,
-		newCodeItemSource(manager.runner, manager.indexability, codebaseID, repoPath, cfg),
-	)
+	runBootstrapAndGraph(t, manager, job, newCodeItemSource(manager.runner, manager.indexability, codebaseID, repoPath, cfg))
 
 	completed, found := manager.GetJob(job.ID)
 	if !found {
 		t.Fatalf("job %s was not found", job.ID)
 	}
-
 	if completed.State != model.JobStateFailed {
 		t.Fatalf("job state = %q, want failed", completed.State)
 	}
-
 	if completed.Error == nil || completed.Error.Code != adapterr.CodeIndexBudgetExceeded {
 		t.Fatalf("job error = %+v, want admission budget code", completed.Error)
 	}
-
 	if len(fake.stageCallsSnapshot()) != 0 {
-		t.Fatalf(
-			"StageReindex calls = %v, want none before over-budget write",
-			fake.stageCallsSnapshot(),
-		)
+		t.Fatalf("StageReindex calls = %v, want none before over-budget write", fake.stageCallsSnapshot())
 	}
-
 	if len(fake.promotedSnapshot()) != 0 {
 		t.Fatalf("PromoteStaging calls = %v, want none", fake.promotedSnapshot())
 	}
-
 	if len(fake.droppedStagingSnapshot()) == 0 {
 		t.Fatal("DropStaging was not called after admission halt")
 	}
@@ -91,37 +78,21 @@ func TestForcedRebuildAdmissionHaltPreservesLiveSnapshot(t *testing.T) {
 	if err := merkle.WriteSnapshot(manager.merklePath(codebaseID), liveSnapshot); err != nil {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
-
 	manager.mu.Lock()
 	codebase := manager.codebases[codebaseID]
-	codebase.LastSuccessfulRun = &model.IndexRunSummary{
-		IndexedFiles: 1,
-		TotalChunks:  1,
-		Status:       "completed",
-	}
+	codebase.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 1, Status: "completed"}
 	manager.codebases[codebaseID] = codebase
 	manager.mu.Unlock()
 
-	runBootstrapAndGraph(
-		t,
-		manager,
-		job,
-		newCodeItemSource(manager.runner, manager.indexability, codebaseID, repoPath, cfg),
-	)
+	runBootstrapAndGraph(t, manager, job, newCodeItemSource(manager.runner, manager.indexability, codebaseID, repoPath, cfg))
 
 	after, err := merkle.ReadSnapshot(manager.merklePath(codebaseID))
 	if err != nil {
 		t.Fatalf("ReadSnapshot returned error: %v", err)
 	}
-
 	if !merkle.Equal(after, liveSnapshot) {
-		t.Fatalf(
-			"live snapshot changed after halted forced rebuild: got %+v want %+v",
-			after,
-			liveSnapshot,
-		)
+		t.Fatalf("live snapshot changed after halted forced rebuild: got %+v want %+v", after, liveSnapshot)
 	}
-
 	stagingPath := manager.stagingMerklePath(codebaseID)
 	if _, err := os.Stat(stagingPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("staging snapshot still exists after halt: %v", err)
@@ -134,23 +105,10 @@ func TestDeltaAdmissionHaltDoesNotWriteOffendingFile(t *testing.T) {
 	manager.runner = runnerWithChunks(map[string][]string{
 		"added.go": {"chunk one", "chunk two"},
 	})
-	if err := os.WriteFile(
-		filepath.Join(job.CanonicalPath, "added.go"),
-		[]byte("package main\n"),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(job.CanonicalPath, "added.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
-
-	source := newCodeItemSource(
-		manager.runner,
-		manager.indexability,
-		job.CodebaseID,
-		job.CanonicalPath,
-		job.Config,
-	).withCollectionName(
-		codebase.CollectionName,
-	)
+	source := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config).withCollectionName(codebase.CollectionName)
 
 	handled, _ := manager.runDeltaSync(context.Background(), job, source)
 	if !handled {
@@ -161,24 +119,19 @@ func TestDeltaAdmissionHaltDoesNotWriteOffendingFile(t *testing.T) {
 	if !found {
 		t.Fatalf("job %s was not found", job.ID)
 	}
-
 	if completed.State != model.JobStateFailed {
 		t.Fatalf("job state = %q, want failed", completed.State)
 	}
-
 	if completed.Error == nil || completed.Error.Code != adapterr.CodeIndexBudgetExceeded {
 		t.Fatalf("job error = %+v, want admission budget code", completed.Error)
 	}
-
 	if calls := fake.reindexCallsSnapshot(); len(calls) != 0 {
 		t.Fatalf("live reindex calls = %v, want none for offending file", calls)
 	}
-
 	snapshot, err := merkle.ReadSnapshot(manager.merklePath(codebase.ID))
 	if err != nil {
 		t.Fatalf("ReadSnapshot returned error: %v", err)
 	}
-
 	if snapshot.HasFile("added.go") {
 		t.Fatalf("snapshot recorded added.go after refused write: %+v", snapshot.Files)
 	}
@@ -199,51 +152,31 @@ func TestSiblingExpectedAdmissionHaltTrips(t *testing.T) {
 	worktreeDir := filepath.Join(base, "feature")
 	makeLinkedWorktree(t, mainRoot, "feature", worktreeDir, "feature")
 	worktreeRoot := evalSym(t, worktreeDir)
-	if err := os.WriteFile(
-		filepath.Join(worktreeRoot, "feature.go"),
-		[]byte("package main\n"),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(worktreeRoot, "feature.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
 	cfg := defaultIndexConfig()
 	cfg.IgnoreDigest = "sha256:admission-sibling"
-	registerSiblingCodebase(
-		t,
-		manager,
-		mainRoot,
-		func(codebase *model.Codebase) {
-			codebase.Status = model.CodebaseStatusIndexed
-			codebase.LastSuccessfulRun = &model.IndexRunSummary{
-				IndexedFiles: 1,
-				TotalChunks:  1,
-				Status:       "completed",
-			}
-			codebase.EffectiveConfig = cfg
-		},
-	)
+	registerSiblingCodebase(t, manager, mainRoot, func(codebase *model.Codebase) {
+		codebase.Status = model.CodebaseStatusIndexed
+		codebase.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 1, Status: "completed"}
+		codebase.EffectiveConfig = cfg
+	})
 	manager.runner = runnerWithChunks(map[string][]string{
 		"feature.go": {"one", "two", "three"},
 	})
 	codebaseID, job := seedBootstrapCodebase(t, manager, worktreeRoot, cfg)
 
-	runBootstrapAndGraph(
-		t,
-		manager,
-		job,
-		newCodeItemSource(manager.runner, manager.indexability, codebaseID, worktreeRoot, cfg),
-	)
+	runBootstrapAndGraph(t, manager, job, newCodeItemSource(manager.runner, manager.indexability, codebaseID, worktreeRoot, cfg))
 
 	completed, found := manager.GetJob(job.ID)
 	if !found {
 		t.Fatalf("job %s was not found", job.ID)
 	}
-
 	if completed.State != model.JobStateFailed {
 		t.Fatalf("job state = %q, want failed", completed.State)
 	}
-
 	if completed.Error == nil || completed.Error.Code != adapterr.CodeIndexBudgetExceeded {
 		t.Fatalf("job error = %+v, want admission budget code", completed.Error)
 	}
@@ -259,11 +192,9 @@ func TestAdmissionAllowsNormalLargeBuildWithinSlack(t *testing.T) {
 		count:      func(context.Context, string) (int32, error) { return 40, nil },
 	}
 	chunks := make([]string, 0, 40)
-
 	for i := 0; i < 40; i++ {
 		chunks = append(chunks, "chunk")
 	}
-
 	manager.runner = runnerWithChunks(map[string][]string{
 		"main.go": chunks,
 	})
@@ -274,26 +205,16 @@ func TestAdmissionAllowsNormalLargeBuildWithinSlack(t *testing.T) {
 	codebaseID, job := seedBootstrapCodebase(t, manager, repoPath, cfg)
 	manager.mu.Lock()
 	codebase := manager.codebases[codebaseID]
-	codebase.LastSuccessfulRun = &model.IndexRunSummary{
-		IndexedFiles: 1,
-		TotalChunks:  10,
-		Status:       "completed",
-	}
+	codebase.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 10, Status: "completed"}
 	manager.codebases[codebaseID] = codebase
 	manager.mu.Unlock()
 
-	runBootstrapAndGraph(
-		t,
-		manager,
-		job,
-		newCodeItemSource(manager.runner, manager.indexability, codebaseID, repoPath, cfg),
-	)
+	runBootstrapAndGraph(t, manager, job, newCodeItemSource(manager.runner, manager.indexability, codebaseID, repoPath, cfg))
 
 	completed, found := manager.GetJob(job.ID)
 	if !found {
 		t.Fatalf("job %s was not found", job.ID)
 	}
-
 	if completed.State != model.JobStateCompleted {
 		t.Fatalf("job state = %q, want completed; error = %+v", completed.State, completed.Error)
 	}
@@ -322,7 +243,6 @@ func TestConvergePathsRoutesUpsertThroughAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConvergePaths returned error: %v", err)
 	}
-
 	if calls := fake.reindexCallsSnapshot(); len(calls) != 0 {
 		t.Fatalf("converge Reindex calls = %v, want none after admission refusal", calls)
 	}
@@ -356,34 +276,24 @@ func TestRequestAdmissionBudgetCannotRaiseServerCaps(t *testing.T) {
 	manager.config.MaxJobChunks = 10
 	manager.config.MaxJobBytes = 100
 
-	raised := newAdmissionState(
-		manager.config,
-		model.AdmissionBudget{
-			MaxJobChunks: 20,
-			MaxJobBytes:  200,
-		},
-		0,
-	)
+	raised := newAdmissionState(manager.config, model.AdmissionBudget{
+		MaxJobChunks: 20,
+		MaxJobBytes:  200,
+	}, 0)
 	if raised.maxChunks != 10 {
 		t.Fatalf("raised maxChunks = %d, want server cap 10", raised.maxChunks)
 	}
-
 	if raised.maxBytes != 100 {
 		t.Fatalf("raised maxBytes = %d, want server cap 100", raised.maxBytes)
 	}
 
-	tightened := newAdmissionState(
-		manager.config,
-		model.AdmissionBudget{
-			MaxJobChunks: 4,
-			MaxJobBytes:  40,
-		},
-		0,
-	)
+	tightened := newAdmissionState(manager.config, model.AdmissionBudget{
+		MaxJobChunks: 4,
+		MaxJobBytes:  40,
+	}, 0)
 	if tightened.maxChunks != 4 {
 		t.Fatalf("tightened maxChunks = %d, want request cap 4", tightened.maxChunks)
 	}
-
 	if tightened.maxBytes != 40 {
 		t.Fatalf("tightened maxBytes = %d, want request cap 40", tightened.maxBytes)
 	}
@@ -394,18 +304,13 @@ func TestRequestAdmissionBudgetTightensUnlimitedServerCaps(t *testing.T) {
 	manager.config.MaxJobChunks = 0
 	manager.config.MaxJobBytes = 0
 
-	state := newAdmissionState(
-		manager.config,
-		model.AdmissionBudget{
-			MaxJobChunks: 4,
-			MaxJobBytes:  40,
-		},
-		0,
-	)
+	state := newAdmissionState(manager.config, model.AdmissionBudget{
+		MaxJobChunks: 4,
+		MaxJobBytes:  40,
+	}, 0)
 	if state.maxChunks != 4 {
 		t.Fatalf("maxChunks = %d, want request cap 4", state.maxChunks)
 	}
-
 	if state.maxBytes != 40 {
 		t.Fatalf("maxBytes = %d, want request cap 40", state.maxBytes)
 	}
@@ -437,27 +342,19 @@ func TestAdmissionForCodebaseUsesLiveChunkTotalBaseline(t *testing.T) {
 
 func runnerWithChunks(chunksByPath map[string][]string) fakeRunner {
 	return fakeRunner{
-		indexOne: func(_ context.Context, _ string, relativePath string, _ model.IndexConfig) (
-			indexer.OneFileResult,
-			error,
-		) {
+		indexOne: func(_ context.Context, _ string, relativePath string, _ model.IndexConfig) (indexer.OneFileResult, error) {
 			chunkTexts := chunksByPath[relativePath]
-
 			chunks := make([]model.StoredChunk, 0, len(chunkTexts))
 			for index, content := range chunkTexts {
-				chunks = append(
-					chunks,
-					model.StoredChunk{
-						Content:       content,
-						RelativePath:  relativePath,
-						StartLine:     int32(index + 1),
-						EndLine:       int32(index + 1),
-						Language:      "go",
-						FileExtension: ".go",
-					},
-				)
+				chunks = append(chunks, model.StoredChunk{
+					Content:       content,
+					RelativePath:  relativePath,
+					StartLine:     int32(index + 1),
+					EndLine:       int32(index + 1),
+					Language:      "go",
+					FileExtension: ".go",
+				})
 			}
-
 			return indexer.OneFileResult{
 				Chunks:   chunks,
 				FileHash: hashText(relativePath + ":changed"),
@@ -482,11 +379,7 @@ func newAdmissionDeltaFixture(t *testing.T) (*Manager, model.Codebase, model.Job
 	codebase.Status = model.CodebaseStatusIndexed
 	codebase.CollectionName = "cc_admission_delta"
 	codebase.EffectiveConfig = cfg
-	codebase.LastSuccessfulRun = &model.IndexRunSummary{
-		IndexedFiles: 1,
-		TotalChunks:  1,
-		Status:       "completed",
-	}
+	codebase.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 1, Status: "completed"}
 	codebase.MerkleSnapshotPath = manager.merklePath(codebase.ID)
 	initialSnapshot := merkle.Snapshot{
 		ConfigDigest: cfg.IgnoreDigest,
@@ -496,18 +389,7 @@ func newAdmissionDeltaFixture(t *testing.T) (*Manager, model.Codebase, model.Job
 	if err := merkle.WriteSnapshot(manager.merklePath(codebase.ID), initialSnapshot); err != nil {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
-
-	job := newQueuedJob(
-		codebase.ID,
-		repoPath,
-		repoPath,
-		testClientInfo(),
-		string(jobOperationSync),
-		false,
-		cfg,
-		emptyAdmissionBudget,
-		clock.Now(),
-	)
+	job := newQueuedJob(codebase.ID, repoPath, repoPath, testClientInfo(), string(jobOperationSync), false, cfg, emptyAdmissionBudget, clock.Now())
 	job.State = model.JobStateRunning
 	codebase.ActiveJobID = job.ID
 
@@ -522,27 +404,23 @@ func newAdmissionDeltaFixture(t *testing.T) (*Manager, model.Codebase, model.Job
 func (f *fakeSemantic) stageCallsSnapshot() []reindexCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-
 	return slices.Clone(f.stageCalls)
 }
 
 func (f *fakeSemantic) reindexCallsSnapshot() []reindexCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-
 	return slices.Clone(f.reindexCalls)
 }
 
 func (f *fakeSemantic) promotedSnapshot() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-
 	return slices.Clone(f.promoted)
 }
 
 func (f *fakeSemantic) droppedStagingSnapshot() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-
 	return slices.Clone(f.droppedStaging)
 }

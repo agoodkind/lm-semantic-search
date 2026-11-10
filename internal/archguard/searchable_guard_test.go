@@ -30,48 +30,33 @@ func TestSearchableNotComputedInline(t *testing.T) {
 		if rel == statusResolveFile {
 			continue
 		}
-
 		parsed, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
-
-		ast.Inspect(
-			parsed,
-			func(node ast.Node) bool {
-				switch typed := node.(type) {
-				case *ast.KeyValueExpr:
-					if isSearchableIdent(typed.Key) && isBoolExpr(typed.Value) {
-						violations = append(
-							violations,
-							rel+": Searchable assigned an inline boolean expression",
-						)
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.KeyValueExpr:
+				if isSearchableIdent(typed.Key) && isBoolExpr(typed.Value) {
+					violations = append(violations, rel+": Searchable assigned an inline boolean expression")
+				}
+			case *ast.AssignStmt:
+				for index, lhs := range typed.Lhs {
+					if index >= len(typed.Rhs) {
+						continue
 					}
-				case *ast.AssignStmt:
-					for index, lhs := range typed.Lhs {
-						if index >= len(typed.Rhs) {
-							continue
-						}
-
-						if isSearchableIdent(lhs) && isBoolExpr(typed.Rhs[index]) {
-							violations = append(
-								violations,
-								rel+": searchable assigned an inline boolean expression",
-							)
-						}
+					if isSearchableIdent(lhs) && isBoolExpr(typed.Rhs[index]) {
+						violations = append(violations, rel+": searchable assigned an inline boolean expression")
 					}
 				}
-
-				return true
-			},
-		)
+			}
+			return true
+		})
 	}
 
 	if len(violations) > 0 {
-		t.Fatalf(
-			"searchable folded outside status.ResolveSearchable; route it through the status chokepoint:\n%s",
-			strings.Join(violations, "\n"),
-		)
+		t.Fatalf("searchable folded outside status.ResolveSearchable; route it through the status chokepoint:\n%s",
+			strings.Join(violations, "\n"))
 	}
 }
 
@@ -100,7 +85,6 @@ func isBoolExpr(expr ast.Expr) bool {
 	if !ok {
 		return false
 	}
-
 	switch binary.Op {
 	case token.LAND, token.LOR, token.EQL, token.NEQ:
 		return true

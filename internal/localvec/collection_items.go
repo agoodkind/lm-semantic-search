@@ -13,10 +13,7 @@ import (
 // RecordCollectionDeclaration records the saved declaration of a document
 // collection. DescribeScalarColumns reports the recorded columns for the
 // collection.
-func (store *Store) RecordCollectionDeclaration(
-	collectionName string,
-	declaration lmcollection.Declaration,
-) {
+func (store *Store) RecordCollectionDeclaration(collectionName string, declaration lmcollection.Declaration) {
 	store.declaredScalars.Store(collectionName, slices.Clone(declaration.Scalars))
 }
 
@@ -25,12 +22,10 @@ func (store *Store) recordedScalars(collectionName string) ([]lmcollection.Scala
 	if !found {
 		return nil, false
 	}
-
 	columns, isColumns := loaded.([]lmcollection.ScalarColumn)
 	if !isColumns {
 		return nil, false
 	}
-
 	return slices.Clone(columns), true
 }
 
@@ -47,7 +42,6 @@ func (store *Store) LoadCollectionItemBatch(
 		Rows:  map[string]semantic.CollectionItemRows{},
 		Reuse: map[string]model.ReuseVector{},
 	}
-
 	requested := make(map[string]struct{}, len(itemIDs))
 	for _, itemID := range itemIDs {
 		trimmed := strings.TrimSpace(itemID)
@@ -55,44 +49,35 @@ func (store *Store) LoadCollectionItemBatch(
 			requested[trimmed] = struct{}{}
 		}
 	}
-
 	if collectionName == "" || itemColumn == "" || len(requested) == 0 {
 		return state, nil
 	}
-
 	if err := operationContextError(ctx, "load local collection items"); err != nil {
 		return semantic.CollectionItemBatchState{}, err
 	}
-
 	stored, err := store.collectionForName(collectionName, false)
 	if err != nil {
 		return semantic.CollectionItemBatchState{}, err
 	}
-
 	rows, exists, err := stored.snapshot()
 	if err != nil {
 		return semantic.CollectionItemBatchState{}, err
 	}
-
 	if !exists {
 		return state, nil
 	}
-
 	for _, candidate := range rows {
 		itemID, present := candidate.itemID(itemColumn)
 		if !present {
 			continue
 		}
-
 		if _, wanted := requested[itemID]; !wanted {
 			continue
 		}
-
 		contentKey := candidate.ContentVectorKey
 		if contentKey == "" {
 			contentKey = semantic.ContentVectorKey(candidate.Content)
 		}
-
 		state.Reuse[contentKey] = model.ReuseVector{
 			Vector:           append([]float32(nil), candidate.Vector...),
 			SourceModelKnown: false,
@@ -102,11 +87,9 @@ func (store *Store) LoadCollectionItemBatch(
 			itemRows = semantic.CollectionItemRows{UsablePaths: map[string]struct{}{}}
 			state.Rows[itemID] = itemRows
 		}
-
 		if strings.TrimSpace(candidate.Content) != "" {
 			itemRows.UsablePaths[candidate.RelativePath] = struct{}{}
 		}
 	}
-
 	return state, nil
 }

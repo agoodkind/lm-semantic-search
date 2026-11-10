@@ -42,7 +42,6 @@ func (backfill ScalarBackfill) Needs(stored map[string]ScalarValue) bool {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -50,20 +49,14 @@ func (backfill ScalarBackfill) Needs(stored map[string]ScalarValue) bool {
 // the row's item ID column value, and it is empty when the column is null. A row
 // without an item ID belongs to the longest streamed item ID that follows one of
 // the legacy path families in its relativePath.
-func (backfill ScalarBackfill) ItemValues(
-	itemID string,
-	relativePath string,
-) (map[string]ScalarValue, bool) {
+func (backfill ScalarBackfill) ItemValues(itemID string, relativePath string) (map[string]ScalarValue, bool) {
 	if itemID == "" && len(backfill.LegacyPathFamilies) > 0 {
 		itemID = backfill.legacyPathItem(relativePath)
 	}
-
 	if itemID == "" {
 		return nil, false
 	}
-
 	values, streamed := backfill.Values[itemID]
-
 	return values, streamed
 }
 
@@ -75,41 +68,29 @@ func (backfill ScalarBackfill) legacyPathItem(relativePath string) string {
 		if !found {
 			continue
 		}
-
-		for end := strings.LastIndexByte(
-			remainder,
-			'/',
-		); end > 0; end = strings.LastIndexByte(remainder[:end], '/') {
+		for end := strings.LastIndexByte(remainder, '/'); end > 0; end = strings.LastIndexByte(remainder[:end], '/') {
 			if _, streamed := backfill.Values[remainder[:end]]; streamed {
 				return remainder[:end]
 			}
 		}
-
 		return ""
 	}
-
 	return ""
 }
 
 // Filled returns the backfill column values a row stores after the backfill. A
 // missing stored value takes the item's value, and every other stored value
 // stays. changed reports whether any value differs from the stored one.
-func (backfill ScalarBackfill) Filled(
-	stored map[string]ScalarValue,
-	values map[string]ScalarValue,
-) (map[string]ScalarValue, bool) {
+func (backfill ScalarBackfill) Filled(stored map[string]ScalarValue, values map[string]ScalarValue) (map[string]ScalarValue, bool) {
 	filled := make(map[string]ScalarValue, len(backfill.Columns))
 	changed := false
-
 	for _, column := range backfill.Columns {
 		value := stored[column.Name]
 		if ScalarValueMissing(value) && values[column.Name] != value {
 			value = values[column.Name]
 			changed = true
 		}
-
 		filled[column.Name] = value
 	}
-
 	return filled, changed
 }

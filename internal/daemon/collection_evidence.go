@@ -18,11 +18,7 @@ type collectionEvidence struct {
 // registry has one, and a derived name is only a fallback for untracked
 // paths. Store errors stay Unknown, and Unknown never routes a job to
 // bootstrap, so a transient Milvus failure can never trigger a full rebuild.
-func (manager *Manager) probeCollectionEvidence(
-	ctx context.Context,
-	canonicalPath string,
-	caller string,
-) collectionEvidence {
+func (manager *Manager) probeCollectionEvidence(ctx context.Context, canonicalPath string, caller string) collectionEvidence {
 	evidence := collectionEvidence{
 		presence:   collectionPresenceUnknown,
 		rows:       0,
@@ -40,7 +36,6 @@ func (manager *Manager) probeCollectionEvidence(
 		collectionName = manager.semantic.CollectionName(canonicalPath)
 		nameSource = "derived"
 	}
-
 	evidence.collection = collectionName
 	evidence.nameSource = nameSource
 	if collectionName == "" {
@@ -63,19 +58,15 @@ func (manager *Manager) probeCollectionEvidence(
 			"err",
 			inspectErr,
 		)
-
 		return evidence
 	}
-
 	evidence.rows = facts.Rows
 	evidence.rowsKnown = facts.RowsKnown
 	if facts.Exists {
 		evidence.presence = collectionPresencePresent
 		return evidence
 	}
-
 	evidence.presence = collectionPresenceMissing
-
 	return evidence
 }
 
@@ -92,6 +83,5 @@ func (manager *Manager) storedCollectionNameForPath(canonicalPath string) string
 			return codebase.CollectionName
 		}
 	}
-
 	return ""
 }

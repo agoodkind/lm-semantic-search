@@ -27,17 +27,11 @@ const (
 func TestBothProvidersRefuseAnInputAsClientSafeInvalidArgument(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(
-		http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-			writer.Header().Set("Content-Type", "application/json")
-			writer.WriteHeader(http.StatusBadRequest)
-			_, _ = writer.Write(
-				[]byte(
-					`{"error":{"code":"context_length_exceeded","type":"invalid_request_error","message":"This model's maximum context length is 8192 tokens, however the input at index 0 resolved to 10000 tokens. Reduce the input length."}}`,
-				),
-			)
-		}),
-	)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"code":"context_length_exceeded","type":"invalid_request_error","message":"This model's maximum context length is 8192 tokens, however the input at index 0 resolved to 10000 tokens. Reduce the input length."}}`))
+	}))
 	defer server.Close()
 
 	hostedProvider, err := embedding.NewOpenAICompatible(embedding.OpenAIOptions{
@@ -50,20 +44,13 @@ func TestBothProvidersRefuseAnInputAsClientSafeInvalidArgument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOpenAICompatible returned error: %v", err)
 	}
-
-	_, hostedErr := hostedProvider.Embed(
-		context.Background(),
-		strings.Repeat("a", oversizedHostedInputSize),
-	)
+	_, hostedErr := hostedProvider.Embed(context.Background(), strings.Repeat("a", oversizedHostedInputSize))
 	if hostedErr == nil {
 		t.Fatal("the hosted provider accepted an input its endpoint rejected")
 	}
 
 	onnxProviderUnderTest := newUnloadedONNXProvider(t, offlinemodel.BGESmall)
-	onnxOversized := strings.Repeat(
-		"a",
-		onnxProviderUnderTest.runtime.tokenizer.maximumInputBytes()+1,
-	)
+	onnxOversized := strings.Repeat("a", onnxProviderUnderTest.runtime.tokenizer.maximumInputBytes()+1)
 	_, onnxErr := onnxProviderUnderTest.Embed(context.Background(), onnxOversized)
 	if onnxErr == nil {
 		t.Fatal("the in-process provider accepted an input past its tokenizer bound")
@@ -97,61 +84,39 @@ func TestBothProvidersRefuseAnInputAsClientSafeInvalidArgument(t *testing.T) {
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				var adapterErr *adapterr.AdapterError
-				if !errors.As(testCase.err, &adapterErr) {
-					t.Fatalf("error is untyped: %v", testCase.err)
+		t.Run(testCase.name, func(t *testing.T) {
+			var adapterErr *adapterr.AdapterError
+			if !errors.As(testCase.err, &adapterErr) {
+				t.Fatalf("error is untyped: %v", testCase.err)
+			}
+			if adapterErr.Class != adapterr.ClassInvalidArgument {
+				t.Fatalf("class = %q, want %q", adapterErr.Class, adapterr.ClassInvalidArgument)
+			}
+			if !adapterErr.SafeForClient {
+				t.Fatal("a refused input must be safe to show the caller")
+			}
+			if adapterErr.Code != string(testCase.wantReason) {
+				t.Fatalf("code = %q, want the reason %q", adapterErr.Code, testCase.wantReason)
+			}
+			message := adapterr.SafeMessage(testCase.err)
+			if !strings.Contains(message, string(testCase.wantReason)) {
+				t.Fatalf("client message %q does not state the reason %q", message, testCase.wantReason)
+			}
+			for _, figure := range testCase.wantFigures {
+				if !strings.Contains(message, figure) {
+					t.Fatalf("client message %q does not state the figure %q", message, figure)
 				}
-
-				if adapterErr.Class != adapterr.ClassInvalidArgument {
-					t.Fatalf("class = %q, want %q", adapterErr.Class, adapterr.ClassInvalidArgument)
+			}
+			for _, wrongFigure := range testCase.forbidFigures {
+				if strings.Contains(message, wrongFigure) {
+					t.Fatalf("client message %q states %q, which did not refuse the input", message, wrongFigure)
 				}
-
-				if !adapterErr.SafeForClient {
-					t.Fatal("a refused input must be safe to show the caller")
+			}
+			for _, leak := range []string{"OpenAI", "ONNX", "onnx", "bge-small", "endpoint"} {
+				if strings.Contains(message, leak) {
+					t.Fatalf("client message %q states %q, which identifies the provider", message, leak)
 				}
-
-				if adapterErr.Code != string(testCase.wantReason) {
-					t.Fatalf("code = %q, want the reason %q", adapterErr.Code, testCase.wantReason)
-				}
-
-				message := adapterr.SafeMessage(testCase.err)
-				if !strings.Contains(message, string(testCase.wantReason)) {
-					t.Fatalf(
-						"client message %q does not state the reason %q",
-						message,
-						testCase.wantReason,
-					)
-				}
-
-				for _, figure := range testCase.wantFigures {
-					if !strings.Contains(message, figure) {
-						t.Fatalf("client message %q does not state the figure %q", message, figure)
-					}
-				}
-
-				for _, wrongFigure := range testCase.forbidFigures {
-					if strings.Contains(message, wrongFigure) {
-						t.Fatalf(
-							"client message %q states %q, which did not refuse the input",
-							message,
-							wrongFigure,
-						)
-					}
-				}
-
-				for _, leak := range []string{"OpenAI", "ONNX", "onnx", "bge-small", "endpoint"} {
-					if strings.Contains(message, leak) {
-						t.Fatalf(
-							"client message %q states %q, which identifies the provider",
-							message,
-							leak,
-						)
-					}
-				}
-			},
-		)
+			}
+		})
 	}
 }

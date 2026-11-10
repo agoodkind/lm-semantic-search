@@ -15,7 +15,6 @@ func (supervisor *modelDownloadSupervisor) run(ctx context.Context) {
 		if finished {
 			return
 		}
-
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
@@ -33,39 +32,22 @@ func (supervisor *modelDownloadSupervisor) attempt(ctx context.Context) (time.Du
 	case <-supervisor.wake:
 	default:
 	}
-
-	installed, err := onnx.PresetFilesInstalled(
-		ctx,
-		supervisor.cfg.ModelCacheRoot,
-		supervisor.preset,
-	)
+	installed, err := onnx.PresetFilesInstalled(ctx, supervisor.cfg.ModelCacheRoot, supervisor.preset)
 	if ctx.Err() != nil {
 		return 0, true
 	}
-
 	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"model_download.verify_failed",
-			"model",
-			supervisor.preset.Name,
-			"err",
-			err,
-		)
+		slog.ErrorContext(ctx, "model_download.verify_failed", "model", supervisor.preset.Name, "err", err)
 		supervisor.recordFailure(err)
-
 		return supervisor.dependencies.RetryInterval, false
 	}
-
 	if installed {
 		supervisor.recordComplete(ctx)
 		return 0, true
 	}
-
 	if !supervisor.decide(ctx) {
 		return supervisor.dependencies.RecheckInterval, false
 	}
-
 	err = onnx.InstallPresetFilesWithProgress(
 		ctx,
 		supervisor.dependencies.HTTPClient,
@@ -77,16 +59,12 @@ func (supervisor *modelDownloadSupervisor) attempt(ctx context.Context) (time.Du
 	if ctx.Err() != nil {
 		return 0, true
 	}
-
 	if err != nil {
 		slog.ErrorContext(ctx, "model_download.failed", "model", supervisor.preset.Name, "err", err)
 		supervisor.recordFailure(err)
-
 		return supervisor.dependencies.RetryInterval, false
 	}
-
 	supervisor.recordComplete(ctx)
-
 	return 0, true
 }
 
@@ -95,7 +73,6 @@ func (supervisor *modelDownloadSupervisor) attemptSleep() modeldownload.SleepFun
 	if backoff <= 0 {
 		return nil
 	}
-
 	return func(ctx context.Context, _ time.Duration) {
 		timer := time.NewTimer(backoff)
 		defer timer.Stop()

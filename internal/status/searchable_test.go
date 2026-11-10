@@ -27,15 +27,10 @@ func TestResolveSearchable(t *testing.T) {
 		{"not eligible and degraded", false, StoreUnavailable, false},
 	}
 	for _, testCase := range cases {
-		in := Inputs{
-			SearchableEligible: testCase.eligible,
-			Dependency:         testCase.dependency,
-			Search:             SearchNone,
-		}
+		in := Inputs{SearchableEligible: testCase.eligible, Dependency: testCase.dependency, Search: SearchNone}
 		if got := ResolveSearchable(in); got != testCase.want {
 			t.Fatalf("%s: ResolveSearchable = %v, want %v", testCase.name, got, testCase.want)
 		}
-
 		if got := Resolve(in).Searchable; got != testCase.want {
 			t.Fatalf("%s: Resolve().Searchable = %v, want %v", testCase.name, got, testCase.want)
 		}
@@ -48,22 +43,14 @@ func TestResolveSearchable(t *testing.T) {
 func TestResolveSearchableMaintenance(t *testing.T) {
 	t.Parallel()
 
-	in := Inputs{
-		Status:             model.CodebaseStatusIndexed,
-		SearchableEligible: true,
-		Dependency:         Healthy,
-		Collection:         CollectionReady,
-		Maintenance:        true,
-	}
+	in := Inputs{Status: model.CodebaseStatusIndexed, SearchableEligible: true, Dependency: Healthy, Collection: CollectionReady, Maintenance: true}
 	surface := Resolve(in)
 	if surface.Searchable {
 		t.Fatal("Searchable = true during maintenance, want false")
 	}
-
 	if surface.BannerPresent {
 		t.Fatal("maintenance raised the dependency banner")
 	}
-
 	if surface.Display != DisplayIndexed {
 		t.Fatalf("Display = %q during maintenance, want %q", surface.Display, DisplayIndexed)
 	}
@@ -93,7 +80,6 @@ func TestResolveSearchableCollection(t *testing.T) {
 		if got := ResolveSearchable(in); got != testCase.want {
 			t.Fatalf("%s: ResolveSearchable = %v, want %v", testCase.name, got, testCase.want)
 		}
-
 		// A per-path not-ready collection must not present the global store banner.
 		if surface := Resolve(in); surface.BannerPresent {
 			t.Fatalf("%s: per-path readiness must not raise the global banner", testCase.name)

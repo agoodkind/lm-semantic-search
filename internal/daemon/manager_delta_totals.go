@@ -29,81 +29,44 @@ import (
 // because it cannot tell an absent collection from a lost one. That is the same
 // false fault the checkpoint reads produced, on the collection's axis, so the
 // working set decides here the way the run record decides there.
-func (manager *Manager) codebaseTotals(
-	ctx context.Context,
-	canonicalPath string,
-	working map[string]string,
-	fallbackChunks int32,
-) (int32, int32) {
+func (manager *Manager) codebaseTotals(ctx context.Context, canonicalPath string, working map[string]string, fallbackChunks int32) (int32, int32) {
 	fileCount := safeInt32(len(working))
 	if manager.semantic == nil || !manager.semantic.Available() {
 		return fileCount, fallbackChunks
 	}
-
 	if fileCount == 0 {
-		slog.DebugContext(
-			ctx,
-			"no live collection to count for a run that committed no file",
-			"path",
-			canonicalPath,
-		)
-
+		slog.DebugContext(ctx, "no live collection to count for a run that committed no file", "path", canonicalPath)
 		return fileCount, fallbackChunks
 	}
-
 	count, err := manager.semantic.Count(ctx, canonicalPath)
 	if err != nil {
 		if !errors.Is(err, semantic.ErrUnavailable) {
-			slog.WarnContext(
-				ctx,
-				"semantic count failed; using fallback chunk total",
-				"path",
-				canonicalPath,
-				"err",
-				err,
-			)
+			slog.WarnContext(ctx, "semantic count failed; using fallback chunk total", "path", canonicalPath, "err", err)
 		}
-
 		return fileCount, fallbackChunks
 	}
-
 	return fileCount, count
 }
 
-func (manager *Manager) normalizeDeltaTotalBytes(
-	ctx context.Context,
-	codebase model.Codebase,
-	state deltaState,
-	result indexer.Result,
-) (indexer.Result, error) {
+func (manager *Manager) normalizeDeltaTotalBytes(ctx context.Context, codebase model.Codebase, state deltaState, result indexer.Result) (indexer.Result, error) {
 	if state.source.tracksByteTotals() {
 		normalizedChunks, ok, err := manager.deltaChunkCache(ctx, codebase, state, result.Chunks)
 		if err != nil {
 			return result, err
 		}
-
 		if ok {
 			result.Chunks = normalizedChunks
 			result.TotalBytes = storedChunkBytes(normalizedChunks)
-
 			return result, nil
 		}
 	}
-
-	if codebase.LastSuccessfulRun != nil &&
-		result.TotalBytes < codebase.LastSuccessfulRun.TotalBytes {
+	if codebase.LastSuccessfulRun != nil && result.TotalBytes < codebase.LastSuccessfulRun.TotalBytes {
 		result.TotalBytes = codebase.LastSuccessfulRun.TotalBytes
 	}
-
 	return result, nil
 }
 
-func (manager *Manager) deltaChunkCache(
-	ctx context.Context,
-	codebase model.Codebase,
-	state deltaState,
-	changedChunks []model.StoredChunk,
-) ([]model.StoredChunk, bool, error) {
+func (manager *Manager) deltaChunkCache(ctx context.Context, codebase model.Codebase, state deltaState, changedChunks []model.StoredChunk) ([]model.StoredChunk, bool, error) {
 	existingChunks, err := store.ReadChunks(manager.chunkPath(codebase.ID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -115,23 +78,11 @@ func (manager *Manager) deltaChunkCache(
 			// whole-codebase total.
 			return nil, false, nil
 		}
-
-		slog.ErrorContext(
-			ctx,
-			"read chunk cache for delta byte total failed",
-			"codebase_id",
-			codebase.ID,
-			"path",
-			codebase.CanonicalPath,
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "read chunk cache for delta byte total failed", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)
 		return nil, false, fmt.Errorf("read chunk cache for delta byte total: %w", err)
 	}
 
 	replacedPaths := replacedDeltaPaths(state, changedChunks)
-
 	normalizedChunks := make([]model.StoredChunk, 0, len(existingChunks)+len(changedChunks))
 	for _, chunk := range existingChunks {
 		if destination, renamed := state.renamedPaths[chunk.RelativePath]; renamed {
@@ -139,16 +90,12 @@ func (manager *Manager) deltaChunkCache(
 			normalizedChunks = append(normalizedChunks, chunk)
 			continue
 		}
-
 		if _, replaced := replacedPaths[chunk.RelativePath]; replaced {
 			continue
 		}
-
 		normalizedChunks = append(normalizedChunks, chunk)
 	}
-
 	normalizedChunks = append(normalizedChunks, changedChunks...)
-
 	return normalizedChunks, true, nil
 }
 
@@ -156,29 +103,22 @@ func maxInt(a int, b int) int {
 	if a > b {
 		return a
 	}
-
 	return b
 }
 
 func replacedDeltaPaths(state deltaState, changedChunks []model.StoredChunk) map[string]struct{} {
-	replacedPaths := make(
-		map[string]struct{},
-		len(state.plan.diff.Added)+len(state.plan.diff.Modified)+len(state.plan.diff.Removed),
-	)
+	replacedPaths := make(map[string]struct{}, len(state.plan.diff.Added)+len(state.plan.diff.Modified)+len(state.plan.diff.Removed))
 	for _, relativePath := range state.plan.diff.Removed {
 		replacedPaths[relativePath] = struct{}{}
 	}
-
 	for _, chunk := range changedChunks {
 		replacedPaths[chunk.RelativePath] = struct{}{}
 	}
-
 	for _, relativePath := range state.plan.diff.Added {
 		if _, present := state.working[relativePath]; !present {
 			replacedPaths[relativePath] = struct{}{}
 		}
 	}
-
 	for _, relativePath := range state.plan.diff.Modified {
 		seedHash, seeded := state.plan.seedSnapshot.Files[relativePath]
 		workingHash, present := state.working[relativePath]
@@ -186,11 +126,9 @@ func replacedDeltaPaths(state deltaState, changedChunks []model.StoredChunk) map
 			replacedPaths[relativePath] = struct{}{}
 			continue
 		}
-
 		if seeded && workingHash != seedHash {
 			replacedPaths[relativePath] = struct{}{}
 		}
 	}
-
 	return replacedPaths
 }

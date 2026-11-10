@@ -43,33 +43,18 @@ func contentVectorKey(content string) string {
 // it. A missing collection is skipped. The caller must restrict collectionNames
 // to indexes built with the current embedding model, so a reused vector is
 // valid for the parent's model.
-func (service *Service) LoadReuseVectors(
-	ctx context.Context,
-	collectionNames []string,
-) (map[string]model.ReuseVector, error) {
+func (service *Service) LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string]model.ReuseVector, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	reuse := make(map[string]model.ReuseVector)
 	if !service.Available() || len(collectionNames) == 0 {
 		return reuse, nil
 	}
-
 	for _, collectionName := range collectionNames {
 		if err := service.loadReuseVectorsFromCollection(ctx, collectionName, reuse); err != nil {
 			return nil, err
 		}
 	}
-
-	slog.InfoContext(
-		ctx,
-		"semantic.reuse_vectors_loaded",
-		"collections",
-		len(collectionNames),
-		"chunks",
-		len(reuse),
-		"peer",
-		peerInfo.String(),
-	)
-
+	slog.InfoContext(ctx, "semantic.reuse_vectors_loaded", "collections", len(collectionNames), "chunks", len(reuse), "peer", peerInfo.String())
 	return reuse, nil
 }
 
@@ -78,54 +63,28 @@ func (service *Service) LoadReuseVectors(
 // them. Code delta syncs load a changed file's current rows before the exact
 // path delete runs, so unchanged chunks inside the same file skip embedding
 // without reading prefix neighbors such as foo.go.backup.
-func (service *Service) LoadReuseVectorsForPath(
-	ctx context.Context,
-	collectionName string,
-	relativePath string,
-) (map[string]model.ReuseVector, error) {
+func (service *Service) LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string]model.ReuseVector, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	reuse := make(map[string]model.ReuseVector)
 	if !service.Available() || collectionName == "" || relativePath == "" {
 		return reuse, nil
 	}
-
-	if err := service.loadReuseVectorsFiltered(
-		ctx,
-		collectionName,
-		relativePathExpression(relativePath),
-		reuse,
-	); err != nil {
+	if err := service.loadReuseVectorsFiltered(ctx, collectionName, relativePathExpression(relativePath), reuse); err != nil {
 		return nil, err
 	}
-
 	slog.DebugContext(
-		ctx,
-		"semantic.reuse_vectors_loaded_for_path",
-		"collection",
-		collectionName,
-		"path",
-		relativePath,
-		"chunks",
-		len(reuse),
-		"peer",
-		peerInfo.String(),
+		ctx, "semantic.reuse_vectors_loaded_for_path",
+		"collection", collectionName,
+		"path", relativePath,
+		"chunks", len(reuse),
+		"peer", peerInfo.String(),
 	)
-
 	return reuse, nil
 }
 
 // loadReuseVectorsFromCollection streams one whole source collection into reuse.
-func (service *Service) loadReuseVectorsFromCollection(
-	ctx context.Context,
-	collectionName string,
-	reuse map[string]model.ReuseVector,
-) error {
-	return service.loadReuseVectorsFiltered(
-		ctx,
-		collectionName,
-		relativePathFieldName+` != ""`,
-		reuse,
-	)
+func (service *Service) loadReuseVectorsFromCollection(ctx context.Context, collectionName string, reuse map[string]model.ReuseVector) error {
+	return service.loadReuseVectorsFiltered(ctx, collectionName, relativePathFieldName+` != ""`, reuse)
 }
 
 // relativePathExpression renders a Milvus filter matching exactly one
@@ -145,134 +104,73 @@ func relativePathExpression(relativePath string) string {
 // from the embed and insert phases. semantic.reuse_vectors_read carries the row
 // count under the same span id, so a reader divides rows by duration_ms without
 // measuring the store by hand.
-func (service *Service) loadReuseVectorsFiltered(
-	ctx context.Context,
-	collectionName string,
-	filterExpression string,
-	reuse map[string]model.ReuseVector,
-) (err error) {
+func (service *Service) loadReuseVectorsFiltered(ctx context.Context, collectionName string, filterExpression string, reuse map[string]model.ReuseVector) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.loadReuseVectors")
 	defer done(&err)
 
 	rowsRead := 0
 	defer func() {
-		slog.InfoContext(
-			ctx,
-			"semantic.reuse_vectors_read",
-			"collection",
-			collectionName,
-			"rows",
-			rowsRead,
-			"keys",
-			len(reuse),
-		)
+		slog.InfoContext(ctx, "semantic.reuse_vectors_read", "collection", collectionName, "rows", rowsRead, "keys", len(reuse))
 	}()
 
-	hasCollection, err := service.hasCollection(
-		ctx,
-		collectionName,
-		"check Milvus collection "+collectionName,
-	)
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
 		return err
 	}
-
 	if !hasCollection {
 		return nil
 	}
-
 	if err := service.ensureReuseIdentityColumnsOnce(ctx, collectionName); err != nil {
 		return err
 	}
-
 	lease, err := service.AcquireCollection(ctx, collectionName)
 	if err != nil {
 		return err
 	}
 	defer lease.Release()
 
-	iterator, err := service.milvus.QueryIterator(
-		ctx,
-		milvusclient.NewQueryIteratorOption(collectionName).WithBatchSize(reuseVectorBatchSize).
-			WithFilter(
-				filterExpression,
-			).
-			WithOutputFields(
-				contentFieldName,
-				embeddingModelFieldName,
-				denseVectorFieldName,
-			),
-	)
+	iterator, err := service.milvus.QueryIterator(ctx, milvusclient.NewQueryIteratorOption(collectionName).
+		WithBatchSize(reuseVectorBatchSize).
+		WithFilter(filterExpression).
+		WithOutputFields(contentFieldName, embeddingModelFieldName, denseVectorFieldName))
 	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"open reuse query iterator failed",
-			"collection",
-			collectionName,
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "open reuse query iterator failed", "collection", collectionName, "err", err)
 		return fmt.Errorf("open query iterator for %s: %w", collectionName, err)
 	}
 
-	return readReuseVectors(ctx, collectionName, iterator, reuse, &rowsRead)
-}
-
-func readReuseVectors(
-	ctx context.Context,
-	collectionName string,
-	iterator milvusclient.QueryIterator,
-	reuse map[string]model.ReuseVector,
-	rowsRead *int,
-) error {
 	for {
 		resultSet, nextErr := iterator.Next(ctx)
 		if errors.Is(nextErr, io.EOF) {
 			return nil
 		}
-
 		if nextErr != nil {
-			slog.ErrorContext(
-				ctx,
-				"reuse query iterator next failed",
-				"collection",
-				collectionName,
-				"err",
-				nextErr,
-			)
-
+			slog.ErrorContext(ctx, "reuse query iterator next failed", "collection", collectionName, "err", nextErr)
 			return fmt.Errorf("iterate %s: %w", collectionName, nextErr)
 		}
-
 		contentColumn := resultSet.GetColumn(contentFieldName)
 		vectorColumn := resultSet.GetColumn(denseVectorFieldName)
 		if contentColumn == nil || vectorColumn == nil {
 			return ErrSearchResultIncomplete
 		}
-
 		embeddingModelColumn := resultSet.GetColumn(embeddingModelFieldName)
 		for rowIndex := range resultSet.ResultCount {
 			contentValue, contentErr := contentColumn.GetAsString(rowIndex)
 			if contentErr != nil {
 				return fmt.Errorf("read content column at %d: %w", rowIndex, contentErr)
 			}
-
 			vector, vectorErr := milvusstore.VectorAt(vectorColumn, rowIndex)
 			if vectorErr != nil {
 				return fmt.Errorf("read vector column at %d: %w", rowIndex, vectorErr)
 			}
-
 			embeddingModel, modelErr := nullableStringAt(embeddingModelColumn, rowIndex)
 			if modelErr != nil {
 				return fmt.Errorf("read embedding model of reuse row %d: %w", rowIndex, modelErr)
 			}
-
 			reuse[contentVectorKey(contentValue)] = model.ReuseVector{
 				Vector:           vector,
 				SourceModelKnown: embeddingModel != "",
 			}
-			*rowsRead += 1
+			rowsRead++
 		}
 	}
 }

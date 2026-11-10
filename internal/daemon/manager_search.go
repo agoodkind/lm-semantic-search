@@ -14,13 +14,7 @@ import (
 )
 
 // SearchCode performs a semantic search over indexed chunk content.
-func (manager *Manager) SearchCode(
-	ctx context.Context,
-	requestedPath string,
-	query string,
-	limit int32,
-	extensionFilter []string,
-) (SearchOutcome, error) {
+func (manager *Manager) SearchCode(ctx context.Context, requestedPath string, query string, limit int32, extensionFilter []string) (SearchOutcome, error) {
 	normalizedExtensions, preconditionErr := manager.searchPreconditions(extensionFilter)
 	if preconditionErr != nil {
 		return SearchOutcome{}, preconditionErr
@@ -30,23 +24,8 @@ func (manager *Manager) SearchCode(
 	if err != nil {
 		return SearchOutcome{}, err
 	}
-
 	if !found {
-		notIndexedErr := fmt.Errorf(
-			"search codebase %s: %w",
-			requestedPath,
-			adapterr.NewNotIndexed(requestedPath, nil),
-		)
-		slog.WarnContext(
-			ctx,
-			"search requires an indexed codebase",
-			"path",
-			requestedPath,
-			"err",
-			notIndexedErr,
-		)
-
-		return SearchOutcome{}, notIndexedErr
+		return SearchOutcome{}, fmt.Errorf("search codebase %s: %w", requestedPath, adapterr.NewNotIndexed(requestedPath, nil))
 	}
 
 	// A worktree the daemon just discovered on this read has no collection yet,
@@ -58,7 +37,6 @@ func (manager *Manager) SearchCode(
 		if !manager.waitsForSourceFirstBuild(codebase.CanonicalPath) {
 			stateNote = discoveredSearchNote(manager.selectWorktreeReuseSource(codebase))
 		}
-
 		return SearchOutcome{
 			Codebase:  codebase,
 			ActiveJob: activeJob,
@@ -66,7 +44,6 @@ func (manager *Manager) SearchCode(
 			StateNote: stateNote,
 		}, nil
 	}
-
 	stateNote := ""
 	if codebase.Status == model.CodebaseStatusQuarantined {
 		stateNote = quarantinedSearchNote(codebase.Quarantine)
@@ -77,108 +54,24 @@ func (manager *Manager) SearchCode(
 	// not the whole parent index.
 	relativePathPrefix := subtreePrefix(requestedPath, codebase.CanonicalPath)
 
-	return manager.searchIndexedCodebase(
-		ctx,
-		codebase,
-		activeJob,
-		query,
-		limit,
-		normalizedExtensions,
-		relativePathPrefix,
-		stateNote,
-	)
-}
-
-// searchPreconditions checks what a search needs before it resolves a path:
-// a usable extension filter, and a daemon that is not in maintenance mode. The
-// maintenance refusal comes before any store call, so a search during a store
-// restore neither probes nor loads a collection.
-func (manager *Manager) searchPreconditions(
-	extensionFilter []string,
-) ([]string, *adapterr.AdapterError) {
-	normalizedExtensions, err := semantic.ValidateExtensionFilter(extensionFilter)
-	if err != nil {
-		return nil, adapterr.NewInvalidPath(err.Error(), err)
-	}
-
-	if refusal := manager.maintenanceRefusal(); refusal != nil {
-		return nil, refusal
-	}
-
-	return normalizedExtensions, nil
-}
-
-func discoveredSearchNote(selection worktreeReuseSelection) string {
-	note := "This worktree was just discovered and is not indexed yet; its build is starting now"
-	switch {
-	case selection.unavailable != view.WorktreeReuseAvailable:
-		note += fmt.Sprintf(" (source reuse unavailable because of %s)", selection.unavailable)
-	case selection.sourcePath != "":
-		note += fmt.Sprintf(" (reusing embeddings from %s)", selection.sourcePath)
-	}
-
-	return note + ". Search again shortly."
-}
-
-const heldForSourceSearchNote = "The build for the discovered, unindexed worktree starts after the recorded source finishes its first index. The next search should run after the worktree build finishes."
-
-func quarantinedSearchNote(quarantine *model.QuarantineState) string {
-	if quarantine == nil {
-		return "Search is serving the last known-good index while destructive sync is paused after a suspicious large disappearance."
-	}
-
-	return fmt.Sprintf(
-		"Search is serving the last known-good index while destructive sync is paused after a suspicious large disappearance (%d of %d tracked files in the last %s observation).",
-		quarantine.LastMissingCount,
-		quarantine.LastTotalCount,
-		defaultQuarantineTrigger(quarantine.LastTrigger),
-	)
-}
-
-func (manager *Manager) searchIndexedCodebase(
-	ctx context.Context,
-	codebase model.Codebase,
-	activeJob *model.Job,
-	query string,
-	limit int32,
-	normalizedExtensions []string,
-	relativePathPrefix string,
-	stateNote string,
-) (SearchOutcome, error) {
 	if manager.semantic == nil || !manager.semantic.Available() {
 		storeErr := adapterr.NewMilvusUnavailable(semantic.ErrUnavailable)
 		manager.noteDependencyFailure(storeErr)
-		slog.ErrorContext(
-			ctx,
-			"semantic search unavailable",
-			"codebase_path",
-			codebase.CanonicalPath,
-			"err",
-			storeErr,
-		)
-
-		return SearchOutcome{}, fmt.Errorf(
-			"search codebase %s: %w",
-			codebase.CanonicalPath,
-			storeErr,
-		)
+		slog.ErrorContext(ctx, "semantic search unavailable", "codebase_path", codebase.CanonicalPath, "err", storeErr)
+		return SearchOutcome{}, fmt.Errorf("search codebase %s: %w", codebase.CanonicalPath, storeErr)
 	}
-
 	collectionName := manager.semantic.CollectionName(codebase.CanonicalPath)
 	if prepareErr := manager.semantic.PrepareCollection(ctx, collectionName); prepareErr != nil {
 		manager.noteDependencyFailure(prepareErr)
-
 		return SearchOutcome{}, fmt.Errorf(
 			"prepare search collection %s: %w",
 			collectionName,
 			prepareErr,
 		)
 	}
-
 	lease, leaseErr := manager.semantic.AcquireCollection(ctx, collectionName)
 	if leaseErr != nil {
 		manager.noteDependencyFailure(leaseErr)
-
 		return SearchOutcome{}, fmt.Errorf(
 			"acquire search collection %s: %w",
 			collectionName,
@@ -187,35 +80,7 @@ func (manager *Manager) searchIndexedCodebase(
 	}
 	defer lease.Release()
 
-	chunks, semanticErr := manager.semantic.Search(
-		ctx,
-		codebase.CanonicalPath,
-		query,
-		limit,
-		normalizedExtensions,
-		relativePathPrefix,
-	)
-
-	return manager.classifySearchOutcome(
-		ctx,
-		codebase,
-		activeJob,
-		collectionName,
-		chunks,
-		semanticErr,
-		stateNote,
-	)
-}
-
-func (manager *Manager) classifySearchOutcome(
-	ctx context.Context,
-	codebase model.Codebase,
-	activeJob *model.Job,
-	collectionName string,
-	chunks []model.StoredChunk,
-	semanticErr error,
-	stateNote string,
-) (SearchOutcome, error) {
+	chunks, semanticErr := manager.semantic.Search(ctx, codebase.CanonicalPath, query, limit, normalizedExtensions, relativePathPrefix)
 	switch {
 	case semanticErr == nil:
 		// A search that returns no error exercised both shared dependencies, which
@@ -228,7 +93,6 @@ func (manager *Manager) classifySearchOutcome(
 		// pipeline. This mirrors the indexing rule that only a real embed clears
 		// the banner.
 		manager.noteDependencyHealthy()
-
 		return SearchOutcome{
 			Codebase:  codebase,
 			ActiveJob: activeJob,
@@ -238,12 +102,7 @@ func (manager *Manager) classifySearchOutcome(
 	case (errors.Is(semanticErr, semantic.ErrCollectionNotReady) ||
 		errors.Is(semanticErr, semantic.ErrSearchResultIncomplete)) &&
 		codebase.Status == model.CodebaseStatusIndexing:
-		return SearchOutcome{
-			Codebase:  codebase,
-			ActiveJob: activeJob,
-			Results:   []model.StoredChunk{},
-			StateNote: stateNote,
-		}, nil
+		return SearchOutcome{Codebase: codebase, ActiveJob: activeJob, Results: []model.StoredChunk{}, StateNote: stateNote}, nil
 	case errors.Is(semanticErr, semantic.ErrCollectionMissing):
 		switch decideSearchCollectionMode(codebase, activeJob, collectionPresenceMissing) {
 		case searchCollectionModeAutomaticRepair:
@@ -254,59 +113,63 @@ func (manager *Manager) classifySearchOutcome(
 				StateNote: status.StateNoteFor(status.SearchRepairing),
 			}, nil
 		case searchCollectionModeMissing:
-			return SearchOutcome{}, fmt.Errorf(
-				"search missing collection for %s: %w",
-				codebase.CanonicalPath,
-				adapterr.NewIndexDataLost(codebase.CanonicalPath, semanticErr),
-			)
+			return SearchOutcome{}, fmt.Errorf("search missing collection for %s: %w", codebase.CanonicalPath, adapterr.NewIndexDataLost(codebase.CanonicalPath, semanticErr))
 		case searchCollectionModeProceed:
-			return SearchOutcome{}, fmt.Errorf(
-				"search unavailable collection for %s: %w",
-				codebase.CanonicalPath,
-				adapterr.NewIndexDataLost(codebase.CanonicalPath, semanticErr),
-			)
+			return SearchOutcome{}, fmt.Errorf("search unavailable collection for %s: %w", codebase.CanonicalPath, adapterr.NewIndexDataLost(codebase.CanonicalPath, semanticErr))
 		default:
-			return SearchOutcome{}, fmt.Errorf(
-				"select search collection for %s: %w",
-				codebase.CanonicalPath,
-				adapterr.NewIndexDataLost(codebase.CanonicalPath, semanticErr),
-			)
+			return SearchOutcome{}, fmt.Errorf("select search collection for %s: %w", codebase.CanonicalPath, adapterr.NewIndexDataLost(codebase.CanonicalPath, semanticErr))
 		}
 	case errors.Is(semanticErr, semantic.ErrUnavailable):
 		storeErr := adapterr.NewMilvusUnavailable(semanticErr)
 		manager.noteDependencyFailure(storeErr)
-		slog.ErrorContext(
-			ctx,
-			"semantic search unavailable",
-			"codebase_path",
-			codebase.CanonicalPath,
-			"err",
-			storeErr,
-		)
-
-		return SearchOutcome{}, fmt.Errorf(
-			"query search collection %s: %w",
-			collectionName,
-			storeErr,
-		)
+		slog.ErrorContext(ctx, "semantic search unavailable", "codebase_path", codebase.CanonicalPath, "err", storeErr)
+		return SearchOutcome{}, fmt.Errorf("query search collection %s: %w", collectionName, storeErr)
 	default:
 		// Record a shared-infrastructure outage from the search path too, not
 		// only from index jobs, so a failed search trips the same banner. The
 		// recorder no-ops for any error that is not a real outage.
 		manager.noteDependencyFailure(semanticErr)
-		slog.ErrorContext(
-			ctx,
-			"semantic search failed",
-			"codebase_path",
-			codebase.CanonicalPath,
-			"err",
-			semanticErr,
-		)
-
-		return SearchOutcome{}, fmt.Errorf(
-			"semantic search for %s: %w",
-			codebase.CanonicalPath,
-			semanticErr,
-		)
+		slog.ErrorContext(ctx, "semantic search failed", "codebase_path", codebase.CanonicalPath, "err", semanticErr)
+		return SearchOutcome{}, fmt.Errorf("semantic search for %s: %w", codebase.CanonicalPath, semanticErr)
 	}
+}
+
+// searchPreconditions checks what a search needs before it resolves a path:
+// a usable extension filter, and a daemon that is not in maintenance mode. The
+// maintenance refusal comes before any store call, so a search during a store
+// restore neither probes nor loads a collection.
+func (manager *Manager) searchPreconditions(extensionFilter []string) ([]string, *adapterr.AdapterError) {
+	normalizedExtensions, err := semantic.ValidateExtensionFilter(extensionFilter)
+	if err != nil {
+		return nil, adapterr.NewInvalidPath(err.Error(), err)
+	}
+	if refusal := manager.maintenanceRefusal(); refusal != nil {
+		return nil, refusal
+	}
+	return normalizedExtensions, nil
+}
+
+func discoveredSearchNote(selection worktreeReuseSelection) string {
+	note := "This worktree was just discovered and is not indexed yet; its build is starting now"
+	switch {
+	case selection.unavailable != view.WorktreeReuseAvailable:
+		note += fmt.Sprintf(" (source reuse unavailable because of %s)", selection.unavailable)
+	case selection.sourcePath != "":
+		note += fmt.Sprintf(" (reusing embeddings from %s)", selection.sourcePath)
+	}
+	return note + ". Search again shortly."
+}
+
+const heldForSourceSearchNote = "The build for the discovered, unindexed worktree starts after the recorded source finishes its first index. The next search should run after the worktree build finishes."
+
+func quarantinedSearchNote(quarantine *model.QuarantineState) string {
+	if quarantine == nil {
+		return "Search is serving the last known-good index while destructive sync is paused after a suspicious large disappearance."
+	}
+	return fmt.Sprintf(
+		"Search is serving the last known-good index while destructive sync is paused after a suspicious large disappearance (%d of %d tracked files in the last %s observation).",
+		quarantine.LastMissingCount,
+		quarantine.LastTotalCount,
+		defaultQuarantineTrigger(quarantine.LastTrigger),
+	)
 }

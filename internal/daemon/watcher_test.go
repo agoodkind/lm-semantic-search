@@ -53,42 +53,27 @@ func TestWatcherDispatchHonorsResolverRules(t *testing.T) {
 
 	var observedMu sync.Mutex
 	observed := map[string][]string{}
-	queue := NewEventQueue(
-		time.Millisecond,
-		func(codebaseID string, relativePaths []string) {
-			observedMu.Lock()
-			observed[codebaseID] = append(observed[codebaseID], relativePaths...)
-			observedMu.Unlock()
-		},
-	)
+	queue := NewEventQueue(time.Millisecond, func(codebaseID string, relativePaths []string) {
+		observedMu.Lock()
+		observed[codebaseID] = append(observed[codebaseID], relativePaths...)
+		observedMu.Unlock()
+	})
 	watcher := NewWatcher(manager, queue)
 
 	root := t.TempDir()
-	if err := os.WriteFile(
-		filepath.Join(root, ".gitignore"),
-		[]byte("secret/\n"),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("secret/\n"), 0o644); err != nil {
 		t.Fatalf("write .gitignore: %v", err)
 	}
-
 	if err := os.MkdirAll(filepath.Join(root, "secret"), 0o755); err != nil {
 		t.Fatalf("mkdir secret: %v", err)
 	}
-
 	if err := os.WriteFile(filepath.Join(root, "secret", "x.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write secret file: %v", err)
 	}
-
 	if err := os.MkdirAll(filepath.Join(root, "keep"), 0o755); err != nil {
 		t.Fatalf("mkdir keep: %v", err)
 	}
-
-	if err := os.WriteFile(
-		filepath.Join(root, "keep", "y.go"),
-		[]byte("package keep\n"),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "keep", "y.go"), []byte("package keep\n"), 0o644); err != nil {
 		t.Fatalf("write keep file: %v", err)
 	}
 
@@ -101,14 +86,8 @@ func TestWatcherDispatchHonorsResolverRules(t *testing.T) {
 	manager.mu.Unlock()
 	watcher.AddCodebase(context.Background(), codebase)
 
-	watcher.dispatch(
-		context.Background(),
-		stubNotifyEvent{path: filepath.Join(root, "secret", "x.txt")},
-	)
-	watcher.dispatch(
-		context.Background(),
-		stubNotifyEvent{path: filepath.Join(root, "keep", "y.go")},
-	)
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(root, "secret", "x.txt")})
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(root, "keep", "y.go")})
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -118,7 +97,6 @@ func TestWatcherDispatchHonorsResolverRules(t *testing.T) {
 		if keepObserved {
 			break
 		}
-
 		time.Sleep(10 * time.Millisecond)
 	}
 
@@ -126,17 +104,14 @@ func TestWatcherDispatchHonorsResolverRules(t *testing.T) {
 	defer observedMu.Unlock()
 	paths := observed[codebase.ID]
 	foundKeep := false
-
 	for _, enqueued := range paths {
 		if enqueued == "secret/x.txt" {
 			t.Fatalf("dispatch enqueued an ignored path: %v", paths)
 		}
-
 		if enqueued == "keep/y.go" {
 			foundKeep = true
 		}
 	}
-
 	if !foundKeep {
 		t.Fatalf("dispatch did not enqueue keep/y.go: %v", paths)
 	}
@@ -147,76 +122,41 @@ func TestWatcherDispatchSkipsDefaultSubmodule(t *testing.T) {
 
 	var observedMu sync.Mutex
 	observed := map[string][]string{}
-	queue := NewEventQueue(
-		time.Millisecond,
-		func(codebaseID string, relativePaths []string) {
-			observedMu.Lock()
-			observed[codebaseID] = append(observed[codebaseID], relativePaths...)
-			observedMu.Unlock()
-		},
-	)
+	queue := NewEventQueue(time.Millisecond, func(codebaseID string, relativePaths []string) {
+		observedMu.Lock()
+		observed[codebaseID] = append(observed[codebaseID], relativePaths...)
+		observedMu.Unlock()
+	})
 	watcher := NewWatcher(manager, queue)
 
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
 		t.Fatalf("mkdir .git: %v", err)
 	}
-
-	if err := os.WriteFile(
-		filepath.Join(root, ".git", "HEAD"),
-		[]byte("ref: refs/heads/main\n"),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
 		t.Fatalf("write HEAD: %v", err)
 	}
-
-	if err := os.WriteFile(
-		filepath.Join(root, ".gitmodules"),
-		[]byte("[submodule \"lib\"]\n\tpath = extern/lib\n\turl = ../lib.git\n"),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ".gitmodules"), []byte("[submodule \"lib\"]\n\tpath = extern/lib\n\turl = ../lib.git\n"), 0o644); err != nil {
 		t.Fatalf("write .gitmodules: %v", err)
 	}
-
 	moduleGitDir := filepath.Join(root, ".git", "modules", "extern", "lib")
 	if err := os.MkdirAll(moduleGitDir, 0o755); err != nil {
 		t.Fatalf("mkdir module git dir: %v", err)
 	}
-
-	if err := os.WriteFile(
-		filepath.Join(moduleGitDir, "HEAD"),
-		[]byte("ref: refs/heads/main\n"),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(moduleGitDir, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
 		t.Fatalf("write module HEAD: %v", err)
 	}
-
 	submoduleDir := filepath.Join(root, "extern", "lib")
 	if err := os.MkdirAll(submoduleDir, 0o755); err != nil {
 		t.Fatalf("mkdir submodule: %v", err)
 	}
-
-	if err := os.WriteFile(
-		filepath.Join(submoduleDir, ".git"),
-		[]byte("gitdir: "+moduleGitDir+"\n"),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(submoduleDir, ".git"), []byte("gitdir: "+moduleGitDir+"\n"), 0o644); err != nil {
 		t.Fatalf("write submodule .git: %v", err)
 	}
-
-	if err := os.WriteFile(
-		filepath.Join(submoduleDir, "lib.go"),
-		[]byte("package lib\n"),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(submoduleDir, "lib.go"), []byte("package lib\n"), 0o644); err != nil {
 		t.Fatalf("write submodule file: %v", err)
 	}
-
-	if err := os.WriteFile(
-		filepath.Join(root, "main.go"),
-		[]byte("package main\n"),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatalf("write main file: %v", err)
 	}
 
@@ -229,10 +169,7 @@ func TestWatcherDispatchSkipsDefaultSubmodule(t *testing.T) {
 	manager.mu.Unlock()
 	watcher.AddCodebase(context.Background(), codebase)
 
-	watcher.dispatch(
-		context.Background(),
-		stubNotifyEvent{path: filepath.Join(submoduleDir, "lib.go")},
-	)
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(submoduleDir, "lib.go")})
 	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(root, "main.go")})
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -243,7 +180,6 @@ func TestWatcherDispatchSkipsDefaultSubmodule(t *testing.T) {
 		if mainObserved {
 			break
 		}
-
 		time.Sleep(10 * time.Millisecond)
 	}
 
@@ -251,17 +187,14 @@ func TestWatcherDispatchSkipsDefaultSubmodule(t *testing.T) {
 	defer observedMu.Unlock()
 	paths := observed[codebase.ID]
 	foundMain := false
-
 	for _, enqueued := range paths {
 		if enqueued == "extern/lib/lib.go" {
 			t.Fatalf("dispatch enqueued a default-excluded submodule path: %v", paths)
 		}
-
 		if enqueued == "main.go" {
 			foundMain = true
 		}
 	}
-
 	if !foundMain {
 		t.Fatalf("dispatch did not enqueue main.go: %v", paths)
 	}
@@ -276,14 +209,11 @@ func TestWatcherDispatchFiltersDeletedGitPath(t *testing.T) {
 
 	var observedMu sync.Mutex
 	observed := map[string][]string{}
-	queue := NewEventQueue(
-		time.Millisecond,
-		func(codebaseID string, relativePaths []string) {
-			observedMu.Lock()
-			observed[codebaseID] = append(observed[codebaseID], relativePaths...)
-			observedMu.Unlock()
-		},
-	)
+	queue := NewEventQueue(time.Millisecond, func(codebaseID string, relativePaths []string) {
+		observedMu.Lock()
+		observed[codebaseID] = append(observed[codebaseID], relativePaths...)
+		observedMu.Unlock()
+	})
 	watcher := NewWatcher(manager, queue)
 
 	root := t.TempDir()
@@ -297,14 +227,8 @@ func TestWatcherDispatchFiltersDeletedGitPath(t *testing.T) {
 	watcher.AddCodebase(context.Background(), codebase)
 
 	// Neither path exists on disk, so os.Lstat fails as it would for a delete.
-	watcher.dispatch(
-		context.Background(),
-		stubNotifyEvent{path: filepath.Join(root, ".git", "index")},
-	)
-	watcher.dispatch(
-		context.Background(),
-		stubNotifyEvent{path: filepath.Join(root, "pkg", "gone.go")},
-	)
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(root, ".git", "index")})
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(root, "pkg", "gone.go")})
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -314,7 +238,6 @@ func TestWatcherDispatchFiltersDeletedGitPath(t *testing.T) {
 		if seen {
 			break
 		}
-
 		time.Sleep(10 * time.Millisecond)
 	}
 
@@ -322,22 +245,16 @@ func TestWatcherDispatchFiltersDeletedGitPath(t *testing.T) {
 	defer observedMu.Unlock()
 	paths := observed[codebase.ID]
 	foundGone := false
-
 	for _, enqueued := range paths {
 		if enqueued == ".git/index" {
 			t.Fatalf("dispatch enqueued a deleted .git path: %v", paths)
 		}
-
 		if enqueued == "pkg/gone.go" {
 			foundGone = true
 		}
 	}
-
 	if !foundGone {
-		t.Fatalf(
-			"dispatch dropped a deleted real file that should enqueue for retained-path converge: %v",
-			paths,
-		)
+		t.Fatalf("dispatch dropped a deleted real file that should enqueue for retained-path converge: %v", paths)
 	}
 }
 
@@ -358,7 +275,6 @@ func TestWatcherRemoveCodebaseDropsRoot(t *testing.T) {
 	if got := watcher.activeRootCount(); got != 0 {
 		t.Fatalf("activeRootCount=%d, want 0 after remove", got)
 	}
-
 	watcher.RemoveCodebase(context.Background(), codebase.ID)
 }
 
@@ -371,14 +287,11 @@ func TestWatcherDispatchBroadcastsToAllCovering(t *testing.T) {
 
 	var observedMu sync.Mutex
 	observed := map[string][]string{}
-	queue := NewEventQueue(
-		5*time.Millisecond,
-		func(codebaseID string, relativePaths []string) {
-			observedMu.Lock()
-			observed[codebaseID] = append(observed[codebaseID], relativePaths...)
-			observedMu.Unlock()
-		},
-	)
+	queue := NewEventQueue(5*time.Millisecond, func(codebaseID string, relativePaths []string) {
+		observedMu.Lock()
+		observed[codebaseID] = append(observed[codebaseID], relativePaths...)
+		observedMu.Unlock()
+	})
 	watcher := NewWatcher(manager, queue)
 
 	rootDir := t.TempDir()
@@ -402,7 +315,6 @@ func TestWatcherDispatchBroadcastsToAllCovering(t *testing.T) {
 	if err := os.WriteFile(leaf, []byte{}, 0o644); err != nil {
 		t.Fatalf("write leaf: %v", err)
 	}
-
 	watcher.dispatch(context.Background(), stubNotifyEvent{path: leaf})
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -413,10 +325,8 @@ func TestWatcherDispatchBroadcastsToAllCovering(t *testing.T) {
 		if bothObserved {
 			return
 		}
-
 		time.Sleep(10 * time.Millisecond)
 	}
-
 	observedMu.Lock()
 	defer observedMu.Unlock()
 	t.Fatalf("dispatch did not broadcast to both codebases: %v", observed)

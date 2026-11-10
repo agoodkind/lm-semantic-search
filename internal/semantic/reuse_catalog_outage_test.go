@@ -47,15 +47,13 @@ func (reuseCatalogOutageServer) DescribeCollection(
 	return &milvuspb.DescribeCollectionResponse{
 		Status:         &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
 		CollectionName: request.GetCollectionName(),
-		Schema: &schemapb.CollectionSchema{
-			Fields: []*schemapb.FieldSchema{
-				{
-					Name:         "catalogKey",
-					DataType:     schemapb.DataType_VarChar,
-					IsPrimaryKey: true,
-				},
+		Schema: &schemapb.CollectionSchema{Fields: []*schemapb.FieldSchema{
+			{
+				Name:         "catalogKey",
+				DataType:     schemapb.DataType_VarChar,
+				IsPrimaryKey: true,
 			},
-		},
+		}},
 	}, nil
 }
 
@@ -71,7 +69,6 @@ func TestLoadReuseCatalogRowKeysClassifiesMilvusTransportOutage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen for fake Milvus: %v", err)
 	}
-
 	grpcServer := grpc.NewServer()
 	milvuspb.RegisterMilvusServiceServer(grpcServer, reuseCatalogOutageServer{})
 	t.Cleanup(grpcServer.Stop)
@@ -81,45 +78,30 @@ func TestLoadReuseCatalogRowKeysClassifiesMilvusTransportOutage(t *testing.T) {
 		}
 	}()
 
-	service, err := semantic.NewService(
-		context.Background(),
-		config.Config{
-			EmbeddingProvider:  "OpenAI",
-			EmbeddingModel:     "test-model",
-			EmbeddingDimension: 16,
-			OpenAIAPIKey:       "test-key",
-			MilvusAddress:      listener.Addr().String(),
-		},
-	)
+	service, err := semantic.NewService(context.Background(), config.Config{
+		EmbeddingProvider:  "OpenAI",
+		EmbeddingModel:     "test-model",
+		EmbeddingDimension: 16,
+		OpenAIAPIKey:       "test-key",
+		MilvusAddress:      listener.Addr().String(),
+	})
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
-
 	t.Cleanup(func() {
 		if closeErr := service.Close(context.Background()); closeErr != nil {
 			t.Errorf("Close returned error: %v", closeErr)
 		}
 	})
 
-	err = semantic.LoadReuseCatalogRowKeysForTest(
-		context.Background(),
-		service,
-		[]string{"row-key"},
-		16,
-	)
+	err = semantic.LoadReuseCatalogRowKeysForTest(context.Background(), service, []string{"row-key"}, 16)
 	var adapterErr *adapterr.AdapterError
 	if !errors.As(err, &adapterErr) {
 		t.Fatalf("loadReuseCatalogRowKeys error type = %T, want AdapterError: %v", err, err)
 	}
-
 	if adapterErr.Class != adapterr.ClassMilvusUnavailable {
-		t.Fatalf(
-			"loadReuseCatalogRowKeys class = %q, want %q",
-			adapterErr.Class,
-			adapterr.ClassMilvusUnavailable,
-		)
+		t.Fatalf("loadReuseCatalogRowKeys class = %q, want %q", adapterErr.Class, adapterr.ClassMilvusUnavailable)
 	}
-
 	if got := status.Code(err); got != codes.DeadlineExceeded {
 		t.Fatalf("loadReuseCatalogRowKeys cause code = %s, want %s", got, codes.DeadlineExceeded)
 	}

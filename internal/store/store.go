@@ -23,7 +23,6 @@ func EnsureDir(path string) error {
 		slog.Error("create directory failed", "path", path, "err", err)
 		return fmt.Errorf("create directory %s: %w", path, err)
 	}
-
 	return nil
 }
 
@@ -40,7 +39,6 @@ func ReadRegistry(path string) (model.RegistryFile, error) {
 		slog.Error("unmarshal registry file failed", "path", path, "err", err)
 		return model.RegistryFile{}, fmt.Errorf("unmarshal registry file %s: %w", path, err)
 	}
-
 	return registry, nil
 }
 
@@ -54,17 +52,12 @@ func WriteRegistry(path string, registry model.RegistryFile) error {
 		return fmt.Errorf("marshal registry file %s: %w", path, err)
 	}
 
-	return replaceFileAtomically(
-		path,
-		"registry file",
-		func(file *os.File) error {
-			if _, writeErr := file.Write(data); writeErr != nil {
-				return fmt.Errorf("write registry bytes: %w", writeErr)
-			}
-
-			return nil
-		},
-	)
+	return replaceFileAtomically(path, "registry file", func(file *os.File) error {
+		if _, writeErr := file.Write(data); writeErr != nil {
+			return fmt.Errorf("write registry bytes: %w", writeErr)
+		}
+		return nil
+	})
 }
 
 // replaceFileAtomically is the single home for durably replacing a whole file.
@@ -85,44 +78,30 @@ func replaceFileAtomically(
 	if err != nil {
 		slog.Error(
 			"create temp file failed",
-			"component",
-			"store",
-			"description",
-			description,
-			"dir",
-			filepath.Dir(path),
-			"err",
-			err,
+			"component", "store",
+			"description", description,
+			"dir", filepath.Dir(path),
+			"err", err,
 		)
-
 		return fmt.Errorf("create temp %s in %s: %w", description, filepath.Dir(path), err)
 	}
-
 	tempPath := tempFile.Name()
 
 	if err := writeTempFileContents(tempFile, tempPath, description, writeContents); err != nil {
 		return err
 	}
-
 	if err := os.Rename(tempPath, path); err != nil {
 		os.Remove(tempPath)
 		slog.Error(
 			"rename temp file failed",
-			"component",
-			"store",
-			"description",
-			description,
-			"from",
-			tempPath,
-			"to",
-			path,
-			"err",
-			err,
+			"component", "store",
+			"description", description,
+			"from", tempPath,
+			"to", path,
+			"err", err,
 		)
-
 		return fmt.Errorf("rename temp %s %s to %s: %w", description, tempPath, path, err)
 	}
-
 	return syncFileDirectory(filepath.Dir(path), description)
 }
 
@@ -139,61 +118,42 @@ func writeTempFileContents(
 		os.Remove(tempPath)
 		slog.Error(
 			stage+" temp file failed",
-			"component",
-			"store",
-			"description",
-			description,
-			"path",
-			tempPath,
-			"err",
-			err,
+			"component", "store",
+			"description", description,
+			"path", tempPath,
+			"err", err,
 		)
-
 		return fmt.Errorf("%s temp %s %s: %w", stage, description, tempPath, err)
 	}
 
 	if err := writeContents(tempFile); err != nil {
 		return failTemp("write", err)
 	}
-
 	if err := syncFile(tempFile); err != nil {
 		return failTemp("sync", err)
 	}
-
 	if err := tempFile.Close(); err != nil {
 		os.Remove(tempPath)
 		slog.Error(
 			"close temp file failed",
-			"component",
-			"store",
-			"description",
-			description,
-			"path",
-			tempPath,
-			"err",
-			err,
+			"component", "store",
+			"description", description,
+			"path", tempPath,
+			"err", err,
 		)
-
 		return fmt.Errorf("close temp %s %s: %w", description, tempPath, err)
 	}
-
 	if err := os.Chmod(tempPath, 0o644); err != nil {
 		os.Remove(tempPath)
 		slog.Error(
 			"chmod temp file failed",
-			"component",
-			"store",
-			"description",
-			description,
-			"path",
-			tempPath,
-			"err",
-			err,
+			"component", "store",
+			"description", description,
+			"path", tempPath,
+			"err", err,
 		)
-
 		return fmt.Errorf("chmod temp %s %s: %w", description, tempPath, err)
 	}
-
 	return nil
 }
 
@@ -204,53 +164,35 @@ func syncFileDirectory(directoryPath string, description string) error {
 	if err != nil {
 		slog.Error(
 			"open directory failed",
-			"component",
-			"store",
-			"description",
-			description,
-			"path",
-			directoryPath,
-			"err",
-			err,
+			"component", "store",
+			"description", description,
+			"path", directoryPath,
+			"err", err,
 		)
-
 		return fmt.Errorf("open %s directory %s: %w", description, directoryPath, err)
 	}
-
 	syncErr := syncFile(directoryFile)
 	closeErr := directoryFile.Close()
 	if syncErr != nil {
 		slog.Error(
 			"sync directory failed",
-			"component",
-			"store",
-			"description",
-			description,
-			"path",
-			directoryPath,
-			"err",
-			syncErr,
+			"component", "store",
+			"description", description,
+			"path", directoryPath,
+			"err", syncErr,
 		)
-
 		return fmt.Errorf("sync %s directory %s: %w", description, directoryPath, syncErr)
 	}
-
 	if closeErr != nil {
 		slog.Error(
 			"close directory failed",
-			"component",
-			"store",
-			"description",
-			description,
-			"path",
-			directoryPath,
-			"err",
-			closeErr,
+			"component", "store",
+			"description", description,
+			"path", directoryPath,
+			"err", closeErr,
 		)
-
 		return fmt.Errorf("close %s directory %s: %w", description, directoryPath, closeErr)
 	}
-
 	return nil
 }
 
@@ -268,13 +210,11 @@ func appendJobEvent(path string, event model.JobEvent, sync bool) error {
 	if err := EnsureDir(filepath.Dir(path)); err != nil {
 		return err
 	}
-
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		slog.Error("open jobs journal failed", "path", path, "err", err)
 		return fmt.Errorf("open jobs journal %s: %w", path, err)
 	}
-
 	encoder := json.NewEncoder(file)
 	if err := encoder.Encode(event); err != nil {
 		slog.Error("append jobs journal failed", "path", path, "err", err)
@@ -282,10 +222,8 @@ func appendJobEvent(path string, event model.JobEvent, sync bool) error {
 		if closeErr := file.Close(); closeErr != nil {
 			return errors.Join(encodeErr, fmt.Errorf("close jobs journal %s: %w", path, closeErr))
 		}
-
 		return encodeErr
 	}
-
 	if sync {
 		if err := syncFile(file); err != nil {
 			slog.Error("sync jobs journal failed", "path", path, "err", err)
@@ -293,22 +231,18 @@ func appendJobEvent(path string, event model.JobEvent, sync bool) error {
 			if closeErr := file.Close(); closeErr != nil {
 				return errors.Join(syncErr, fmt.Errorf("close jobs journal %s: %w", path, closeErr))
 			}
-
 			return syncErr
 		}
 	}
-
 	if err := file.Close(); err != nil {
 		slog.Error("close jobs journal failed", "path", path, "err", err)
 		return fmt.Errorf("close jobs journal %s: %w", path, err)
 	}
-
 	if sync {
 		if err := syncFileDirectory(filepath.Dir(path), "jobs journal"); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -327,35 +261,28 @@ func WriteJobEvents(path string, events []model.JobEvent) error {
 		len(events),
 	)
 
-	return replaceFileAtomically(
-		path,
-		"jobs journal",
-		func(file *os.File) error {
-			encoder := json.NewEncoder(file)
-
-			for _, event := range events {
-				if err := encoder.Encode(event); err != nil {
-					slog.Error(
-						"encode job event for journal failed",
-						"component",
-						"store",
-						"subcomponent",
-						"journal",
-						"path",
-						path,
-						"job_id",
-						event.Job.ID,
-						"err",
-						err,
-					)
-
-					return fmt.Errorf("encode job event %s: %w", event.Job.ID, err)
-				}
+	return replaceFileAtomically(path, "jobs journal", func(file *os.File) error {
+		encoder := json.NewEncoder(file)
+		for _, event := range events {
+			if err := encoder.Encode(event); err != nil {
+				slog.Error(
+					"encode job event for journal failed",
+					"component",
+					"store",
+					"subcomponent",
+					"journal",
+					"path",
+					path,
+					"job_id",
+					event.Job.ID,
+					"err",
+					err,
+				)
+				return fmt.Errorf("encode job event %s: %w", event.Job.ID, err)
 			}
-
-			return nil
-		},
-	)
+		}
+		return nil
+	})
 }
 
 // ReadJobEventsLatest replays the JSONL journal and keeps each complete latest
@@ -366,16 +293,12 @@ func ReadJobEventsLatest(path string) (map[string]model.JobEvent, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return map[string]model.JobEvent{}, nil
 		}
-
 		slog.Error("open jobs journal failed", "path", path, "err", err)
-
 		return nil, fmt.Errorf("open jobs journal %s: %w", path, err)
 	}
-
 	defer func() { _ = file.Close() }()
 
 	events := map[string]model.JobEvent{}
-
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		var event model.JobEvent
@@ -383,15 +306,12 @@ func ReadJobEventsLatest(path string) (map[string]model.JobEvent, error) {
 			slog.Error("unmarshal jobs journal line failed", "path", path, "err", err)
 			return nil, fmt.Errorf("unmarshal jobs journal line in %s: %w", path, err)
 		}
-
 		events[event.Job.ID] = event
 	}
-
 	if err := scanner.Err(); err != nil {
 		slog.Error("scan jobs journal failed", "path", path, "err", err)
 		return nil, fmt.Errorf("scan jobs journal %s: %w", path, err)
 	}
-
 	return events, nil
 }
 
@@ -402,12 +322,10 @@ func ReadJobEvents(path string) (map[string]model.Job, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	jobs := make(map[string]model.Job, len(events))
 	for id, event := range events {
 		jobs[id] = event.Job
 	}
-
 	return jobs, nil
 }
 
@@ -424,7 +342,6 @@ func ReadChunks(path string) ([]model.StoredChunk, error) {
 		slog.Error("unmarshal chunk file failed", "path", path, "err", err)
 		return nil, fmt.Errorf("unmarshal chunk file %s: %w", path, err)
 	}
-
 	return chunks, nil
 }
 
@@ -437,7 +354,6 @@ func WriteChunks(path string, chunks []model.StoredChunk) error {
 		slog.Error("marshal chunk file failed", "path", path, "err", err)
 		return fmt.Errorf("marshal chunk file %s: %w", path, err)
 	}
-
 	if err := EnsureDir(filepath.Dir(path)); err != nil {
 		return err
 	}
@@ -447,28 +363,22 @@ func WriteChunks(path string, chunks []model.StoredChunk) error {
 		slog.Error("create temp chunk file failed", "dir", filepath.Dir(path), "err", err)
 		return fmt.Errorf("create temp chunk file in %s: %w", filepath.Dir(path), err)
 	}
-
 	tempPath := tempFile.Name()
 	if _, err := tempFile.Write(data); err != nil {
 		tempFile.Close()
 		os.Remove(tempPath)
 		slog.Error("write temp chunk file failed", "path", tempPath, "err", err)
-
 		return fmt.Errorf("write temp chunk file %s: %w", tempPath, err)
 	}
-
 	if err := tempFile.Close(); err != nil {
 		os.Remove(tempPath)
 		slog.Error("close temp chunk file failed", "path", tempPath, "err", err)
-
 		return fmt.Errorf("close temp chunk file %s: %w", tempPath, err)
 	}
-
 	if err := os.Rename(tempPath, path); err != nil {
 		slog.Error("rename temp chunk file failed", "from", tempPath, "to", path, "err", err)
 		return fmt.Errorf("rename temp chunk file %s to %s: %w", tempPath, path, err)
 	}
-
 	return nil
 }
 
@@ -478,6 +388,5 @@ func RemoveFile(path string) error {
 		slog.Error("remove persisted file failed", "path", path, "err", err)
 		return fmt.Errorf("remove persisted file %s: %w", path, err)
 	}
-
 	return nil
 }

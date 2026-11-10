@@ -37,21 +37,17 @@ func Respond(ctx context.Context, err error) (codes.Code, string) {
 	if err == nil {
 		return codes.OK, ""
 	}
-
 	if errors.Is(ctx.Err(), context.Canceled) {
 		return respondContextError(ctx, codes.Canceled, context.Canceled, err)
 	}
-
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return respondContextError(ctx, codes.DeadlineExceeded, context.DeadlineExceeded, err)
 	}
-
 	adapterErr := classify(err)
 	logRespond(ctx, adapterErr)
 	if adapterErr.SafeForClient {
 		return CodeFor(adapterErr.Class), formatKnown(adapterErr)
 	}
-
 	return CodeFor(adapterErr.Class), formatUnknown(ctx)
 }
 
@@ -64,17 +60,14 @@ func RespondGRPC(ctx context.Context, err error) *grpcError {
 	if err == nil {
 		return nil
 	}
-
 	code, message := Respond(ctx, err)
 	reason := Code(err)
 	if errors.Is(ctx.Err(), context.Canceled) {
 		reason = "canceled"
 	}
-
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		reason = "deadline_exceeded"
 	}
-
 	base := status.New(code, message)
 	withDetails, detailErr := base.WithDetails(&errdetails.ErrorInfo{
 		Reason:   reason,
@@ -85,7 +78,6 @@ func RespondGRPC(ctx context.Context, err error) *grpcError {
 		slog.ErrorContext(ctx, "adapter.error_detail.failed", "reason", reason, "err", detailErr)
 		return &grpcError{response: base}
 	}
-
 	return &grpcError{response: withDetails}
 }
 
@@ -98,16 +90,13 @@ func errorInfoMetadata(err error) map[string]string {
 	if errors.As(err, &columnErr) {
 		metadata = map[string]string{ErrorInfoColumnKey: columnErr.Column}
 	}
-
 	var activeJobErr *ActiveJobConflictError
 	if errors.As(err, &activeJobErr) {
 		if metadata == nil {
 			metadata = make(map[string]string, 1)
 		}
-
 		metadata[ErrorInfoActiveJobIDKey] = activeJobErr.ActiveJobID
 	}
-
 	return metadata
 }
 
@@ -128,7 +117,6 @@ func RespondMCP(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
-
 	adapterErr := classify(err)
 	logRespond(ctx, adapterErr)
 	corr := correlation.FromContext(ctx)
@@ -136,7 +124,6 @@ func RespondMCP(ctx context.Context, err error) error {
 	if adapterErr.SafeForClient {
 		message = formatKnown(adapterErr)
 	}
-
 	return &MCPError{
 		Class:   adapterErr.Class,
 		Code:    adapterErr.Code,
@@ -151,7 +138,6 @@ func classify(err error) *AdapterError {
 	if errors.As(err, &adapterErr) {
 		return adapterErr
 	}
-
 	return NewInternal(err.Error(), err)
 }
 
@@ -163,16 +149,13 @@ func SafeMessage(err error) string {
 	if err == nil {
 		return ""
 	}
-
 	adapterErr := classify(err)
 	if !adapterErr.SafeForClient {
 		return internalErrorMessage
 	}
-
 	if adapterErr.Hint != "" {
 		return adapterErr.Message + "; " + adapterErr.Hint
 	}
-
 	return adapterErr.Message
 }
 
@@ -181,7 +164,6 @@ func Code(err error) string {
 	if err == nil {
 		return ""
 	}
-
 	return classify(err).Code
 }
 
@@ -202,18 +184,12 @@ func IsTransient(err error) bool {
 	if err == nil {
 		return false
 	}
-
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
-
 	adapterErr := classify(err)
 	switch adapterErr.Class {
-	case ClassEmbedderBusy,
-		ClassEmbedCancelled,
-		ClassEmbedderUnreachable,
-		ClassMilvusUnavailable,
-		ClassEmbedderPaused,
+	case ClassEmbedderBusy, ClassEmbedCancelled, ClassEmbedderUnreachable, ClassMilvusUnavailable, ClassEmbedderPaused,
 		ClassEmbeddingModelNotReady:
 		return true
 	case ClassNotIndexed, ClassUnknownCodebaseID, ClassCollectionMissing,
@@ -237,11 +213,9 @@ func IsInfraFailure(err error) bool {
 	if err == nil {
 		return false
 	}
-
 	if IsTransient(err) {
 		return true
 	}
-
 	return classify(err).Class == ClassEmbedderRejected
 }
 
@@ -249,7 +223,6 @@ func formatKnown(adapterErr *AdapterError) string {
 	if adapterErr.Hint != "" {
 		return adapterErr.Message + "; " + adapterErr.Hint
 	}
-
 	return adapterErr.Message
 }
 
@@ -265,7 +238,6 @@ func formatUnknown(ctx context.Context) string {
 	if traceID == "" {
 		return internalErrorMessage
 	}
-
 	return internalErrorMessage + "; see daemon logs for trace " + traceID
 }
 
@@ -278,19 +250,15 @@ func logRespond(ctx context.Context, adapterErr *AdapterError) {
 	if adapterErr.Hint != "" {
 		attrs = append(attrs, slog.String("hint", adapterErr.Hint))
 	}
-
 	if adapterErr.Message != "" {
 		attrs = append(attrs, slog.String("message", adapterErr.Message))
 	}
-
 	if adapterErr.Cause != nil {
 		attrs = append(attrs, slog.String("cause", adapterErr.Cause.Error()))
 	}
-
 	level := slog.LevelWarn
 	if adapterErr.Class == ClassInternal {
 		level = slog.LevelError
 	}
-
 	slog.Default().LogAttrs(ctx, level, "adapter.error.responded", attrs...)
 }

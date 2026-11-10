@@ -21,11 +21,7 @@ func TestUpdateJobCompletedDoesNotOverwriteCancelledJob(t *testing.T) {
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()
 
-	manager.updateJobCompleted(
-		context.Background(),
-		job.ID,
-		indexer.Result{IndexedFiles: 1, TotalChunks: 1},
-	)
+	manager.updateJobCompleted(context.Background(), job.ID, indexer.Result{IndexedFiles: 1, TotalChunks: 1})
 
 	manager.mu.Lock()
 	recorded := manager.jobs[job.ID]
@@ -44,11 +40,7 @@ func TestUpdateJobCompletedTurnsCancellingIntoCancelled(t *testing.T) {
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()
 
-	manager.updateJobCompleted(
-		context.Background(),
-		job.ID,
-		indexer.Result{IndexedFiles: 1, TotalChunks: 1},
-	)
+	manager.updateJobCompleted(context.Background(), job.ID, indexer.Result{IndexedFiles: 1, TotalChunks: 1})
 
 	manager.mu.Lock()
 	recorded := manager.jobs[job.ID]
@@ -56,7 +48,6 @@ func TestUpdateJobCompletedTurnsCancellingIntoCancelled(t *testing.T) {
 	if recorded.State != model.JobStateCancelled {
 		t.Fatalf("job state = %q, want %q", recorded.State, model.JobStateCancelled)
 	}
-
 	if recorded.CompletedAt == nil {
 		t.Fatal("CompletedAt is nil, want cancelled terminal timestamp")
 	}
@@ -71,28 +62,22 @@ func TestUpdateJobCompletedRunsCancellationFollowupForDrainedSuccessor(t *testin
 	release := make(chan struct{})
 	var startOnce sync.Once
 	manager.runner = fakeRunner{
-		indexOne: func(ctx context.Context, _ string, relativePath string, _ model.IndexConfig) (
-			indexer.OneFileResult,
-			error,
-		) {
+		indexOne: func(ctx context.Context, _ string, relativePath string, _ model.IndexConfig) (indexer.OneFileResult, error) {
 			startOnce.Do(func() { close(started) })
 			select {
 			case <-release:
 			case <-ctx.Done():
 				return indexer.OneFileResult{}, ctx.Err()
 			}
-
 			return indexer.OneFileResult{
-				Chunks: []model.StoredChunk{
-					{
-						Content:       "package main\n",
-						RelativePath:  relativePath,
-						StartLine:     1,
-						EndLine:       1,
-						Language:      "go",
-						FileExtension: ".go",
-					},
-				},
+				Chunks: []model.StoredChunk{{
+					Content:       "package main\n",
+					RelativePath:  relativePath,
+					StartLine:     1,
+					EndLine:       1,
+					Language:      "go",
+					FileExtension: ".go",
+				}},
 				FileHash: hashText("package main\n"),
 			}, nil
 		},
@@ -136,32 +121,25 @@ func TestUpdateJobCompletedRunsCancellationFollowupForDrainedSuccessor(t *testin
 	case <-time.After(5 * time.Second):
 		t.Fatal("IndexStopped was not called after cancelling completion")
 	}
-
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("drained successor never started")
 	}
-
 	close(release)
 
 	var successor model.Job
-	waitForCondition(
-		t,
-		func() bool {
-			for _, candidate := range manager.ListJobs(codebase.ID) {
-				if candidate.ID != job.ID {
-					successor = candidate
-
-					return candidate.State == model.JobStateCompleted ||
-						candidate.State == model.JobStateFailed ||
-						candidate.State == model.JobStateCancelled
-				}
+	waitForCondition(t, func() bool {
+		for _, candidate := range manager.ListJobs(codebase.ID) {
+			if candidate.ID != job.ID {
+				successor = candidate
+				return candidate.State == model.JobStateCompleted ||
+					candidate.State == model.JobStateFailed ||
+					candidate.State == model.JobStateCancelled
 			}
-
-			return false
-		},
-	)
+		}
+		return false
+	})
 	if successor.ID == "" {
 		t.Fatal("drained successor is missing")
 	}
@@ -171,12 +149,7 @@ func TestUpdateJobCompletedJournalsAfterRegistryFinalization(t *testing.T) {
 	manager, cfg, repoPath := newTestManager(t)
 	codebase := newCodebaseRecord(repoPath)
 	codebase.Status = model.CodebaseStatusIndexing
-	job := model.Job{
-		ID:            "job-completed-journal-order",
-		CodebaseID:    codebase.ID,
-		CanonicalPath: repoPath,
-		State:         model.JobStateRunning,
-	}
+	job := model.Job{ID: "job-completed-journal-order", CodebaseID: codebase.ID, CanonicalPath: repoPath, State: model.JobStateRunning}
 	codebase.ActiveJobID = job.ID
 	manager.mu.Lock()
 	manager.codebases[codebase.ID] = codebase
@@ -187,34 +160,24 @@ func TestUpdateJobCompletedJournalsAfterRegistryFinalization(t *testing.T) {
 		if event.Event != "job_completed" {
 			t.Fatalf("journal event = %q, want job_completed", event.Event)
 		}
-
 		registry, err := store.ReadRegistry(cfg.RegistryPath)
 		if err != nil {
 			t.Fatalf("ReadRegistry: %v", err)
 		}
-
 		if len(registry.Codebases) != 1 {
 			t.Fatalf("registry codebases = %d, want 1", len(registry.Codebases))
 		}
-
 		persisted := registry.Codebases[0]
 		if persisted.Status != model.CodebaseStatusIndexed || persisted.ActiveJobID != "" {
 			t.Fatalf("persisted completion = %+v", persisted)
 		}
-
-		if persisted.LastSuccessfulRun == nil || persisted.LastSuccessfulRun.IndexedFiles != 2 ||
-			persisted.LastSuccessfulRun.TotalChunks != 3 {
+		if persisted.LastSuccessfulRun == nil || persisted.LastSuccessfulRun.IndexedFiles != 2 || persisted.LastSuccessfulRun.TotalChunks != 3 {
 			t.Fatalf("persisted completion summary = %+v", persisted.LastSuccessfulRun)
 		}
-
 		return nil
 	}
 
-	manager.updateJobCompleted(
-		context.Background(),
-		job.ID,
-		indexer.Result{IndexedFiles: 2, TotalChunks: 3},
-	)
+	manager.updateJobCompleted(context.Background(), job.ID, indexer.Result{IndexedFiles: 2, TotalChunks: 3})
 }
 
 func TestUpdateJobFailedJournalsAfterMissingSourceClassification(t *testing.T) {
@@ -222,12 +185,7 @@ func TestUpdateJobFailedJournalsAfterMissingSourceClassification(t *testing.T) {
 	missingPath := repoPath + "-missing"
 	codebase := newCodebaseRecord(missingPath)
 	codebase.Status = model.CodebaseStatusIndexing
-	job := model.Job{
-		ID:            "job-failed-journal-order",
-		CodebaseID:    codebase.ID,
-		CanonicalPath: missingPath,
-		State:         model.JobStateRunning,
-	}
+	job := model.Job{ID: "job-failed-journal-order", CodebaseID: codebase.ID, CanonicalPath: missingPath, State: model.JobStateRunning}
 	codebase.ActiveJobID = job.ID
 	manager.mu.Lock()
 	manager.codebases[codebase.ID] = codebase
@@ -238,22 +196,17 @@ func TestUpdateJobFailedJournalsAfterMissingSourceClassification(t *testing.T) {
 		if event.Event != "job_failed" {
 			t.Fatalf("journal event = %q, want job_failed", event.Event)
 		}
-
 		registry, err := store.ReadRegistry(cfg.RegistryPath)
 		if err != nil {
 			t.Fatalf("ReadRegistry: %v", err)
 		}
-
 		if len(registry.Codebases) != 1 {
 			t.Fatalf("registry codebases = %d, want 1", len(registry.Codebases))
 		}
-
 		persisted := registry.Codebases[0]
-		if persisted.Status != model.CodebaseStatusMissing || persisted.ActiveJobID != "" ||
-			persisted.LastFailedRun != nil {
+		if persisted.Status != model.CodebaseStatusMissing || persisted.ActiveJobID != "" || persisted.LastFailedRun != nil {
 			t.Fatalf("persisted missing-source failure = %+v", persisted)
 		}
-
 		return nil
 	}
 

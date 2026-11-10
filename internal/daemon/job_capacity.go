@@ -97,52 +97,62 @@ func (manager *Manager) acquireJobCapacity(
 	)
 	if err != nil {
 		wrappedErr := fmt.Errorf("normalize scheduler job policy: %w", err)
-		slog.ErrorContext(
-			ctx,
-			"normalize scheduler job policy failed",
-			"job_id",
-			job.ID,
-			"err",
-			wrappedErr,
-		)
-
+		slog.ErrorContext(ctx, "normalize scheduler job policy failed", "job_id", job.ID, "err", wrappedErr)
 		return nil, syncLockFailed, wrappedErr
 	}
-
 	job.EffectiveSchedulingPolicy = normalizedPolicy
-	lease, err := manager.jobScheduler.Acquire(
-		ctx,
-		jobscheduler.Entry{
-			JobID:          job.ID,
-			Policy:         job.EffectiveSchedulingPolicy,
-			QueueSequence:  job.QueueSequence,
-			State:          jobscheduler.EntryWaiting,
-			Reason:         "",
-			PauseRequested: false,
-		},
-	)
+	lease, err := manager.jobScheduler.Acquire(ctx, jobscheduler.Entry{
+		JobID:          job.ID,
+		Policy:         job.EffectiveSchedulingPolicy,
+		QueueSequence:  job.QueueSequence,
+		State:          jobscheduler.EntryWaiting,
+		Reason:         "",
+		PauseRequested: false,
+	})
 	if err != nil {
 		wrappedErr := fmt.Errorf("acquire scheduler capacity: %w", err)
-		slog.WarnContext(
-			ctx,
-			"acquire scheduler capacity stopped",
-			"job_id",
-			job.ID,
-			"err",
-			wrappedErr,
-		)
-
+		slog.WarnContext(ctx, "acquire scheduler capacity stopped", "job_id", job.ID, "err", wrappedErr)
 		return nil, syncLockCancelled, wrappedErr
 	}
-
-	if err := manager.refreshJobCapacityPolicy(ctx, job.ID, lease); err != nil {
-		return nil, syncLockFailed, err
+	manager.policyMutationMutex.Lock()
+	manager.mu.Lock()
+	latestJob, found := manager.jobs[job.ID]
+	manager.mu.Unlock()
+	if found {
+		latestPolicy, policyErr := model.ApplySchedulingPolicyPatch(
+			latestJob.EffectiveSchedulingPolicy,
+			model.SchedulingPolicyPatch{
+				Priority:         nil,
+				Quiet:            nil,
+				IdleAfterSeconds: nil,
+			},
+		)
+		if policyErr != nil {
+			manager.policyMutationMutex.Unlock()
+			lease.Release()
+			wrappedErr := fmt.Errorf("normalize latest scheduler job policy: %w", policyErr)
+			slog.ErrorContext(ctx, "normalize latest scheduler job policy failed", "job_id", job.ID, "err", wrappedErr)
+			return nil, syncLockFailed, wrappedErr
+		}
+		priority := latestPolicy.Priority
+		quiet := latestPolicy.Quiet
+		idleAfterSeconds := latestPolicy.IdleAfterSeconds
+		if policyErr := lease.UpdatePolicy(model.SchedulingPolicyPatch{
+			Priority:         &priority,
+			Quiet:            &quiet,
+			IdleAfterSeconds: &idleAfterSeconds,
+		}); policyErr != nil {
+			manager.policyMutationMutex.Unlock()
+			lease.Release()
+			wrappedErr := fmt.Errorf("refresh scheduler job policy: %w", policyErr)
+			slog.ErrorContext(ctx, "refresh scheduler job policy failed", "job_id", job.ID, "err", wrappedErr)
+			return nil, syncLockFailed, wrappedErr
+		}
 	}
-
+	manager.policyMutationMutex.Unlock()
 	if !holdSyncLock && manager.semantic != nil && manager.semantic.Available() {
 		holdSyncLock = true
 	}
-
 	capacity := &jobCapacity{
 		manager:         manager,
 		jobID:           job.ID,
@@ -157,13 +167,11 @@ func (manager *Manager) acquireJobCapacity(
 	if !holdSyncLock {
 		return capacity, syncLockAcquired, nil
 	}
-
 	outcome, lockErr := capacity.acquireSyncLock(ctx)
 	if outcome != syncLockAcquired {
 		capacity.release(context.WithoutCancel(ctx))
 		return nil, outcome, lockErr
 	}
-
 	return capacity, syncLockAcquired, nil
 }
 
@@ -182,25 +190,14 @@ func (capacity *jobCapacity) acquireSyncLock(
 				if cause == nil {
 					cause = errSyncLockWaitCancelled
 				}
-
 				wrappedErr := fmt.Errorf("acquire sync lock after capacity release: %w", cause)
-				slog.WarnContext(
-					ctx,
-					"acquire sync lock stopped after capacity release",
-					"job_id",
-					capacity.jobID,
-					"err",
-					wrappedErr,
-				)
-
+				slog.WarnContext(ctx, "acquire sync lock stopped after capacity release", "job_id", capacity.jobID, "err", wrappedErr)
 				return syncLockCancelled, wrappedErr
 			}
-
 			capacity.syncLockLease = lease
 			capacity.syncLockHeld = true
 			capacity.waitsOnSyncLock = false
 			capacity.mu.Unlock()
-
 			return syncLockAcquired, nil
 		case syncLockFailed:
 			return syncLockFailed, err
@@ -210,21 +207,9 @@ func (capacity *jobCapacity) acquireSyncLock(
 			capacity.markSyncLockWait(ctx)
 		}
 
-		if err := capacity.retryAfter(
-			ctx,
-			syncLockRetryInterval,
-			syncLockSchedulingReason,
-		); err != nil {
+		if err := capacity.retryAfter(ctx, syncLockRetryInterval, syncLockSchedulingReason); err != nil {
 			wrappedErr := fmt.Errorf("retry scheduler capacity after sync lock wait: %w", err)
-			slog.WarnContext(
-				ctx,
-				"retry scheduler capacity after sync lock wait stopped",
-				"job_id",
-				capacity.jobID,
-				"err",
-				wrappedErr,
-			)
-
+			slog.WarnContext(ctx, "retry scheduler capacity after sync lock wait stopped", "job_id", capacity.jobID, "err", wrappedErr)
 			return syncLockCancelled, wrappedErr
 		}
 	}
@@ -238,7 +223,6 @@ func (capacity *jobCapacity) markSyncLockWait(ctx context.Context) {
 	if alreadyWaiting {
 		return
 	}
-
 	capacity.manager.setJobSchedulingReason(ctx, capacity.jobID, syncLockSchedulingReason)
 }
 
@@ -248,7 +232,6 @@ func (capacity *jobCapacity) release(ctx context.Context) {
 	if capacity.released {
 		return
 	}
-
 	capacity.releaseSyncLockLocked(ctx)
 	capacity.lease.Release()
 	capacity.released = true
@@ -263,9 +246,7 @@ func (capacity *jobCapacity) yieldClaim(
 	if capacity.released {
 		return false
 	}
-
 	capacity.releaseSyncLockLocked(ctx)
-
 	return claim.Yield()
 }
 
@@ -279,23 +260,13 @@ func (capacity *jobCapacity) retryAfter(
 		capacity.mu.Unlock()
 		return fmt.Errorf("retry released job capacity")
 	}
-
 	capacity.releaseSyncLockLocked(context.WithoutCancel(ctx))
 	capacity.mu.Unlock()
 	if err := capacity.lease.RetrySharedAfter(ctx, delay, reason); err != nil {
 		wrappedErr := fmt.Errorf("retry scheduler lease: %w", err)
-		slog.WarnContext(
-			ctx,
-			"retry scheduler lease stopped",
-			"job_id",
-			capacity.jobID,
-			"err",
-			wrappedErr,
-		)
-
+		slog.WarnContext(ctx, "retry scheduler lease stopped", "job_id", capacity.jobID, "err", wrappedErr)
 		return wrappedErr
 	}
-
 	return nil
 }
 
@@ -313,22 +284,12 @@ func (capacity *jobCapacity) reacquire(
 ) (syncLockOutcome, error) {
 	if err := capacity.lease.Reacquire(ctx); err != nil {
 		wrappedErr := fmt.Errorf("reacquire scheduler capacity: %w", err)
-		slog.WarnContext(
-			ctx,
-			"reacquire scheduler capacity stopped",
-			"job_id",
-			capacity.jobID,
-			"err",
-			wrappedErr,
-		)
-
+		slog.WarnContext(ctx, "reacquire scheduler capacity stopped", "job_id", capacity.jobID, "err", wrappedErr)
 		return syncLockCancelled, wrappedErr
 	}
-
 	if !holdSyncLock {
 		return syncLockAcquired, nil
 	}
-
 	return capacity.acquireSyncLock(ctx)
 }
 
@@ -362,23 +323,14 @@ func startStallRelease(
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				failure := fmt.Errorf("indexing capacity watchdog panic: %v", recovered)
-				slog.ErrorContext(
-					ctx,
-					"indexing capacity watchdog panic",
-					"component",
-					"daemon",
-					"subcomponent",
-					"capacity",
-					"err",
-					failure,
+				slog.ErrorContext(ctx, "indexing capacity watchdog panic",
+					"component", "daemon",
+					"subcomponent", "capacity",
+					"err", failure,
 				)
 				watchdog.err = failure
 				capacity.release(context.WithoutCancel(ctx))
-				capacity.manager.failScheduledJob(
-					context.WithoutCancel(ctx),
-					capacity.jobID,
-					failure,
-				)
+				capacity.manager.failScheduledJob(context.WithoutCancel(ctx), capacity.jobID, failure)
 			}
 		}()
 		graceTimer := time.NewTimer(grace)
@@ -388,53 +340,36 @@ func startStallRelease(
 			return
 		case <-graceTimer.C:
 		}
-
 		claim, claimed := capacity.lease.ClaimYield(stalledReadSchedulingReason)
 		if !claimed {
 			return
 		}
-
-		if err := capacity.manager.pauseJob(
-			capacity.jobID,
-			stalledReadSchedulingReason,
-		); err != nil {
+		if err := capacity.manager.pauseJob(capacity.jobID, stalledReadSchedulingReason); err != nil {
 			claim.Cancel()
 			capacity.manager.failScheduledJob(context.WithoutCancel(ctx), capacity.jobID, err)
 			capacity.release(context.WithoutCancel(ctx))
 			watchdog.err = err
-
 			return
 		}
-
 		if !capacity.manager.jobIsPaused(capacity.jobID) {
 			claim.Cancel()
 			return
 		}
-
 		watchdog.released = capacity.yieldClaim(context.WithoutCancel(ctx), claim)
 		if !watchdog.released {
 			failure := fmt.Errorf("yield stalled scheduler claim")
 			capacity.manager.failScheduledJob(context.WithoutCancel(ctx), capacity.jobID, failure)
 			capacity.release(context.WithoutCancel(ctx))
 			watchdog.err = failure
-
 			return
 		}
-
-		slog.WarnContext(
-			ctx,
-			"released indexing capacity for a stalled read",
-			"component",
-			"daemon",
-			"subcomponent",
-			"capacity",
-			"grace_ms",
-			grace.Milliseconds(),
-			"elapsed_ms",
-			clock.Now().Sub(startedAt).Milliseconds(),
+		slog.WarnContext(ctx, "released indexing capacity for a stalled read",
+			"component", "daemon",
+			"subcomponent", "capacity",
+			"grace_ms", grace.Milliseconds(),
+			"elapsed_ms", clock.Now().Sub(startedAt).Milliseconds(),
 		)
 	}()
-
 	return watchdog
 }
 
@@ -444,7 +379,6 @@ func startStallRelease(
 func (watchdog *stallRelease) join() (bool, error) {
 	close(watchdog.stopped)
 	<-watchdog.finished
-
 	return watchdog.released, watchdog.err
 }
 
@@ -476,7 +410,6 @@ func (manager *Manager) runReleasingCapacityIfStalled(
 	if pauseErr != nil {
 		return &jobCapacityReacquireError{Cause: pauseErr}
 	}
-
 	if !released {
 		return operationErr
 	}
@@ -489,79 +422,12 @@ func (manager *Manager) runReleasingCapacityIfStalled(
 		} else {
 			manager.updateJobCancelled(context.WithoutCancel(ctx), capacity.jobID)
 		}
-
 		return &jobCapacityReacquireError{Cause: reacquireErr}
 	}
-
 	if err := manager.resumeJob(capacity.jobID); err != nil {
 		capacity.release(context.WithoutCancel(ctx))
 		manager.failScheduledJob(context.WithoutCancel(ctx), capacity.jobID, err)
-
 		return &jobCapacityReacquireError{Cause: err}
 	}
-
 	return operationErr
-}
-
-func (manager *Manager) refreshJobCapacityPolicy(
-	ctx context.Context,
-	jobID string,
-	lease *jobscheduler.Lease,
-) error {
-	manager.policyMutationMutex.Lock()
-	manager.mu.Lock()
-	latestJob, found := manager.jobs[jobID]
-	manager.mu.Unlock()
-	if found {
-		latestPolicy, policyErr := model.ApplySchedulingPolicyPatch(
-			latestJob.EffectiveSchedulingPolicy,
-			model.SchedulingPolicyPatch{
-				Priority:         nil,
-				Quiet:            nil,
-				IdleAfterSeconds: nil,
-			},
-		)
-		if policyErr != nil {
-			manager.policyMutationMutex.Unlock()
-			lease.Release()
-			wrappedErr := fmt.Errorf("normalize latest scheduler job policy: %w", policyErr)
-			slog.ErrorContext(
-				ctx,
-				"normalize latest scheduler job policy failed",
-				"job_id",
-				jobID,
-				"err",
-				wrappedErr,
-			)
-
-			return wrappedErr
-		}
-
-		priority := latestPolicy.Priority
-		quiet := latestPolicy.Quiet
-		idleAfterSeconds := latestPolicy.IdleAfterSeconds
-		if policyErr := lease.UpdatePolicy(model.SchedulingPolicyPatch{
-			Priority:         &priority,
-			Quiet:            &quiet,
-			IdleAfterSeconds: &idleAfterSeconds,
-		}); policyErr != nil {
-			manager.policyMutationMutex.Unlock()
-			lease.Release()
-			wrappedErr := fmt.Errorf("refresh scheduler job policy: %w", policyErr)
-			slog.ErrorContext(
-				ctx,
-				"refresh scheduler job policy failed",
-				"job_id",
-				jobID,
-				"err",
-				wrappedErr,
-			)
-
-			return wrappedErr
-		}
-	}
-
-	manager.policyMutationMutex.Unlock()
-
-	return nil
 }

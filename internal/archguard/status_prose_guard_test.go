@@ -34,17 +34,14 @@ func TestStatusBodyProseLivesAtBoundary(t *testing.T) {
 	root := moduleRoot(t)
 	fset := token.NewFileSet()
 	var violations []string
-
 	for _, rel := range productionGoFiles(t, root) {
 		if !strings.HasPrefix(rel, renderDirPrefix) {
 			continue
 		}
-
 		parsed, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
-
 		for _, literal := range stringLiterals(parsed) {
 			for _, sentinel := range statusBodySentinels {
 				if strings.Contains(literal, sentinel) {
@@ -53,12 +50,8 @@ func TestStatusBodyProseLivesAtBoundary(t *testing.T) {
 			}
 		}
 	}
-
 	if len(violations) > 0 {
-		t.Fatalf(
-			"status body prose found in the render layer; move it to resolveStatusNarrative at the daemon boundary:\n%s",
-			strings.Join(violations, "\n"),
-		)
+		t.Fatalf("status body prose found in the render layer; move it to resolveStatusNarrative at the daemon boundary:\n%s", strings.Join(violations, "\n"))
 	}
 }
 
@@ -102,46 +95,30 @@ func TestRenderLayerDoesNotLaunderStatusFields(t *testing.T) {
 	root := moduleRoot(t)
 	fset := token.NewFileSet()
 	var violations []string
-
 	for _, rel := range productionGoFiles(t, root) {
 		if !strings.HasPrefix(rel, renderDirPrefix) {
 			continue
 		}
-
 		parsed, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
-
-		ast.Inspect(
-			parsed,
-			func(node ast.Node) bool {
-				selector, ok := node.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-
-				receiver, ok := selector.X.(*ast.Ident)
-				if !ok || !launderingReceivers[receiver.Name] {
-					return true
-				}
-
-				if launderedStatusFields[selector.Sel.Name] {
-					violations = append(
-						violations,
-						rel+": reads raw "+receiver.Name+"."+selector.Sel.Name,
-					)
-				}
-
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok {
 				return true
-			},
-		)
+			}
+			receiver, ok := selector.X.(*ast.Ident)
+			if !ok || !launderingReceivers[receiver.Name] {
+				return true
+			}
+			if launderedStatusFields[selector.Sel.Name] {
+				violations = append(violations, rel+": reads raw "+receiver.Name+"."+selector.Sel.Name)
+			}
+			return true
+		})
 	}
-
 	if len(violations) > 0 {
-		t.Fatalf(
-			"render layer read raw status fields; format resolved view types instead:\n%s",
-			strings.Join(violations, "\n"),
-		)
+		t.Fatalf("render layer read raw status fields; format resolved view types instead:\n%s", strings.Join(violations, "\n"))
 	}
 }

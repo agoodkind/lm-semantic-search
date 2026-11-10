@@ -34,47 +34,32 @@ func TestResolverConstructedOnlyInDaemon(t *testing.T) {
 		if dirAllowsResolverConstruction(rel) {
 			continue
 		}
-
 		parsed, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
-
-		ast.Inspect(
-			parsed,
-			func(node ast.Node) bool {
-				call, ok := node.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-
-				selector, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-
-				pkg, ok := selector.X.(*ast.Ident)
-				if !ok {
-					return true
-				}
-
-				if pkg.Name == "indexability" && selector.Sel.Name == "NewResolver" {
-					violations = append(
-						violations,
-						rel+": constructs indexability.NewResolver outside the daemon; thread manager.indexability instead",
-					)
-				}
-
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
 				return true
-			},
-		)
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkg, ok := selector.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if pkg.Name == "indexability" && selector.Sel.Name == "NewResolver" {
+				violations = append(violations, rel+": constructs indexability.NewResolver outside the daemon; thread manager.indexability instead")
+			}
+			return true
+		})
 	}
 
 	if len(violations) > 0 {
-		t.Fatalf(
-			"indexability.Resolver must be constructed only in internal/daemon:\n%s",
-			strings.Join(violations, "\n"),
-		)
+		t.Fatalf("indexability.Resolver must be constructed only in internal/daemon:\n%s", strings.Join(violations, "\n"))
 	}
 }
 
@@ -84,6 +69,5 @@ func dirAllowsResolverConstruction(rel string) bool {
 			return true
 		}
 	}
-
 	return false
 }

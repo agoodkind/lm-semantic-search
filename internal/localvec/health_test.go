@@ -22,7 +22,6 @@ func TestProbeHealthReportsAnUnreadableStoreRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newStoreWithProvider returned error: %v", err)
 	}
-
 	if probeErr := store.ProbeHealth(context.Background()); probeErr != nil {
 		t.Fatalf("ProbeHealth on a reachable store returned error: %v", probeErr)
 	}
@@ -30,10 +29,7 @@ func TestProbeHealthReportsAnUnreadableStoreRoot(t *testing.T) {
 	if removeErr := os.RemoveAll(store.root); removeErr != nil {
 		t.Fatalf("RemoveAll returned error: %v", removeErr)
 	}
-
 	if probeErr := store.ProbeHealth(context.Background()); probeErr == nil {
-		t.Fatal(
-			"ProbeHealth answered nil for a store whose root is gone, so it supplies no evidence that anything was reached",
-		)
+		t.Fatal("ProbeHealth answered nil for a store whose root is gone, so it supplies no evidence that anything was reached")
 	}
 }

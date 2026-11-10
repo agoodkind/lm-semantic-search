@@ -14,31 +14,23 @@ import (
 // newRecordingWatcher builds a watcher whose queue records the relative paths
 // enqueued per codebase id, returning the watcher and a snapshot accessor. The
 // drain debounce is short so a dispatched event surfaces quickly.
-func newRecordingWatcher(
-	t *testing.T,
-	manager *Manager,
-) (*Watcher, func(codebaseID string) []string) {
+func newRecordingWatcher(t *testing.T, manager *Manager) (*Watcher, func(codebaseID string) []string) {
 	t.Helper()
 	var mu sync.Mutex
 	observed := map[string][]string{}
-	queue := NewEventQueue(
-		5*time.Millisecond,
-		func(codebaseID string, relativePaths []string) {
-			mu.Lock()
-			observed[codebaseID] = append(observed[codebaseID], relativePaths...)
-			mu.Unlock()
-		},
-	)
+	queue := NewEventQueue(5*time.Millisecond, func(codebaseID string, relativePaths []string) {
+		mu.Lock()
+		observed[codebaseID] = append(observed[codebaseID], relativePaths...)
+		mu.Unlock()
+	})
 	watcher := NewWatcher(manager, queue)
 	snapshot := func(codebaseID string) []string {
 		mu.Lock()
 		defer mu.Unlock()
 		out := make([]string, len(observed[codebaseID]))
 		copy(out, observed[codebaseID])
-
 		return out
 	}
-
 	return watcher, snapshot
 }
 
@@ -46,24 +38,16 @@ func newRecordingWatcher(
 // appears or the deadline passes, returning the final recorded set. It is the
 // sentinel that lets a negative assertion be reliable: once a known-good path
 // for the same codebase has drained, any leaked path would have drained too.
-func waitForRelativePath(
-	t *testing.T,
-	snapshot func(string) []string,
-	codebaseID string,
-	want string,
-) []string {
+func waitForRelativePath(t *testing.T, snapshot func(string) []string, codebaseID string, want string) []string {
 	t.Helper()
-
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		paths := snapshot(codebaseID)
 		if slicesContains(paths, want) {
 			return paths
 		}
-
 		time.Sleep(10 * time.Millisecond)
 	}
-
 	return snapshot(codebaseID)
 }
 
@@ -73,7 +57,6 @@ func slicesContains(paths []string, want string) bool {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -102,20 +85,13 @@ func TestDispatchSkipsUnregisteredSameRepoWorktree(t *testing.T) {
 	watcher.AddCodebase(context.Background(), parentCodebase(mainRoot))
 
 	// Event for a real worktree file, then a sentinel event for a real parent file.
-	watcher.dispatch(
-		context.Background(),
-		stubNotifyEvent{path: filepath.Join(worktreeDir, "feature.go")},
-	)
-	watcher.dispatch(
-		context.Background(),
-		stubNotifyEvent{path: filepath.Join(mainRoot, "main.go")},
-	)
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(worktreeDir, "feature.go")})
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(mainRoot, "main.go")})
 
 	paths := waitForRelativePath(t, snapshot, "cb_parent", "main.go")
 	if !slicesContains(paths, "main.go") {
 		t.Fatalf("sentinel main.go was not enqueued for the parent; got %v", paths)
 	}
-
 	for _, path := range paths {
 		if strings.Contains(path, "worktrees") {
 			t.Fatalf("parent enqueued worktree path %q; the boundary leaked", path)
@@ -137,28 +113,18 @@ func TestDispatchRegisteredWorktreeRoutesToWorktree(t *testing.T) {
 
 	watcher, snapshot := newRecordingWatcher(t, manager)
 	watcher.AddCodebase(context.Background(), parentCodebase(mainRoot))
-	watcher.AddCodebase(
-		context.Background(),
-		model.Codebase{
-			ID:            "cb_worktree",
-			CanonicalPath: worktreeDir,
-		},
-	)
+	watcher.AddCodebase(context.Background(), model.Codebase{
+		ID:            "cb_worktree",
+		CanonicalPath: worktreeDir,
+	})
 
-	watcher.dispatch(
-		context.Background(),
-		stubNotifyEvent{path: filepath.Join(worktreeDir, "feature.go")},
-	)
-	watcher.dispatch(
-		context.Background(),
-		stubNotifyEvent{path: filepath.Join(mainRoot, "main.go")},
-	)
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(worktreeDir, "feature.go")})
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(mainRoot, "main.go")})
 
 	worktreePaths := waitForRelativePath(t, snapshot, "cb_worktree", "feature.go")
 	if !slicesContains(worktreePaths, "feature.go") {
 		t.Fatalf("worktree codebase did not receive feature.go; got %v", worktreePaths)
 	}
-
 	parentPaths := waitForRelativePath(t, snapshot, "cb_parent", "main.go")
 	for _, path := range parentPaths {
 		if strings.Contains(path, "worktrees") {
@@ -187,23 +153,14 @@ func TestDispatchSubmoduleExcludedFromParent(t *testing.T) {
 	watcher, snapshot := newRecordingWatcher(t, manager)
 	watcher.AddCodebase(context.Background(), parentCodebase(mainRoot))
 
-	watcher.dispatch(
-		context.Background(),
-		stubNotifyEvent{path: filepath.Join(subModuleDir, "lib.go")},
-	)
-	watcher.dispatch(
-		context.Background(),
-		stubNotifyEvent{path: filepath.Join(mainRoot, "main.go")},
-	)
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(subModuleDir, "lib.go")})
+	watcher.dispatch(context.Background(), stubNotifyEvent{path: filepath.Join(mainRoot, "main.go")})
 
 	// The control event confirms the dispatch pipeline ran before asserting the
 	// submodule file is absent.
 	parentPaths := waitForRelativePath(t, snapshot, "cb_parent", "main.go")
 	submodulePath := filepath.ToSlash(filepath.Join("vendor", "lib", "lib.go"))
 	if slicesContains(parentPaths, submodulePath) {
-		t.Fatalf(
-			"parent enqueued submodule file %q; it should be excluded by default",
-			submodulePath,
-		)
+		t.Fatalf("parent enqueued submodule file %q; it should be excluded by default", submodulePath)
 	}
 }

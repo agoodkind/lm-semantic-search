@@ -41,23 +41,18 @@ func TestBootstrapReasonVocabulary(t *testing.T) {
 func TestPlanSyncDiffEmptyDiffMissingCollectionStampsBootstrapReason(t *testing.T) {
 	t.Parallel()
 
-	manager, job, plan := planEmptyDiffWithCollectionFacts(
-		t,
-		semantic.CollectionFacts{
-			Exists:    false,
-			Rows:      0,
-			RowsKnown: false,
-		},
-	)
+	manager, job, plan := planEmptyDiffWithCollectionFacts(t, semantic.CollectionFacts{
+		Exists:    false,
+		Rows:      0,
+		RowsKnown: false,
+	})
 	if !plan.fallback {
 		t.Fatal("plan.fallback = false, want true")
 	}
-
 	got, found := manager.GetJob(job.ID)
 	if !found {
 		t.Fatalf("GetJob(%s) not found", job.ID)
 	}
-
 	if got.Progress.BootstrapReason != string(bootstrapReasonEmptyDiffCollectionMissing) {
 		t.Fatalf(
 			"BootstrapReason = %q, want %q",
@@ -70,23 +65,18 @@ func TestPlanSyncDiffEmptyDiffMissingCollectionStampsBootstrapReason(t *testing.
 func TestPlanSyncDiffEmptyRowsCollectionStampsBootstrapReason(t *testing.T) {
 	t.Parallel()
 
-	manager, job, plan := planEmptyDiffWithCollectionFacts(
-		t,
-		semantic.CollectionFacts{
-			Exists:    true,
-			Rows:      0,
-			RowsKnown: true,
-		},
-	)
+	manager, job, plan := planEmptyDiffWithCollectionFacts(t, semantic.CollectionFacts{
+		Exists:    true,
+		Rows:      0,
+		RowsKnown: true,
+	})
 	if !plan.fallback {
 		t.Fatal("plan.fallback = false, want true")
 	}
-
 	got, found := manager.GetJob(job.ID)
 	if !found {
 		t.Fatalf("GetJob(%s) not found", job.ID)
 	}
-
 	if got.Progress.BootstrapReason != string(bootstrapReasonEmptyDiffCollectionEmpty) {
 		t.Fatalf(
 			"BootstrapReason = %q, want %q",
@@ -105,22 +95,15 @@ func TestClassifyReindexErrCollectionMissingStampsBootstrapReason(t *testing.T) 
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()
 
-	outcome := manager.classifyReindexErr(
-		context.Background(),
-		job,
-		semantic.ErrCollectionMissing,
-		"per-file reindex",
-	)
+	outcome := manager.classifyReindexErr(context.Background(), job, semantic.ErrCollectionMissing, "per-file reindex")
 
 	if !outcome.fallback {
 		t.Fatal("outcome.fallback = false, want true")
 	}
-
 	got, found := manager.GetJob(job.ID)
 	if !found {
 		t.Fatalf("GetJob(%s) not found", job.ID)
 	}
-
 	if got.Progress.BootstrapReason != string(bootstrapReasonDeltaCollectionMissing) {
 		t.Fatalf(
 			"BootstrapReason = %q, want %q",
@@ -144,12 +127,10 @@ func TestRunDeltaSyncMissingCodebaseStampsBootstrapReason(t *testing.T) {
 	if handled {
 		t.Fatal("runDeltaSync returned true, want false")
 	}
-
 	got, found := manager.GetJob(job.ID)
 	if !found {
 		t.Fatalf("GetJob(%s) not found", job.ID)
 	}
-
 	const wantReason = string(bootstrapReasonDeltaCodebaseMissing)
 	if got.Progress.BootstrapReason != wantReason {
 		t.Fatalf("BootstrapReason = %q, want %q", got.Progress.BootstrapReason, wantReason)
@@ -162,31 +143,18 @@ func TestStartIndexFreshBootstrapStampsFirstIndexReason(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	manager.semantic = &fakeSemantic{unavailable: true}
 
-	job, _, _, _, err := manager.StartIndex(
-		context.Background(),
-		repoPath,
-		testClientInfo(),
-		defaultIndexConfig(),
-		false,
-		emptyAdmissionBudget,
-	)
+	job, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
-
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	got, found := manager.GetJob(job.ID)
 	if !found {
 		t.Fatalf("GetJob(%s) not found", job.ID)
 	}
-
 	if got.Progress.BootstrapReason != string(bootstrapReasonFirstIndex) {
-		t.Fatalf(
-			"BootstrapReason = %q, want %q",
-			got.Progress.BootstrapReason,
-			bootstrapReasonFirstIndex,
-		)
+		t.Fatalf("BootstrapReason = %q, want %q", got.Progress.BootstrapReason, bootstrapReasonFirstIndex)
 	}
 }
 
@@ -198,18 +166,10 @@ func TestStartIndexForcedBootstrapStampsForcedReindexReason(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	manager.semantic = &fakeSemantic{
 		collectionName: func(string) string { return collectionName },
-		inspectCollection: func(_ context.Context, gotCollection string) (
-			semantic.CollectionFacts,
-			error,
-		) {
+		inspectCollection: func(_ context.Context, gotCollection string) (semantic.CollectionFacts, error) {
 			if gotCollection != collectionName {
-				t.Fatalf(
-					"InspectCollection collection = %q, want %q",
-					gotCollection,
-					collectionName,
-				)
+				t.Fatalf("InspectCollection collection = %q, want %q", gotCollection, collectionName)
 			}
-
 			return semantic.CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
 		},
 	}
@@ -227,38 +187,22 @@ func TestStartIndexForcedBootstrapStampsForcedReindexReason(t *testing.T) {
 	}
 	manager.mu.Unlock()
 
-	job, _, _, _, err := manager.StartIndex(
-		context.Background(),
-		repoPath,
-		testClientInfo(),
-		defaultIndexConfig(),
-		true,
-		emptyAdmissionBudget,
-	)
+	job, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("StartIndex(force=true) returned error: %v", err)
 	}
-
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 
 	got, found := manager.GetJob(job.ID)
 	if !found {
 		t.Fatalf("GetJob(%s) not found", job.ID)
 	}
-
 	if got.Progress.BootstrapReason != string(bootstrapReasonForcedReindex) {
-		t.Fatalf(
-			"BootstrapReason = %q, want %q",
-			got.Progress.BootstrapReason,
-			bootstrapReasonForcedReindex,
-		)
+		t.Fatalf("BootstrapReason = %q, want %q", got.Progress.BootstrapReason, bootstrapReasonForcedReindex)
 	}
 }
 
-func planEmptyDiffWithCollectionFacts(
-	t *testing.T,
-	facts semantic.CollectionFacts,
-) (*Manager, model.Job, deltaPlan) {
+func planEmptyDiffWithCollectionFacts(t *testing.T, facts semantic.CollectionFacts) (*Manager, model.Job, deltaPlan) {
 	t.Helper()
 
 	const codebaseID = "cb-empty-diff-bootstrap"
@@ -269,18 +213,10 @@ func planEmptyDiffWithCollectionFacts(
 	config := manager.enrichIndexConfig(defaultIndexConfig())
 	config.IgnoreDigest = digestIndexConfig(config)
 	manager.semantic = &fakeSemantic{
-		inspectCollection: func(_ context.Context, gotCollection string) (
-			semantic.CollectionFacts,
-			error,
-		) {
+		inspectCollection: func(_ context.Context, gotCollection string) (semantic.CollectionFacts, error) {
 			if gotCollection != collectionName {
-				t.Fatalf(
-					"InspectCollection collection = %q, want %q",
-					gotCollection,
-					collectionName,
-				)
+				t.Fatalf("InspectCollection collection = %q, want %q", gotCollection, collectionName)
 			}
-
 			return facts, nil
 		},
 	}
@@ -306,13 +242,11 @@ func planEmptyDiffWithCollectionFacts(
 	if err != nil {
 		t.Fatalf("Capture returned error: %v", err)
 	}
-
 	seed.ConfigDigest = config.IgnoreDigest
 	if err := merkle.WriteSnapshot(manager.merklePath(codebaseID), seed); err != nil {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
 
 	source := newCodeItemSource(manager.runner, manager.indexability, codebaseID, repoPath, config)
-
 	return manager, job, manager.planSyncDiff(ctx, job, codebaseID, source)
 }

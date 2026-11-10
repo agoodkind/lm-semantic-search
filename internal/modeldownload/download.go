@@ -68,17 +68,19 @@ func Ensure(ctx context.Context, request Request) error {
 	if err != nil || installed {
 		return err
 	}
-
 	directory := filepath.Dir(request.DestinationPath)
 	if err := os.MkdirAll(directory, directoryMode); err != nil {
-		return fileError(ctx, "create cache directory", directory, err)
+		return fileError(
+			ctx,
+			"create cache directory",
+			directory,
+			err,
+		)
 	}
-
 	lockFile, err := acquireLock(ctx, request)
 	if err != nil {
 		return err
 	}
-
 	defer func() {
 		_ = lockFile.Close()
 	}()
@@ -86,24 +88,20 @@ func Ensure(ctx context.Context, request Request) error {
 	if err != nil || installed {
 		return err
 	}
-
 	return download(ctx, request)
 }
 
 // Installed checks the file against the given SHA-256 without sending a
 // network request.
 func Installed(ctx context.Context, destinationPath string, sha256Digest string) (bool, error) {
-	return installedArtifactMatches(
-		ctx,
-		Request{
-			HTTPClient:      nil,
-			URL:             "",
-			SHA256:          sha256Digest,
-			DestinationPath: destinationPath,
-			Progress:        nil,
-			Sleep:           nil,
-		},
-	)
+	return installedArtifactMatches(ctx, Request{
+		HTTPClient:      nil,
+		URL:             "",
+		SHA256:          sha256Digest,
+		DestinationPath: destinationPath,
+		Progress:        nil,
+		Sleep:           nil,
+	})
 }
 
 func installedArtifactMatches(ctx context.Context, request Request) (bool, error) {
@@ -111,43 +109,51 @@ func installedArtifactMatches(ctx context.Context, request Request) (bool, error
 	if errors.Is(statErr, os.ErrNotExist) {
 		return false, nil
 	}
-
 	if statErr != nil {
-		return false, fileError(ctx, "inspect artifact", request.DestinationPath, statErr)
+		return false, fileError(
+			ctx,
+			"inspect artifact",
+			request.DestinationPath,
+			statErr,
+		)
 	}
-
 	hasher := sha256.New()
 	if err := hashFile(ctx, request.DestinationPath, hasher); err != nil {
 		return false, err
 	}
-
 	if hex.EncodeToString(hasher.Sum(nil)) == request.SHA256 {
 		return true, nil
 	}
-
 	slog.WarnContext(
 		ctx,
 		"artifact checksum mismatch; downloading replacement",
 		"path",
 		request.DestinationPath,
 	)
-
 	return false, nil
 }
 
 func download(ctx context.Context, request Request) error {
-	slog.InfoContext(ctx, "download artifact", "url", request.URL, "path", request.DestinationPath)
+	slog.InfoContext(
+		ctx,
+		"download artifact",
+		"url",
+		request.URL,
+		"path",
+		request.DestinationPath,
+	)
 	sleep := request.Sleep
 	if sleep == nil {
 		sleep = sleepContext
 	}
-
 	partialPath := request.DestinationPath + partialFileSuffix
-	reporter := newProgressReporter(request.Progress, filepath.Base(request.DestinationPath))
+	reporter := newProgressReporter(
+		request.Progress,
+		filepath.Base(request.DestinationPath),
+	)
 	delay := retryBaseDelay
 	rangeRestarted := false
 	attempt := 1
-
 	for {
 		outcome, err := runAttempt(ctx, request, partialPath, reporter)
 		switch outcome {
@@ -159,16 +165,13 @@ func download(ctx context.Context, request Request) error {
 			if rangeRestarted {
 				return err
 			}
-
 			rangeRestarted = true
 			continue
 		case outcomeRetry:
 		}
-
 		if attempt >= maximumAttempts {
 			return err
 		}
-
 		slog.WarnContext(
 			ctx,
 			"retry artifact download",
@@ -187,7 +190,6 @@ func download(ctx context.Context, request Request) error {
 		if cancelErr := ctx.Err(); cancelErr != nil {
 			return unavailable(ctx, request.URL, cancelErr)
 		}
-
 		attempt++
 		delay *= retryDelayMultiplier
 	}
@@ -203,9 +205,20 @@ func sleepContext(ctx context.Context, delay time.Duration) {
 }
 
 func unavailable(ctx context.Context, rawURL string, cause error) error {
-	slog.ErrorContext(ctx, "download artifact failed", "url", rawURL, "err", cause)
-
-	return fmt.Errorf("download artifact %s: %w: %w", rawURL, ErrUnavailable, cause)
+	slog.ErrorContext(
+		ctx,
+		"download artifact failed",
+		"url",
+		rawURL,
+		"err",
+		cause,
+	)
+	return fmt.Errorf(
+		"download artifact %s: %w: %w",
+		rawURL,
+		ErrUnavailable,
+		cause,
+	)
 }
 
 func fileError(
@@ -223,16 +236,13 @@ func hashFile(ctx context.Context, path string, destination io.Writer) error {
 	if err != nil {
 		return fileError(ctx, "open artifact", path, err)
 	}
-
 	_, copyErr := io.Copy(destination, file)
 	closeErr := file.Close()
 	if copyErr != nil {
 		return fileError(ctx, "hash artifact", path, copyErr)
 	}
-
 	if closeErr != nil {
 		return fileError(ctx, "close artifact", path, closeErr)
 	}
-
 	return nil
 }

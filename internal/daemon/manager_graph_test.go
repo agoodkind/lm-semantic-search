@@ -39,18 +39,12 @@ func TestValidateGraphToolNameAllowsReadOnlyToolsOnly(t *testing.T) {
 	if err == nil {
 		t.Fatal("validateGraphToolName accepted delete_project, want invalid argument")
 	}
-
 	var adapterErr *adapterr.AdapterError
 	if !errors.As(err, &adapterErr) {
 		t.Fatalf("validateGraphToolName returned %T, want AdapterError", err)
 	}
-
 	if adapterErr.Class != adapterr.ClassInvalidArgument {
-		t.Fatalf(
-			"adapter error class = %q, want %q",
-			adapterErr.Class,
-			adapterr.ClassInvalidArgument,
-		)
+		t.Fatalf("adapter error class = %q, want %q", adapterErr.Class, adapterr.ClassInvalidArgument)
 	}
 }
 
@@ -59,11 +53,7 @@ func TestManagerGraphToolIndexesAndQueriesCodebase(t *testing.T) {
 	t.Cleanup(func() {
 		manager.CloseGraphEngines()
 	})
-	if err := os.WriteFile(
-		filepath.Join(repoPath, "main.go"),
-		[]byte("package main\n\nfunc GraphTarget() string {\n\treturn \"ok\"\n}\n"),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(repoPath, "main.go"), []byte("package main\n\nfunc GraphTarget() string {\n\treturn \"ok\"\n}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
@@ -96,11 +86,9 @@ func TestManagerGraphToolIndexesAndQueriesCodebase(t *testing.T) {
 	if err = json.Unmarshal([]byte(resultJSON), &envelope); err != nil {
 		t.Fatalf("query_graph returned invalid JSON: %v\n%s", err, resultJSON)
 	}
-
 	if envelope.IsError {
 		t.Fatalf("query_graph returned error: %s", resultJSON)
 	}
-
 	if len(envelope.StructuredContent.Rows) == 0 {
 		t.Fatalf("query_graph returned no rows: %s", resultJSON)
 	}
@@ -132,25 +120,16 @@ func TestRunJobAsyncRunsGraphIndexAfterSemanticLockAndSlotRelease(t *testing.T) 
 			observed <- fmt.Sprintf("probe sync lock returned error: %v", err)
 			return
 		}
-
 		slotCount, _ := manager.IndexSlots()
 		if held || slotCount != 0 {
 			observed <- fmt.Sprintf("sync lock held = %t, index slot count = %d", held, slotCount)
 			return
 		}
-
 		observed <- ""
 	}
 
 	repoPath := newCapTestRepo(t)
-	if _, _, _, _, err := manager.StartIndex(
-		context.Background(),
-		repoPath,
-		testClientInfo(),
-		defaultIndexConfig(),
-		false,
-		emptyAdmissionBudget,
-	); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), repoPath, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
 
@@ -162,7 +141,6 @@ func TestRunJobAsyncRunsGraphIndexAfterSemanticLockAndSlotRelease(t *testing.T) 
 	case <-time.After(5 * time.Second):
 		t.Fatal("graph index hook was not called")
 	}
-
 	waitForCodebaseStatus(t, manager, repoPath, model.CodebaseStatusIndexed)
 }
 
@@ -189,7 +167,6 @@ func TestGraphStateRecordsReadyAndReconcilesStaleGraph(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Capture returned error: %v", err)
 	}
-
 	snapshot.ConfigDigest = codebase.EffectiveConfig.IgnoreDigest
 	snapshotHash := snapshot.Hash()
 	if err = merkle.WriteSnapshot(codebase.MerkleSnapshotPath, snapshot); err != nil {
@@ -208,11 +185,9 @@ func TestGraphStateRecordsReadyAndReconcilesStaleGraph(t *testing.T) {
 	if recorded.GraphState != model.GraphStateReady {
 		t.Fatalf("GraphState = %q, want %q", recorded.GraphState, model.GraphStateReady)
 	}
-
 	if recorded.GraphSnapshotHash == "" {
 		t.Fatal("GraphSnapshotHash is empty, want hash after graph build")
 	}
-
 	if recorded.GraphSnapshotHash != snapshotHash {
 		t.Fatalf("GraphSnapshotHash = %q, want %q", recorded.GraphSnapshotHash, snapshotHash)
 	}
@@ -224,7 +199,6 @@ func TestGraphStateRecordsReadyAndReconcilesStaleGraph(t *testing.T) {
 	if err = manager.clearGraphCache(context.Background(), codebase.ID); err != nil {
 		t.Fatalf("clearGraphCache returned error: %v", err)
 	}
-
 	if !manager.shouldReconcileGraph(codebase.ID, snapshotHash, collectionPresencePresent) {
 		t.Fatal("shouldReconcileGraph returned false for stale graph, want true")
 	}
@@ -235,13 +209,8 @@ func TestGraphStateRecordsReadyAndReconcilesStaleGraph(t *testing.T) {
 	reconciled := manager.codebases[codebase.ID]
 	manager.mu.Unlock()
 	if reconciled.GraphState != model.GraphStateReady {
-		t.Fatalf(
-			"GraphState after reconcile = %q, want %q",
-			reconciled.GraphState,
-			model.GraphStateReady,
-		)
+		t.Fatalf("GraphState after reconcile = %q, want %q", reconciled.GraphState, model.GraphStateReady)
 	}
-
 	graphPath := filepath.Join(cfg.GraphDir, codebase.ID+".db")
 	if _, err = os.Stat(graphPath); err != nil {
 		t.Fatalf("Stat(%q) returned error after reconcile: %v", graphPath, err)
@@ -272,7 +241,6 @@ func TestClearGraphCacheRejectsNewOpenAndWaitsForActiveOperation(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "being cleared") {
 		t.Fatalf("graphEngine error = %v, want clear-in-progress error", err)
 	}
-
 	if _, statErr := os.Stat(graphPath); statErr != nil {
 		t.Fatalf("graph file was removed before active operation released: %v", statErr)
 	}
@@ -292,7 +260,6 @@ func TestClearGraphCacheRejectsNewOpenAndWaitsForActiveOperation(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("clearGraphCache did not finish after active operation released")
 	}
-
 	if _, statErr := os.Stat(graphPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("Stat(%q) error = %v, want os.ErrNotExist", graphPath, statErr)
 	}
@@ -303,15 +270,9 @@ func TestIndexGraphNonFatalReturnsOnCancelAndClearWaitsForWorker(t *testing.T) {
 	codebaseID := "graph-cancel"
 	entered := make(chan struct{})
 	releaseWorker := make(chan struct{})
-	manager.graphIndex = func(
-		ctx context.Context,
-		engine *cbm.Engine,
-		canonicalPath string,
-		mode string,
-	) error {
+	manager.graphIndex = func(ctx context.Context, engine *cbm.Engine, canonicalPath string, mode string) error {
 		close(entered)
 		<-releaseWorker
-
 		return nil
 	}
 
@@ -326,7 +287,6 @@ func TestIndexGraphNonFatalReturnsOnCancelAndClearWaitsForWorker(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("fake graph index did not start")
 	}
-
 	cancel()
 	select {
 	case err := <-result:
@@ -341,7 +301,6 @@ func TestIndexGraphNonFatalReturnsOnCancelAndClearWaitsForWorker(t *testing.T) {
 	if err := os.WriteFile(graphPath, []byte("graph"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
-
 	clearDone := make(chan error, 1)
 	go func() {
 		clearDone <- manager.clearGraphCache(context.Background(), codebaseID)
@@ -352,7 +311,6 @@ func TestIndexGraphNonFatalReturnsOnCancelAndClearWaitsForWorker(t *testing.T) {
 		t.Fatalf("clearGraphCache completed while fake graph index was blocked: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
-
 	close(releaseWorker)
 	select {
 	case err := <-clearDone:
@@ -362,7 +320,6 @@ func TestIndexGraphNonFatalReturnsOnCancelAndClearWaitsForWorker(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("clearGraphCache did not finish after fake graph index released")
 	}
-
 	if _, statErr := os.Stat(graphPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("Stat(%q) error = %v, want os.ErrNotExist", graphPath, statErr)
 	}
@@ -373,17 +330,14 @@ func TestMarshalGraphToolArgumentsAcceptsNull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalGraphToolArguments returned error: %v", err)
 	}
-
 	var args graphToolArguments
 	if err = json.Unmarshal([]byte(resultJSON), &args); err != nil {
 		t.Fatalf("Unmarshal returned error: %v", err)
 	}
-
 	var project string
 	if err = json.Unmarshal(args["project"], &project); err != nil {
 		t.Fatalf("project unmarshal returned error: %v", err)
 	}
-
 	if project != "project-id" {
 		t.Fatalf("project = %q, want project-id", project)
 	}
@@ -416,10 +370,7 @@ func TestUpdateGraphStateRecordsSuccessfulBuildTime(t *testing.T) {
 	untouched := manager.codebases[codebase.ID]
 	manager.mu.Unlock()
 	if !untouched.GraphUpdatedAt.IsZero() {
-		t.Fatalf(
-			"GraphUpdatedAt = %v, want zero before graph state update",
-			untouched.GraphUpdatedAt,
-		)
+		t.Fatalf("GraphUpdatedAt = %v, want zero before graph state update", untouched.GraphUpdatedAt)
 	}
 
 	manager.updateGraphState(context.Background(), codebase.ID, model.GraphStateReady, "ready-hash")
@@ -430,7 +381,6 @@ func TestUpdateGraphStateRecordsSuccessfulBuildTime(t *testing.T) {
 	if ready.GraphUpdatedAt.IsZero() {
 		t.Fatal("GraphUpdatedAt is zero after ready graph state update")
 	}
-
 	successfulBuildTime := ready.GraphUpdatedAt
 
 	manager.updateGraphState(context.Background(), codebase.ID, model.GraphStateStale, "")
@@ -439,13 +389,8 @@ func TestUpdateGraphStateRecordsSuccessfulBuildTime(t *testing.T) {
 	stale := manager.codebases[codebase.ID]
 	manager.mu.Unlock()
 	if !stale.GraphUpdatedAt.Equal(successfulBuildTime) {
-		t.Fatalf(
-			"GraphUpdatedAt = %v, want preserved successful build time %v",
-			stale.GraphUpdatedAt,
-			successfulBuildTime,
-		)
+		t.Fatalf("GraphUpdatedAt = %v, want preserved successful build time %v", stale.GraphUpdatedAt, successfulBuildTime)
 	}
-
 	if stale.GraphSnapshotHash != "" {
 		t.Fatalf("GraphSnapshotHash = %q, want empty", stale.GraphSnapshotHash)
 	}
@@ -460,11 +405,7 @@ func TestGraphDiagnosticUsesPlainDoctorMessages(t *testing.T) {
 	baseCodebase.MerkleSnapshotPath = manager.merklePath(baseCodebase.ID)
 	// Every case but the zero-file one describes a codebase that indexed files,
 	// which is what makes an absent checkpoint a loss worth reporting.
-	baseCodebase.LastSuccessfulRun = &model.IndexRunSummary{
-		IndexedFiles: 1,
-		TotalChunks:  1,
-		Status:       "completed",
-	}
+	baseCodebase.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 1, Status: "completed"}
 
 	captured, err := merkle.Capture(
 		context.Background(),
@@ -476,7 +417,6 @@ func TestGraphDiagnosticUsesPlainDoctorMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Capture returned error: %v", err)
 	}
-
 	// writeCompletedArtifacts stamps the run's config digest onto every snapshot
 	// it writes, so the stored shape here matches what a real run leaves behind.
 	snapshot := captured
@@ -566,62 +506,43 @@ func TestGraphDiagnosticUsesPlainDoctorMessages(t *testing.T) {
 	}
 
 	for _, testCase := range cases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				codebase := baseCodebase
-				codebase.GraphState = testCase.graphState
-				codebase.GraphSnapshotHash = testCase.graphHash
-				if testCase.zeroFileRun {
-					codebase.LastSuccessfulRun = &model.IndexRunSummary{
-						IndexedFiles: 0,
-						TotalChunks:  0,
-						Status:       "completed",
-					}
+		t.Run(testCase.name, func(t *testing.T) {
+			codebase := baseCodebase
+			codebase.GraphState = testCase.graphState
+			codebase.GraphSnapshotHash = testCase.graphHash
+			if testCase.zeroFileRun {
+				codebase.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 0, TotalChunks: 0, Status: "completed"}
+			}
+			if testCase.emptyKind {
+				codebase.Kind = ""
+			} else if testCase.codebaseKind != "" {
+				codebase.Kind = testCase.codebaseKind
+			}
+			if testCase.canonicalPath != "" {
+				codebase.CanonicalPath = testCase.canonicalPath
+			}
+			if err = os.Remove(codebase.MerkleSnapshotPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("Remove returned error: %v", err)
+			}
+			switch testCase.snapshotState {
+			case "current":
+				if err = merkle.WriteSnapshot(codebase.MerkleSnapshotPath, snapshot); err != nil {
+					t.Fatalf("WriteSnapshot returned error: %v", err)
 				}
+			case "unreadable":
+				if err = os.WriteFile(codebase.MerkleSnapshotPath, []byte("{"), 0o644); err != nil {
+					t.Fatalf("WriteFile returned error: %v", err)
+				}
+			case "missing":
+			default:
+				t.Fatalf("unknown snapshot state %q", testCase.snapshotState)
+			}
 
-				if testCase.emptyKind {
-					codebase.Kind = ""
-				} else if testCase.codebaseKind != "" {
-					codebase.Kind = testCase.codebaseKind
-				}
-
-				if testCase.canonicalPath != "" {
-					codebase.CanonicalPath = testCase.canonicalPath
-				}
-
-				if err = os.Remove(codebase.MerkleSnapshotPath); err != nil &&
-					!errors.Is(err, os.ErrNotExist) {
-					t.Fatalf("Remove returned error: %v", err)
-				}
-
-				switch testCase.snapshotState {
-				case "current":
-					if err = merkle.WriteSnapshot(
-						codebase.MerkleSnapshotPath,
-						snapshot,
-					); err != nil {
-						t.Fatalf("WriteSnapshot returned error: %v", err)
-					}
-				case "unreadable":
-					if err = os.WriteFile(
-						codebase.MerkleSnapshotPath,
-						[]byte("{"),
-						0o644,
-					); err != nil {
-						t.Fatalf("WriteFile returned error: %v", err)
-					}
-				case "missing":
-				default:
-					t.Fatalf("unknown snapshot state %q", testCase.snapshotState)
-				}
-
-				diagnostic := manager.graphDiagnostic(context.Background(), codebase)
-				if diagnostic != testCase.want {
-					t.Fatalf("graphDiagnostic = %q, want %q", diagnostic, testCase.want)
-				}
-			},
-		)
+			diagnostic := manager.graphDiagnostic(context.Background(), codebase)
+			if diagnostic != testCase.want {
+				t.Fatalf("graphDiagnostic = %q, want %q", diagnostic, testCase.want)
+			}
+		})
 	}
 }
 
@@ -656,10 +577,8 @@ func waitForGraphClearing(t *testing.T, manager *Manager, codebaseID string) {
 		if clearing {
 			return
 		}
-
 		time.Sleep(10 * time.Millisecond)
 	}
-
 	t.Fatal("graph cache did not enter clearing state")
 }
 
@@ -679,7 +598,6 @@ func (handler *recordingSlogHandler) Handle(ctx context.Context, record slog.Rec
 		handler.errors++
 		handler.mutex.Unlock()
 	}
-
 	return nil
 }
 
@@ -696,6 +614,5 @@ func (handler *recordingSlogHandler) WithGroup(name string) slog.Handler {
 func (handler *recordingSlogHandler) errorCount() int {
 	handler.mutex.Lock()
 	defer handler.mutex.Unlock()
-
 	return handler.errors
 }

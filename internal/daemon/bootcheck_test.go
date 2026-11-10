@@ -30,7 +30,6 @@ func indexedTestCodebase(t *testing.T, manager *Manager, repoPath string) model.
 	if err != nil {
 		t.Fatalf("EvalSymlinks returned error: %v", err)
 	}
-
 	codebase := newCodebaseRecord(canonical)
 	codebase.Status = model.CodebaseStatusIndexed
 	codebase.LastSuccessfulRun = &model.IndexRunSummary{
@@ -42,7 +41,6 @@ func indexedTestCodebase(t *testing.T, manager *Manager, repoPath string) model.
 	manager.mu.Lock()
 	manager.codebases[codebase.ID] = codebase
 	manager.mu.Unlock()
-
 	return codebase
 }
 
@@ -53,7 +51,6 @@ func indexedTestCodebase(t *testing.T, manager *Manager, repoPath string) model.
 func healthModeNow(manager *Manager) dependencyMode {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-
 	return manager.health.Mode
 }
 
@@ -61,36 +58,27 @@ func snapshotCollectionFiles(t *testing.T, root string) map[string][]byte {
 	t.Helper()
 
 	snapshot := make(map[string][]byte)
-	err := filepath.WalkDir(
-		root,
-		func(path string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-
-			if !entry.Type().IsRegular() {
-				return nil
-			}
-
-			relativePath, relativeErr := filepath.Rel(root, path)
-			if relativeErr != nil {
-				return relativeErr
-			}
-
-			content, readErr := os.ReadFile(path)
-			if readErr != nil {
-				return readErr
-			}
-
-			snapshot[relativePath] = content
-
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.Type().IsRegular() {
 			return nil
-		},
-	)
+		}
+		relativePath, relativeErr := filepath.Rel(root, path)
+		if relativeErr != nil {
+			return relativeErr
+		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		snapshot[relativePath] = content
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("snapshot collection files: %v", err)
 	}
-
 	return snapshot
 }
 
@@ -108,7 +96,6 @@ func TestBootSelfCheckLeavesLocalCollectionFilesUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create local vector store: %v", err)
 	}
-
 	manager.config.IndexBackend = config.IndexBackendLocal
 	manager.semantic = localStore
 
@@ -120,7 +107,6 @@ func TestBootSelfCheckLeavesLocalCollectionFilesUnchanged(t *testing.T) {
 	if err := os.MkdirAll(collectionPath, 0o700); err != nil {
 		t.Fatalf("create local collection directory: %v", err)
 	}
-
 	validRow := `{"id":"chunk_a","relativePath":"a.go","content":"a","contentVectorKey":"ka","vector":[1,0]}` + "\n"
 	tornRow := `{"id":"chunk_b","relativePath":"b.go","conte`
 	if err := os.WriteFile(
@@ -130,7 +116,6 @@ func TestBootSelfCheckLeavesLocalCollectionFilesUnchanged(t *testing.T) {
 	); err != nil {
 		t.Fatalf("write torn local metadata: %v", err)
 	}
-
 	if err := os.WriteFile(
 		filepath.Join(collectionPath, "index.usearch"),
 		[]byte("invalid index is sufficient because the probe must not open it"),
@@ -144,17 +129,11 @@ func TestBootSelfCheckLeavesLocalCollectionFilesUnchanged(t *testing.T) {
 	after := snapshotCollectionFiles(t, collectionPath)
 
 	if !reflect.DeepEqual(after, before) {
-		t.Fatalf(
-			"local collection files changed during boot check:\nbefore=%q\nafter=%q",
-			before,
-			after,
-		)
+		t.Fatalf("local collection files changed during boot check:\nbefore=%q\nafter=%q", before, after)
 	}
-
 	if err != nil {
 		t.Fatalf("runBootSelfCheck returned error for skipped local backend: %v", err)
 	}
-
 	if outcome != bootSelfCheckSkipped {
 		t.Fatalf("outcome = %q, want %q for local backend", outcome, bootSelfCheckSkipped)
 	}
@@ -192,16 +171,12 @@ func TestBootSelfCheckSkipsUninterruptibleInferenceAndLeavesSearchUsable(
 				bootCalls.Add(1)
 				close(bootEntered)
 				<-releaseBoot
-
 				return nil, errors.New("released blocked boot inference")
 			}
-
-			return []model.StoredChunk{
-				{
-					Content:      "later search",
-					RelativePath: "main.go",
-				},
-			}, nil
+			return []model.StoredChunk{{
+				Content:      "later search",
+				RelativePath: "main.go",
+			}}, nil
 		},
 	}
 
@@ -233,7 +208,6 @@ func TestBootSelfCheckSkipsUninterruptibleInferenceAndLeavesSearchUsable(
 		if searchErr == nil && len(outcome.Results) != 1 {
 			searchErr = errors.New("later search returned no result")
 		}
-
 		searchDone <- searchErr
 	}()
 
@@ -245,7 +219,6 @@ func TestBootSelfCheckSkipsUninterruptibleInferenceAndLeavesSearchUsable(
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("later daemon search blocked behind boot inference")
 	}
-
 	if got := bootCalls.Load(); got != 0 {
 		t.Fatalf("boot inference calls = %d, want 0", got)
 	}
@@ -259,56 +232,33 @@ func TestBootSelfCheckPassesAndClearsBootBanner(t *testing.T) {
 
 	queried := make(chan string, 1)
 	manager.semantic = &fakeSemantic{
-		search: func(
-			_ context.Context,
-			codebasePath string,
-			_ string,
-			limit int32,
-			_ []string,
-			_ string,
-		) (
-			[]model.StoredChunk,
-			error,
-		) {
+		search: func(_ context.Context, codebasePath string, _ string, limit int32, _ []string, _ string) ([]model.StoredChunk, error) {
 			queried <- codebasePath
 			if limit != bootSelfCheckLimit {
 				t.Errorf("self-check search limit = %d, want %d", limit, bootSelfCheckLimit)
 			}
-
 			return []model.StoredChunk{{Content: "package main", RelativePath: "main.go"}}, nil
 		},
 	}
 	manager.mu.Lock()
-	manager.health = dependencyHealth{
-		Mode:                dependencyStoreUnavailable,
-		Since:               clock.Now(),
-		StoreReachableAt:    time.Time{},
-		EmbedderReachableAt: time.Time{},
-	}
+	manager.health = dependencyHealth{Mode: dependencyStoreUnavailable, Since: clock.Now(), StoreReachableAt: time.Time{}, EmbedderReachableAt: time.Time{}}
 	manager.mu.Unlock()
 
 	outcome, err := manager.runBootSelfCheck(context.Background())
 	if err != nil {
 		t.Fatalf("runBootSelfCheck returned error: %v", err)
 	}
-
 	if outcome != bootSelfCheckPassed {
 		t.Fatalf("outcome = %q, want %q", outcome, bootSelfCheckPassed)
 	}
-
 	select {
 	case got := <-queried:
 		if got != codebase.CanonicalPath {
-			t.Fatalf(
-				"self-check queried %q, want the indexed codebase %q",
-				got,
-				codebase.CanonicalPath,
-			)
+			t.Fatalf("self-check queried %q, want the indexed codebase %q", got, codebase.CanonicalPath)
 		}
 	default:
 		t.Fatal("self-check ran no query; it must exercise the real read path")
 	}
-
 	if got := healthModeNow(manager); got != dependencyHealthy {
 		t.Fatalf("health mode = %q after a passing self-check, want %q", got, dependencyHealthy)
 	}
@@ -333,19 +283,13 @@ func TestBootSelfCheckLoadsColdCollectionAndProtectsSearch(t *testing.T) {
 					collectionName,
 				)
 			}
-
 			prepared = true
-
 			return nil
 		},
-		acquireCollection: func(_ context.Context, gotCollectionName string) (
-			semantic.CollectionLease,
-			error,
-		) {
+		acquireCollection: func(_ context.Context, gotCollectionName string) (semantic.CollectionLease, error) {
 			if !prepared {
 				return nil, errors.New("cold collection load started before preparation")
 			}
-
 			if gotCollectionName != collectionName {
 				return nil, fmt.Errorf(
 					"acquire collection = %q, want %q",
@@ -353,28 +297,19 @@ func TestBootSelfCheckLoadsColdCollectionAndProtectsSearch(t *testing.T) {
 					collectionName,
 				)
 			}
-
 			joinedLoad = true
 			protected = true
-
-			return fakeCollectionLease{
-				release: func() {
-					protected = false
-				},
-			}, nil
+			return fakeCollectionLease{release: func() {
+				protected = false
+			}}, nil
 		},
-		search: func(context.Context, string, string, int32, []string, string) (
-			[]model.StoredChunk,
-			error,
-		) {
+		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
 			if !joinedLoad {
 				return nil, errors.New("boot search ran before the cold load joined")
 			}
-
 			if !protected {
 				return nil, errors.New("boot search ran without residency protection")
 			}
-
 			return []model.StoredChunk{{Content: "package main", RelativePath: "main.go"}}, nil
 		},
 	}
@@ -383,11 +318,9 @@ func TestBootSelfCheckLoadsColdCollectionAndProtectsSearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runBootSelfCheck returned error: %v", err)
 	}
-
 	if outcome != bootSelfCheckPassed {
 		t.Fatalf("outcome = %q, want %q", outcome, bootSelfCheckPassed)
 	}
-
 	if protected {
 		t.Fatal("boot self-check retained its collection lease after search")
 	}
@@ -401,10 +334,7 @@ func TestBootSelfCheckFailureDegradesReadiness(t *testing.T) {
 	indexedTestCodebase(t, manager, repoPath)
 
 	manager.semantic = &fakeSemantic{
-		search: func(context.Context, string, string, int32, []string, string) (
-			[]model.StoredChunk,
-			error,
-		) {
+		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
 			return nil, semantic.ErrUnavailable
 		},
 	}
@@ -413,17 +343,11 @@ func TestBootSelfCheckFailureDegradesReadiness(t *testing.T) {
 	if outcome != bootSelfCheckFailed {
 		t.Fatalf("outcome = %q, want %q", outcome, bootSelfCheckFailed)
 	}
-
 	if !errors.Is(err, semantic.ErrUnavailable) {
 		t.Fatalf("runBootSelfCheck error = %v, want it to carry the store outage", err)
 	}
-
 	if got := healthModeNow(manager); got != dependencyStoreUnavailable {
-		t.Fatalf(
-			"health mode = %q after a failed self-check, want %q",
-			got,
-			dependencyStoreUnavailable,
-		)
+		t.Fatalf("health mode = %q after a failed self-check, want %q", got, dependencyStoreUnavailable)
 	}
 }
 
@@ -434,10 +358,7 @@ func TestBootSelfCheckReportsMissingCollection(t *testing.T) {
 	indexedTestCodebase(t, manager, repoPath)
 
 	manager.semantic = &fakeSemantic{
-		search: func(context.Context, string, string, int32, []string, string) (
-			[]model.StoredChunk,
-			error,
-		) {
+		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
 			return nil, semantic.ErrCollectionMissing
 		},
 	}
@@ -446,7 +367,6 @@ func TestBootSelfCheckReportsMissingCollection(t *testing.T) {
 	if outcome != bootSelfCheckFailed {
 		t.Fatalf("outcome = %q, want %q", outcome, bootSelfCheckFailed)
 	}
-
 	if !errors.Is(err, semantic.ErrCollectionMissing) {
 		t.Fatalf("runBootSelfCheck error = %v, want the missing-collection classification", err)
 	}
@@ -457,10 +377,7 @@ func TestBootSelfCheckReportsMissingCollection(t *testing.T) {
 func TestBootSelfCheckSkipsWithNothingIndexed(t *testing.T) {
 	manager, _, _ := newTestManager(t)
 	manager.semantic = &fakeSemantic{
-		search: func(context.Context, string, string, int32, []string, string) (
-			[]model.StoredChunk,
-			error,
-		) {
+		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
 			t.Error("self-check queried the store with no indexed codebase")
 			return nil, nil
 		},
@@ -470,17 +387,11 @@ func TestBootSelfCheckSkipsWithNothingIndexed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runBootSelfCheck returned error: %v", err)
 	}
-
 	if outcome != bootSelfCheckSkipped {
 		t.Fatalf("outcome = %q, want %q", outcome, bootSelfCheckSkipped)
 	}
-
 	if got := healthModeNow(manager); got != dependencyHealthy {
-		t.Fatalf(
-			"health mode = %q after a skipped self-check, want it untouched (%q)",
-			got,
-			dependencyHealthy,
-		)
+		t.Fatalf("health mode = %q after a skipped self-check, want it untouched (%q)", got, dependencyHealthy)
 	}
 }
 
@@ -495,16 +406,12 @@ func TestStartBootSelfCheckDoesNotBlockStartup(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	manager.bootSelfCheckDelay = time.Millisecond
 	manager.semantic = &fakeSemantic{
-		search: func(ctx context.Context, _ string, _ string, _ int32, _ []string, _ string) (
-			[]model.StoredChunk,
-			error,
-		) {
+		search: func(ctx context.Context, _ string, _ string, _ int32, _ []string, _ string) ([]model.StoredChunk, error) {
 			close(entered)
 			select {
 			case <-release:
 			case <-ctx.Done():
 			}
-
 			return nil, ctx.Err()
 		},
 	}
@@ -518,10 +425,7 @@ func TestStartBootSelfCheckDoesNotBlockStartup(t *testing.T) {
 	returnedAt <- clock.Now().Sub(startedAt)
 
 	if elapsed := <-returnedAt; elapsed > time.Second {
-		t.Fatalf(
-			"StartBootSelfCheck took %s to return; startup must not wait on the check",
-			elapsed,
-		)
+		t.Fatalf("StartBootSelfCheck took %s to return; startup must not wait on the check", elapsed)
 	}
 
 	select {
@@ -529,7 +433,6 @@ func TestStartBootSelfCheckDoesNotBlockStartup(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the background self-check never ran")
 	}
-
 	// The hung probe is still parked here, which is the point: startup already
 	// returned and the daemon would be serving.
 }
@@ -556,7 +459,6 @@ func TestBootSelfCheckRetriesFailureUntilReadinessRecovers(t *testing.T) {
 					errors.New("embedding endpoint is unavailable"),
 				)
 			}
-
 			return []model.StoredChunk{{Content: "healthy"}}, nil
 		},
 	}
@@ -569,12 +471,10 @@ func TestBootSelfCheckRetriesFailureUntilReadinessRecovers(t *testing.T) {
 	defer deadline.Stop()
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
-
 	for {
 		if attempts.Load() >= 2 && healthModeNow(manager) == dependencyHealthy {
 			return
 		}
-
 		select {
 		case <-deadline.C:
 			t.Fatalf(
@@ -614,27 +514,26 @@ func TestBootSelfCheckStopsAfterMaximumFailures(t *testing.T) {
 	outcome, err := manager.runBootSelfCheckSequence(context.Background(), 0)
 
 	if got := attempts.Load(); got != bootSelfCheckMaxAttempts {
-		t.Fatalf("boot attempts = %d, want terminal bound %d", got, bootSelfCheckMaxAttempts)
+		t.Fatalf(
+			"boot attempts = %d, want terminal bound %d",
+			got,
+			bootSelfCheckMaxAttempts,
+		)
 	}
-
 	if outcome != bootSelfCheckFailed {
 		t.Fatalf("final outcome = %q, want %q", outcome, bootSelfCheckFailed)
 	}
-
 	var exhaustedErr *bootSelfCheckExhaustedError
 	if !errors.As(err, &exhaustedErr) {
 		t.Fatalf("sequence error = %T %v, want bootSelfCheckExhaustedError", err, err)
 	}
-
 	if exhaustedErr.Attempts != bootSelfCheckMaxAttempts ||
 		exhaustedErr.Outcome != bootSelfCheckFailed {
 		t.Fatalf("terminal error = %+v, want maximum attempts and failed outcome", exhaustedErr)
 	}
-
 	if !errors.Is(err, dependencyErr) {
 		t.Fatalf("terminal error = %v, want the dependency failure as its cause", err)
 	}
-
 	if got := healthModeNow(manager); got != dependencyEmbedderUnreachable {
 		t.Fatalf(
 			"health mode = %q after terminal failure, want %q",
@@ -663,9 +562,10 @@ func TestBootSelfCheckStopsAfterMaximumSupersededPasses(t *testing.T) {
 		) ([]model.StoredChunk, error) {
 			attempts.Add(1)
 			manager.noteDependencyFailure(
-				adapterr.NewEmbedderBusy(errors.New("embedding endpoint remained at capacity")),
+				adapterr.NewEmbedderBusy(
+					errors.New("embedding endpoint remained at capacity"),
+				),
 			)
-
 			return []model.StoredChunk{{Content: "stale success"}}, nil
 		},
 	}
@@ -673,29 +573,35 @@ func TestBootSelfCheckStopsAfterMaximumSupersededPasses(t *testing.T) {
 	outcome, err := manager.runBootSelfCheckSequence(context.Background(), 0)
 
 	if got := attempts.Load(); got != bootSelfCheckMaxAttempts {
-		t.Fatalf("boot attempts = %d, want terminal bound %d", got, bootSelfCheckMaxAttempts)
+		t.Fatalf(
+			"boot attempts = %d, want terminal bound %d",
+			got,
+			bootSelfCheckMaxAttempts,
+		)
 	}
-
 	if outcome != bootSelfCheckSuperseded {
 		t.Fatalf("final outcome = %q, want %q", outcome, bootSelfCheckSuperseded)
 	}
-
 	var exhaustedErr *bootSelfCheckExhaustedError
 	if !errors.As(err, &exhaustedErr) {
 		t.Fatalf("sequence error = %T %v, want bootSelfCheckExhaustedError", err, err)
 	}
-
 	if exhaustedErr.Attempts != bootSelfCheckMaxAttempts ||
 		exhaustedErr.Outcome != bootSelfCheckSuperseded {
-		t.Fatalf("terminal error = %+v, want maximum attempts and superseded outcome", exhaustedErr)
+		t.Fatalf(
+			"terminal error = %+v, want maximum attempts and superseded outcome",
+			exhaustedErr,
+		)
 	}
-
 	if exhaustedErr.Cause != nil {
 		t.Fatalf("superseded terminal cause = %v, want nil", exhaustedErr.Cause)
 	}
-
 	if got := healthModeNow(manager); got != dependencyEmbedderBusy {
-		t.Fatalf("health mode = %q after superseded sequence, want %q", got, dependencyEmbedderBusy)
+		t.Fatalf(
+			"health mode = %q after superseded sequence, want %q",
+			got,
+			dependencyEmbedderBusy,
+		)
 	}
 }
 
@@ -718,7 +624,6 @@ func TestBootSelfCheckSuccessDoesNotClearNewerFailure(t *testing.T) {
 		) ([]model.StoredChunk, error) {
 			close(entered)
 			<-release
-
 			return []model.StoredChunk{{Content: "stale success"}}, nil
 		},
 	}
@@ -737,7 +642,6 @@ func TestBootSelfCheckSuccessDoesNotClearNewerFailure(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("runBootSelfCheck returned error: %v", err)
 	}
-
 	if got := healthModeNow(manager); got != dependencyEmbedderBusy {
 		t.Fatalf(
 			"health mode = %q after stale boot success, want newer %q failure preserved",
@@ -766,20 +670,13 @@ func TestBootSelfCheckTargetPicksMostRecentIndex(t *testing.T) {
 	for _, codebase := range []model.Codebase{older, newer, failed} {
 		manager.codebases[codebase.ID] = codebase
 	}
-
 	manager.mu.Unlock()
 
 	target, found := manager.bootSelfCheckTarget()
 	if !found {
 		t.Fatal("bootSelfCheckTarget found no indexed codebase")
 	}
-
 	if target.ID != newer.ID {
-		t.Fatalf(
-			"target = %q (%s), want the most recently indexed %q",
-			target.ID,
-			target.CanonicalPath,
-			newer.ID,
-		)
+		t.Fatalf("target = %q (%s), want the most recently indexed %q", target.ID, target.CanonicalPath, newer.ID)
 	}
 }

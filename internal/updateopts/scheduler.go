@@ -40,22 +40,16 @@ func RunApplyScheduler(ctx context.Context, overrides Overrides, stopForRelaunch
 			log.WarnContext(ctx, "scheduled update failed", "err", err)
 			continue
 		}
-
 		if applied {
 			if stopForRelaunch != nil {
 				stopForRelaunch()
 			}
-
 			return
 		}
 	}
 }
 
-func runScheduledApplyIteration(
-	ctx context.Context,
-	overrides Overrides,
-	log *slog.Logger,
-) (applied bool, err error) {
+func runScheduledApplyIteration(ctx context.Context, overrides Overrides, log *slog.Logger) (applied bool, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			log.ErrorContext(ctx, "update scheduler panic", "err", recovered)
@@ -63,7 +57,6 @@ func runScheduledApplyIteration(
 			err = nil
 		}
 	}()
-
 	return runScheduledApplyFunc(ctx, overrides, log)
 }
 
@@ -74,7 +67,6 @@ func nextUpdateDelay(overrides Overrides) time.Duration {
 	if err != nil {
 		return updateInitialDelay
 	}
-
 	state, err := selfupdate.LoadState(statePath)
 	if err == nil && !state.NextCheckAt.IsZero() {
 		delay := state.NextCheckAt.Sub(clock.Now())
@@ -82,7 +74,6 @@ func nextUpdateDelay(overrides Overrides) time.Duration {
 			return delay
 		}
 	}
-
 	return updateInitialDelay
 }
 
@@ -93,6 +84,5 @@ func runScheduledApply(ctx context.Context, overrides Overrides, log *slog.Logge
 		log.WarnContext(ctx, "scheduled update apply failed", "err", err)
 		return false, fmt.Errorf("scheduled update apply: %w", err)
 	}
-
 	return result.Applied, nil
 }

@@ -31,7 +31,6 @@ func (controller *collectionResidencyController) ResidencySnapshot() ResidencySn
 	if controller == nil {
 		return emptyResidencySnapshot()
 	}
-
 	controller.mutex.Lock()
 	defer controller.mutex.Unlock()
 
@@ -41,33 +40,24 @@ func (controller *collectionResidencyController) ResidencySnapshot() ResidencySn
 		if !entry.idleDeadline.IsZero() {
 			deadlineUnixMS = entry.idleDeadline.UnixMilli()
 		}
-
-		collections = append(
-			collections,
-			ResidencyCollectionSnapshot{
-				Collection:         entry.name,
-				State:              collectionResidencyStateName(entry.state),
-				Leases:             entry.leases,
-				Observations:       entry.observations,
-				Pins:               entry.pins,
-				TimerArmed:         entry.idleTimer != nil,
-				IdleDeadlineUnixMS: deadlineUnixMS,
-				IdleGeneration:     entry.idleGeneration,
-				Loading:            entry.load != nil,
-				Transitioning:      entry.activeTransition != nil,
-				Maintenance:        entry.maintenance,
-				Reconciliation:     entry.reconciliation,
-			},
-		)
+		collections = append(collections, ResidencyCollectionSnapshot{
+			Collection:         entry.name,
+			State:              collectionResidencyStateName(entry.state),
+			Leases:             entry.leases,
+			Observations:       entry.observations,
+			Pins:               entry.pins,
+			TimerArmed:         entry.idleTimer != nil,
+			IdleDeadlineUnixMS: deadlineUnixMS,
+			IdleGeneration:     entry.idleGeneration,
+			Loading:            entry.load != nil,
+			Transitioning:      entry.activeTransition != nil,
+			Maintenance:        entry.maintenance,
+			Reconciliation:     entry.reconciliation,
+		})
 	}
-
-	sort.Slice(
-		collections,
-		func(left int, right int) bool {
-			return collections[left].Collection < collections[right].Collection
-		},
-	)
-
+	sort.Slice(collections, func(left int, right int) bool {
+		return collections[left].Collection < collections[right].Collection
+	})
 	return ResidencySnapshot{
 		IdleTimeoutMS:            controller.config.idleTimeout.Milliseconds(),
 		ReconciliationGeneration: controller.reconciliationGeneration,
@@ -81,7 +71,6 @@ func (service *Service) ResidencySnapshot() ResidencySnapshot {
 	if service == nil {
 		return emptyResidencySnapshot()
 	}
-
 	return service.residency.ResidencySnapshot()
 }
 

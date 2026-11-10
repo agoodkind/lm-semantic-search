@@ -13,10 +13,7 @@ func TestCanonicalizePathRejectsEmpty(t *testing.T) {
 
 	for _, requested := range []string{"", "   ", "\t"} {
 		if _, err := canonicalizePath(requested); err == nil {
-			t.Fatalf(
-				"canonicalizePath(%q) returned nil error; an empty path must not resolve to the cwd",
-				requested,
-			)
+			t.Fatalf("canonicalizePath(%q) returned nil error; an empty path must not resolve to the cwd", requested)
 		}
 	}
 }
@@ -26,10 +23,7 @@ func TestCanonicalizePathRejectsRelative(t *testing.T) {
 
 	for _, requested := range []string{".", "..", "some/relative/dir", "./x"} {
 		if _, err := canonicalizePath(requested); err == nil {
-			t.Fatalf(
-				"canonicalizePath(%q) returned nil error; a relative path must not resolve against the daemon cwd",
-				requested,
-			)
+			t.Fatalf("canonicalizePath(%q) returned nil error; a relative path must not resolve against the daemon cwd", requested)
 		}
 	}
 }
@@ -66,37 +60,23 @@ func TestRequireNonEmptyReturnsInvalidArgument(t *testing.T) {
 		{"empty job id", "", "job_id", false},
 	}
 	for _, testCase := range cases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				t.Parallel()
-				err := requireNonEmpty(
-					context.Background(),
-					testCase.value,
-					testCase.argument,
-					testCase.pathLike,
-				)
-				if err == nil {
-					t.Fatal("expected an error for an empty required field")
-				}
-
-				if got := status.Code(err); got != codes.InvalidArgument {
-					t.Fatalf("status code = %v, want %v", got, codes.InvalidArgument)
-				}
-			},
-		)
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			err := requireNonEmpty(context.Background(), testCase.value, testCase.argument, testCase.pathLike)
+			if err == nil {
+				t.Fatal("expected an error for an empty required field")
+			}
+			if got := status.Code(err); got != codes.InvalidArgument {
+				t.Fatalf("status code = %v, want %v", got, codes.InvalidArgument)
+			}
+		})
 	}
 }
 
 func TestRequireNonEmptyAllowsValue(t *testing.T) {
 	t.Parallel()
 
-	if err := requireNonEmpty(
-		context.Background(),
-		"/Users/x/repo",
-		"absolutePath",
-		true,
-	); err != nil {
+	if err := requireNonEmpty(context.Background(), "/Users/x/repo", "absolutePath", true); err != nil {
 		t.Fatalf("requireNonEmpty rejected a valid value: %v", err)
 	}
 }

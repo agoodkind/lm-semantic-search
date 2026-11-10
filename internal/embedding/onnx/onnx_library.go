@@ -51,10 +51,7 @@ func LoadRuntimeLibrary() (RuntimeLibrary, error) {
 		slog.Error("read ONNX Runtime library info failed", "err", err)
 		return RuntimeLibrary{Path: "", Version: ""}, err
 	}
-	return RuntimeLibrary{
-		Path:    cErrorMessage(pathBuffer),
-		Version: cErrorMessage(versionBuffer),
-	}, nil
+	return RuntimeLibrary{Path: cErrorMessage(pathBuffer), Version: cErrorMessage(versionBuffer)}, nil
 }
 
 // Only NewProviderForModel and LoadRuntimeLibrary open the library. After a

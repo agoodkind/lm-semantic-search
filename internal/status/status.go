@@ -198,14 +198,8 @@ var displayRules = []displayRule{
 	{func(in Inputs) bool { return in.HasActiveJob }, DisplayPreparing},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusIndexing }, DisplayStale},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusPending }, DisplayPending},
-	{
-		func(in Inputs) bool { return in.Status == model.CodebaseStatusDiscovered },
-		DisplayDiscovered,
-	},
-	{
-		func(in Inputs) bool { return in.Status == model.CodebaseStatusQuarantined },
-		DisplayQuarantined,
-	},
+	{func(in Inputs) bool { return in.Status == model.CodebaseStatusDiscovered }, DisplayDiscovered},
+	{func(in Inputs) bool { return in.Status == model.CodebaseStatusQuarantined }, DisplayQuarantined},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusIndexed }, DisplayIndexed},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusStale }, DisplayStale},
 	{func(in Inputs) bool { return in.Status == model.CodebaseStatusFailed }, DisplayFailed},
@@ -219,7 +213,6 @@ func baseDisplay(in Inputs) Display {
 			return rule.then
 		}
 	}
-
 	return DisplayPreparing
 }
 
@@ -232,11 +225,9 @@ func baseDisplay(in Inputs) Display {
 func ResolveDisplay(in Inputs) Display {
 	base := baseDisplay(in)
 	interrupted := in.Status == model.CodebaseStatusIndexing && !in.HasActiveJob
-	if in.Dependency.Degraded() &&
-		(base == DisplayPreparing || base == DisplayIndexed || interrupted) {
+	if in.Dependency.Degraded() && (base == DisplayPreparing || base == DisplayIndexed || interrupted) {
 		return DisplayWaiting
 	}
-
 	if !in.Dependency.Degraded() && base == DisplayIndexed {
 		switch in.Collection {
 		case CollectionAbsent:
@@ -251,7 +242,6 @@ func ResolveDisplay(in Inputs) Display {
 			return base
 		}
 	}
-
 	return base
 }
 
@@ -263,14 +253,12 @@ func ResolveDisplay(in Inputs) Display {
 // wire `searchable` field and the display status both derive from one
 // resolution and cannot disagree.
 func ResolveSearchable(in Inputs) bool {
-	return in.SearchableEligible && !in.Dependency.Degraded() && !in.Collection.blocksSearch() &&
-		!in.Maintenance
+	return in.SearchableEligible && !in.Dependency.Degraded() && !in.Collection.blocksSearch() && !in.Maintenance
 }
 
 // Resolve turns the normalized inputs into the fully resolved surface.
 func Resolve(in Inputs) Surface {
 	display := ResolveDisplay(in)
-
 	return Surface{
 		Display:        display,
 		Glyph:          GlyphFor(display),
@@ -301,7 +289,6 @@ func JobStateLabelFor(state model.JobState) string {
 	if word, ok := jobStateWordByState[state]; ok {
 		return word
 	}
-
 	return string(state)
 }
 
@@ -363,21 +350,17 @@ func ResolveJob(in JobInputs) JobSurface {
 	if in.Retryable {
 		tags = append(tags, "retryable")
 	}
-
 	if superseded {
 		tags = append(tags, "superseded by "+in.SupersededByJobID)
 	}
-
 	errorLine := ""
 	if in.ErrorMessage != "" && (!in.Dependency.Degraded() || !in.Retryable) {
 		errorLine = in.ErrorMessage
 	}
-
 	supersededBy := ""
 	if superseded {
 		supersededBy = in.SupersededByJobID
 	}
-
 	return JobSurface{
 		StateLabel:        strings.Join(tags, ", "),
 		ErrorLine:         errorLine,

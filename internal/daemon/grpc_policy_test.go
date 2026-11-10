@@ -17,7 +17,6 @@ func TestStartIndexSchedulingPolicyPersistsInitialPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath: %v", err)
 	}
-
 	discovered := newCodebaseRecord(canonicalPath)
 	discovered.Status = model.CodebaseStatusDiscovered
 	discovered.PolicyPendingInitialization = true
@@ -27,24 +26,20 @@ func TestStartIndexSchedulingPolicyPersistsInitialPolicy(t *testing.T) {
 		manager.mu.Unlock()
 		t.Fatalf("saveLocked: %v", err)
 	}
-
 	manager.mu.Unlock()
 	server := NewGRPCServer(manager, nil)
 	priority := pb.SchedulingPriority_SCHEDULING_PRIORITY_HIGH
 	quiet := true
 	idleAfterSeconds := int32(600)
 
-	response, err := server.StartIndex(
-		context.Background(),
-		&pb.StartIndexRequest{
-			Path: repoPath,
-			SchedulingPolicy: &pb.SchedulingPolicyPatch{
-				Priority:         &priority,
-				Quiet:            &quiet,
-				IdleAfterSeconds: &idleAfterSeconds,
-			},
+	response, err := server.StartIndex(context.Background(), &pb.StartIndexRequest{
+		Path: repoPath,
+		SchedulingPolicy: &pb.SchedulingPolicyPatch{
+			Priority:         &priority,
+			Quiet:            &quiet,
+			IdleAfterSeconds: &idleAfterSeconds,
 		},
-	)
+	})
 	if err != nil {
 		t.Fatalf("StartIndex: %v", err)
 	}
@@ -59,14 +54,8 @@ func TestStartIndexSchedulingPolicyPersistsInitialPolicy(t *testing.T) {
 		IdleAfterSeconds: 600,
 	}
 	if codebase.SchedulingPolicy != want || codebase.PolicyPendingInitialization {
-		t.Fatalf(
-			"stored policy = %+v pending=%v, want %+v and false",
-			codebase.SchedulingPolicy,
-			codebase.PolicyPendingInitialization,
-			want,
-		)
+		t.Fatalf("stored policy = %+v pending=%v, want %+v and false", codebase.SchedulingPolicy, codebase.PolicyPendingInitialization, want)
 	}
-
 	if job.EffectiveSchedulingPolicy != want {
 		t.Fatalf("effective policy = %+v, want %+v", job.EffectiveSchedulingPolicy, want)
 	}
@@ -78,7 +67,6 @@ func TestSyncIndexSchedulingPolicyIsOneRunOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath: %v", err)
 	}
-
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	codebase.EffectiveConfig = defaultIndexConfig()
@@ -88,39 +76,28 @@ func TestSyncIndexSchedulingPolicyIsOneRunOverride(t *testing.T) {
 		manager.mu.Unlock()
 		t.Fatalf("saveLocked: %v", err)
 	}
-
 	manager.mu.Unlock()
 
 	server := NewGRPCServer(manager, nil)
 	priority := pb.SchedulingPriority_SCHEDULING_PRIORITY_LOW
-	response, err := server.SyncIndex(
-		context.Background(),
-		&pb.SyncIndexRequest{
-			Path: repoPath,
-			SchedulingPolicy: &pb.SchedulingPolicyPatch{
-				Priority: &priority,
-			},
+	response, err := server.SyncIndex(context.Background(), &pb.SyncIndexRequest{
+		Path: repoPath,
+		SchedulingPolicy: &pb.SchedulingPolicyPatch{
+			Priority: &priority,
 		},
-	)
+	})
 	if err != nil {
 		t.Fatalf("SyncIndex: %v", err)
 	}
-
 	job, found := manager.GetJob(response.GetJobId())
 	if !found {
 		t.Fatalf("GetJob(%q) did not find the sync job", response.GetJobId())
 	}
-
 	if job.EffectiveSchedulingPolicy.Priority != model.JobPriorityLow ||
 		job.SchedulingOverride.Priority == nil ||
 		*job.SchedulingOverride.Priority != model.JobPriorityLow {
-		t.Fatalf(
-			"sync job policy = %+v override=%+v",
-			job.EffectiveSchedulingPolicy,
-			job.SchedulingOverride,
-		)
+		t.Fatalf("sync job policy = %+v override=%+v", job.EffectiveSchedulingPolicy, job.SchedulingOverride)
 	}
-
 	manager.mu.Lock()
 	stored := manager.codebases[codebase.ID].SchedulingPolicy
 	manager.mu.Unlock()
@@ -153,7 +130,6 @@ func TestUpdateCodebasePolicyRPCReturnsUpdatedCodebase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath: %v", err)
 	}
-
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	codebase.SchedulingPolicy.Quiet = true
@@ -163,7 +139,6 @@ func TestUpdateCodebasePolicyRPCReturnsUpdatedCodebase(t *testing.T) {
 		manager.mu.Unlock()
 		t.Fatalf("saveLocked: %v", err)
 	}
-
 	manager.mu.Unlock()
 
 	quiet := false
@@ -178,25 +153,21 @@ func TestUpdateCodebasePolicyRPCReturnsUpdatedCodebase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateCodebasePolicy: %v", err)
 	}
-
 	if response.GetCodebase().GetSchedulingPolicy().GetQuiet() {
 		t.Fatalf("updated quiet = true, want false")
 	}
-
 	if response.GetCodebase().GetSchedulingPolicy().GetPriority() !=
 		pb.SchedulingPriority_SCHEDULING_PRIORITY_NORMAL {
-		t.Fatalf(
-			"updated priority = %v, want normal",
-			response.GetCodebase().GetSchedulingPolicy().GetPriority(),
-		)
+		t.Fatalf("updated priority = %v, want normal", response.GetCodebase().GetSchedulingPolicy().GetPriority())
 	}
-
 	if response.GetCodebase().GetDisplayStatus() == "" ||
 		response.GetCodebase().GetGlyphToken() == "" ||
 		response.GetCodebase().GetStatusLabel() == "" {
-		t.Fatalf("updated codebase lacks shared display tokens: %+v", response.GetCodebase())
+		t.Fatalf(
+			"updated codebase lacks shared display tokens: %+v",
+			response.GetCodebase(),
+		)
 	}
-
 	if strings.TrimSpace(response.GetDisplayText()) == "" {
 		t.Fatal("display text is empty")
 	}

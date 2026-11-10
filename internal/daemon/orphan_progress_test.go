@@ -22,47 +22,25 @@ func TestJobProgressIsJournaledAndThrottled(t *testing.T) {
 
 	manager, _, repoPath := newTestManager(t)
 	cfg := defaultIndexConfig()
-	job := newQueuedJob(
-		"cb-progress",
-		repoPath,
-		repoPath,
-		testClientInfo(),
-		string(jobOperationSync),
-		false,
-		cfg,
-		emptyAdmissionBudget,
-		clock.Now(),
-	)
+	job := newQueuedJob("cb-progress", repoPath, repoPath, testClientInfo(), string(jobOperationSync), false, cfg, emptyAdmissionBudget, clock.Now())
 
 	manager.mu.Lock()
 	manager.jobs[job.ID] = job
 	manager.mu.Unlock()
 
 	// First progress update journals immediately (no prior journal time).
-	manager.updateJobProgress(
-		job.ID,
-		indexer.Progress{Phase: "Reindexing", FilesTotal: 100, FilesProcessed: 42},
-		"file",
-	)
+	manager.updateJobProgress(job.ID, indexer.Progress{Phase: "Reindexing", FilesTotal: 100, FilesProcessed: 42}, "file")
 	// Second update inside the throttle interval stays in memory only.
-	manager.updateJobProgress(
-		job.ID,
-		indexer.Progress{Phase: "Reindexing", FilesTotal: 100, FilesProcessed: 99},
-		"file",
-	)
+	manager.updateJobProgress(job.ID, indexer.Progress{Phase: "Reindexing", FilesTotal: 100, FilesProcessed: 99}, "file")
 	manager.closeJobJournal()
 
 	loaded, err := store.ReadJobEvents(manager.config.JobsPath)
 	if err != nil {
 		t.Fatalf("ReadJobEvents returned error: %v", err)
 	}
-
 	persisted := loaded[job.ID].Progress.FilesProcessed
 	if persisted != 42 {
-		t.Fatalf(
-			"journaled FilesProcessed = %d, want 42 (first update journals, second is throttled)",
-			persisted,
-		)
+		t.Fatalf("journaled FilesProcessed = %d, want 42 (first update journals, second is throttled)", persisted)
 	}
 
 	manager.mu.Lock()
@@ -93,11 +71,9 @@ func TestReconcileJournalPreservesProgress(t *testing.T) {
 	if recovered.State != model.JobStateCancelled {
 		t.Fatalf("orphan job state = %q, want cancelled", recovered.State)
 	}
-
 	if recovered.Progress.FilesProcessed != 42 {
 		t.Fatalf("orphan FilesProcessed = %d, want 42 preserved", recovered.Progress.FilesProcessed)
 	}
-
 	if recovered.Progress.ChunksEmbedded != 7 {
 		t.Fatalf("orphan ChunksEmbedded = %d, want 7 preserved", recovered.Progress.ChunksEmbedded)
 	}
@@ -132,7 +108,6 @@ func TestUpdateJobRunningPersistsIndexingForRestart(t *testing.T) {
 		manager.mu.Unlock()
 		t.Fatalf("saveLocked returned error: %v", err)
 	}
-
 	manager.mu.Unlock()
 
 	if err := manager.updateJobRunning(job); err != nil {
@@ -143,17 +118,11 @@ func TestUpdateJobRunningPersistsIndexingForRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadRegistry returned error: %v", err)
 	}
-
 	if len(registry.Codebases) != 1 {
 		t.Fatalf("registry codebases = %d, want 1", len(registry.Codebases))
 	}
-
 	if registry.Codebases[0].Status != model.CodebaseStatusIndexing {
-		t.Fatalf(
-			"persisted status = %q, want %q",
-			registry.Codebases[0].Status,
-			model.CodebaseStatusIndexing,
-		)
+		t.Fatalf("persisted status = %q, want %q", registry.Codebases[0].Status, model.CodebaseStatusIndexing)
 	}
 }
 
@@ -184,12 +153,10 @@ func TestUpdateJobRunningDoesNotJournalRunningAfterRegistryFailure(t *testing.T)
 		manager.mu.Unlock()
 		t.Fatalf("saveLocked returned error: %v", err)
 	}
-
 	if err := manager.appendJobLocked("start_index", job); err != nil {
 		manager.mu.Unlock()
 		t.Fatalf("appendJobLocked returned error: %v", err)
 	}
-
 	manager.config.RegistryPath = t.TempDir()
 	manager.mu.Unlock()
 
@@ -197,18 +164,15 @@ func TestUpdateJobRunningDoesNotJournalRunningAfterRegistryFailure(t *testing.T)
 	if err == nil {
 		t.Fatal("updateJobRunning returned nil error after registry failure")
 	}
-
 	if !strings.Contains(err.Error(), "persist running codebase state") {
 		t.Fatalf("updateJobRunning error = %q, want registry persistence failure", err)
 	}
-
 	manager.closeJobJournal()
 
 	jobs, err := store.ReadJobEvents(cfg.JobsPath)
 	if err != nil {
 		t.Fatalf("ReadJobEvents returned error: %v", err)
 	}
-
 	if jobs[job.ID].State != model.JobStateQueued {
 		t.Fatalf("journaled state = %q, want %q", jobs[job.ID].State, model.JobStateQueued)
 	}
@@ -240,18 +204,14 @@ func TestUpdateJobRunningPreservesResumableIndexingAfterJournalFailure(t *testin
 		manager.mu.Unlock()
 		t.Fatalf("saveLocked returned error: %v", err)
 	}
-
 	manager.mu.Unlock()
 	manager.jobJournal.close()
 	manager.jobJournal = nil
-	manager.appendJobEvent = func(string, model.JobEvent) error {
-		return errors.New("journal unavailable")
-	}
+	manager.appendJobEvent = func(string, model.JobEvent) error { return errors.New("journal unavailable") }
 
 	if err := manager.updateJobRunning(job); err == nil {
 		t.Fatal("updateJobRunning returned nil after journal failure")
 	}
-
 	manager.mu.Lock()
 	gotJob := manager.jobs[job.ID]
 	gotCodebase := manager.codebases[job.CodebaseID]
@@ -259,26 +219,15 @@ func TestUpdateJobRunningPreservesResumableIndexingAfterJournalFailure(t *testin
 	if gotJob.State != model.JobStateQueued {
 		t.Fatalf("in-memory job state = %q, want %q", gotJob.State, model.JobStateQueued)
 	}
-
 	if gotCodebase.Status != model.CodebaseStatusIndexing {
-		t.Fatalf(
-			"in-memory codebase status = %q, want %q",
-			gotCodebase.Status,
-			model.CodebaseStatusIndexing,
-		)
+		t.Fatalf("in-memory codebase status = %q, want %q", gotCodebase.Status, model.CodebaseStatusIndexing)
 	}
-
 	registry, err := store.ReadRegistry(cfg.RegistryPath)
 	if err != nil {
 		t.Fatalf("ReadRegistry returned error: %v", err)
 	}
-
-	if len(registry.Codebases) != 1 ||
-		registry.Codebases[0].Status != model.CodebaseStatusIndexing {
-		t.Fatalf(
-			"registry after journal failure = %+v, want one resumable indexing codebase",
-			registry.Codebases,
-		)
+	if len(registry.Codebases) != 1 || registry.Codebases[0].Status != model.CodebaseStatusIndexing {
+		t.Fatalf("registry after journal failure = %+v, want one resumable indexing codebase", registry.Codebases)
 	}
 }
 
@@ -308,48 +257,33 @@ func TestRunJobKeepsFirstBuildQueuedWhenRunningStateCannotPersist(t *testing.T) 
 		manager.mu.Unlock()
 		t.Fatalf("saveLocked returned error: %v", err)
 	}
-
 	manager.mu.Unlock()
 	manager.jobJournal.close()
 	manager.jobJournal = nil
-	manager.appendJobEvent = func(string, model.JobEvent) error {
-		return errors.New("journal unavailable")
-	}
+	manager.appendJobEvent = func(string, model.JobEvent) error { return errors.New("journal unavailable") }
 	backendCalled := false
-	manager.runner = fakeRunner{
-		index: func(context.Context, string, model.IndexConfig, func(indexer.Progress)) (
-			indexer.Result,
-			error,
-		) {
-			backendCalled = true
-			return indexer.Result{}, nil
-		},
-	}
+	manager.runner = fakeRunner{index: func(context.Context, string, model.IndexConfig, func(indexer.Progress)) (indexer.Result, error) {
+		backendCalled = true
+		return indexer.Result{}, nil
+	}}
 
 	manager.runJob(context.Background(), job.ID)
 
 	if backendCalled {
 		t.Fatal("runJob reached the backend after running state persistence failed")
 	}
-
 	gotJob, found := manager.GetJob(job.ID)
 	if !found {
 		t.Fatalf("GetJob(%q) did not find queued job", job.ID)
 	}
-
 	if gotJob.State != model.JobStateQueued {
 		t.Fatalf("job state = %q, want %q", gotJob.State, model.JobStateQueued)
 	}
-
 	manager.mu.Lock()
 	gotCodebase := manager.codebases[job.CodebaseID]
 	manager.mu.Unlock()
 	if gotCodebase.Status != model.CodebaseStatusIndexing || gotCodebase.ActiveJobID != job.ID {
-		t.Fatalf(
-			"codebase after failed running persistence = %+v, want resumable indexing with active job %q",
-			gotCodebase,
-			job.ID,
-		)
+		t.Fatalf("codebase after failed running persistence = %+v, want resumable indexing with active job %q", gotCodebase, job.ID)
 	}
 }
 
@@ -379,7 +313,6 @@ func TestRunJobAsyncRetriesRunningStatePersistence(t *testing.T) {
 		manager.mu.Unlock()
 		t.Fatalf("saveLocked returned error: %v", err)
 	}
-
 	manager.mu.Unlock()
 	manager.jobJournal.close()
 	manager.jobJournal = nil
@@ -391,33 +324,24 @@ func TestRunJobAsyncRetriesRunningStatePersistence(t *testing.T) {
 			if runningEvents.Add(1) == 1 {
 				return errors.New("journal temporarily unavailable")
 			}
-
 			select {
 			case <-retried:
 			default:
 				close(retried)
 			}
 		}
-
 		return originalAppend(path, event)
 	}
 	enteredBackend := make(chan struct{})
-	manager.runner = fakeRunner{
-		indexOne: func(ctx context.Context, _ string, _ string, _ model.IndexConfig) (
-			indexer.OneFileResult,
-			error,
-		) {
-			select {
-			case <-enteredBackend:
-			default:
-				close(enteredBackend)
-			}
-
-			<-ctx.Done()
-
-			return indexer.OneFileResult{}, ctx.Err()
-		},
-	}
+	manager.runner = fakeRunner{indexOne: func(ctx context.Context, _ string, _ string, _ model.IndexConfig) (indexer.OneFileResult, error) {
+		select {
+		case <-enteredBackend:
+		default:
+			close(enteredBackend)
+		}
+		<-ctx.Done()
+		return indexer.OneFileResult{}, ctx.Err()
+	}}
 	manager.runJobAsync(context.Background(), job.ID)
 	manager.mu.Lock()
 	done := manager.done[job.ID]
@@ -436,20 +360,17 @@ func TestRunJobAsyncRetriesRunningStatePersistence(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("runJobAsync did not retry running-state persistence")
 	}
-
 	select {
 	case <-enteredBackend:
 	case <-time.After(3 * time.Second):
 		t.Fatal("retried job did not reach the backend")
 	}
-
 	manager.mu.Lock()
 	stop := manager.cancels[job.ID]
 	manager.mu.Unlock()
 	if stop == nil {
 		t.Fatal("retried job had no cancellation handle")
 	}
-
 	stop()
 	select {
 	case <-done:
@@ -484,7 +405,6 @@ func TestRunJobAsyncStopsAfterPersistentRunningStateFailure(t *testing.T) {
 		manager.mu.Unlock()
 		t.Fatalf("saveLocked returned error: %v", err)
 	}
-
 	manager.mu.Unlock()
 	manager.jobJournal.close()
 	manager.jobJournal = nil
@@ -494,19 +414,13 @@ func TestRunJobAsyncStopsAfterPersistentRunningStateFailure(t *testing.T) {
 			runningEvents.Add(1)
 			return errors.New("journal unavailable")
 		}
-
 		return nil
 	}
 	backendCalled := false
-	manager.runner = fakeRunner{
-		index: func(context.Context, string, model.IndexConfig, func(indexer.Progress)) (
-			indexer.Result,
-			error,
-		) {
-			backendCalled = true
-			return indexer.Result{}, nil
-		},
-	}
+	manager.runner = fakeRunner{index: func(context.Context, string, model.IndexConfig, func(indexer.Progress)) (indexer.Result, error) {
+		backendCalled = true
+		return indexer.Result{}, nil
+	}}
 
 	manager.runJobAsync(context.Background(), job.ID)
 	manager.mu.Lock()
@@ -521,16 +435,13 @@ func TestRunJobAsyncStopsAfterPersistentRunningStateFailure(t *testing.T) {
 	if backendCalled {
 		t.Fatal("persistently failing job reached the backend")
 	}
-
 	if got := runningEvents.Load(); got != jobStartRetryAttempts {
 		t.Fatalf("job_running attempts = %d, want %d", got, jobStartRetryAttempts)
 	}
-
 	gotJob, found := manager.GetJob(job.ID)
 	if !found || gotJob.State != model.JobStateCancelled {
 		t.Fatalf("job after exhausted retries = %+v found=%v, want cancelled", gotJob, found)
 	}
-
 	manager.mu.Lock()
 	gotCodebase := manager.codebases[job.CodebaseID]
 	_, hasCancel := manager.cancels[job.ID]
@@ -539,11 +450,9 @@ func TestRunJobAsyncStopsAfterPersistentRunningStateFailure(t *testing.T) {
 	if gotCodebase.ActiveJobID != "" {
 		t.Fatalf("codebase active job = %q, want empty", gotCodebase.ActiveJobID)
 	}
-
 	if gotCodebase.Status != model.CodebaseStatusNotIndexed {
 		t.Fatalf("codebase status = %q, want not indexed after exhausted start", gotCodebase.Status)
 	}
-
 	if hasCancel || hasDone {
 		t.Fatalf("exhausted retry left cancel=%v done=%v, want both removed", hasCancel, hasDone)
 	}
@@ -576,12 +485,10 @@ func TestUpdateJobRunningRejectsStalePendingOwner(t *testing.T) {
 	if err := manager.updateJobRunning(job); err == nil {
 		t.Fatal("updateJobRunning accepted stale pending ownership")
 	}
-
 	gotJob, found := manager.GetJob(job.ID)
 	if !found || gotJob.State != model.JobStateQueued {
 		t.Fatalf("stale job after rejection = %+v found=%v, want queued", gotJob, found)
 	}
-
 	manager.mu.Lock()
 	gotCodebase := manager.codebases[job.CodebaseID]
 	manager.mu.Unlock()
@@ -617,17 +524,14 @@ func TestUpdateJobRunningRejectsStaleIndexingOwner(t *testing.T) {
 	if err := manager.updateJobRunning(job); err == nil {
 		t.Fatal("updateJobRunning accepted stale indexing ownership")
 	}
-
 	gotJob, found := manager.GetJob(job.ID)
 	if !found || gotJob.State != model.JobStateQueued {
 		t.Fatalf("stale job after rejection = %+v found=%v, want queued", gotJob, found)
 	}
-
 	manager.mu.Lock()
 	gotCodebase := manager.codebases[job.CodebaseID]
 	manager.mu.Unlock()
-	if gotCodebase.Status != model.CodebaseStatusIndexing ||
-		gotCodebase.ActiveJobID != "newer-job" {
+	if gotCodebase.Status != model.CodebaseStatusIndexing || gotCodebase.ActiveJobID != "newer-job" {
 		t.Fatalf("codebase after stale job = %+v, want newer indexing owner", gotCodebase)
 	}
 }
@@ -659,7 +563,6 @@ func TestUpdateJobRunningRejectsTerminalCodebaseStatus(t *testing.T) {
 	if err := manager.updateJobRunning(job); err == nil {
 		t.Fatal("updateJobRunning accepted an indexed codebase")
 	}
-
 	gotJob, found := manager.GetJob(job.ID)
 	if !found || gotJob.State != model.JobStateQueued {
 		t.Fatalf("job after invalid status = %+v found=%v, want queued", gotJob, found)
@@ -705,20 +608,14 @@ func TestUpdateJobCancelledDoesNotMutateNewerOwner(t *testing.T) {
 	if !found || gotJob.State != model.JobStateCancelled {
 		t.Fatalf("stale job after cancellation = %+v found=%v, want cancelled", gotJob, found)
 	}
-
 	manager.mu.Lock()
 	gotCodebase := manager.codebases[codebase.ID]
 	manager.mu.Unlock()
 	if gotCodebase.Status != codebase.Status ||
 		gotCodebase.ActiveJobID != codebase.ActiveJobID ||
 		!gotCodebase.UpdatedAt.Equal(codebase.UpdatedAt) {
-		t.Fatalf(
-			"newer codebase after stale cancellation = %+v, want owner state %+v",
-			gotCodebase,
-			codebase,
-		)
+		t.Fatalf("newer codebase after stale cancellation = %+v, want owner state %+v", gotCodebase, codebase)
 	}
-
 	if stopped.Load() {
 		t.Fatal("stale cancellation notified IndexStopped for the newer owner")
 	}
@@ -763,7 +660,6 @@ func TestUpdateJobRunningRejectsMissingCodebase(t *testing.T) {
 	if err := manager.updateJobRunning(job); err == nil {
 		t.Fatal("updateJobRunning accepted a missing codebase")
 	}
-
 	gotJob, found := manager.GetJob(job.ID)
 	if !found || gotJob.State != model.JobStateQueued {
 		t.Fatalf("orphaned job after rejection = %+v found=%v, want queued", gotJob, found)
@@ -805,7 +701,6 @@ func TestUpdateJobRunningRevalidatesIndexingRegistryBeforeJournal(t *testing.T) 
 	if err := manager.updateJobRunning(job); err == nil {
 		t.Fatal("updateJobRunning accepted an indexing registry persistence failure")
 	}
-
 	if journalCalled {
 		t.Fatal("updateJobRunning journaled running before revalidating the indexing registry")
 	}

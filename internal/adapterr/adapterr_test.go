@@ -20,7 +20,6 @@ func TestAdapterErrorIsMatchesSameClass(t *testing.T) {
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("errors.Is should match by class")
 	}
-
 	other := &AdapterError{Class: ClassMilvusUnavailable}
 	if errors.Is(err, other) {
 		t.Fatalf("errors.Is should not match different class")
@@ -60,41 +59,30 @@ func TestRespondKnownReturnsHint(t *testing.T) {
 	if code != codes.Unavailable {
 		t.Fatalf("code = %v, want Unavailable", code)
 	}
-
 	if !strings.Contains(msg, "embedding endpoint") {
 		t.Fatalf("message should mention embedding endpoint, got %q", msg)
 	}
-
 	if !strings.Contains(msg, "OPENAI_BASE_URL") {
 		t.Fatalf("message should include hint, got %q", msg)
 	}
 }
 
 func TestRespondUnknownSanitizesAndReferencesTrace(t *testing.T) {
-	corr := correlation.New("req-1").WithIdentityAttributes(correlation.IdentityAttribute{
-		Key:   "job_id",
-		Value: "job-xyz",
-	})
+	corr := correlation.New("req-1").WithIdentityAttributes(
+		correlation.IdentityAttribute{Key: "job_id", Value: "job-xyz"},
+	)
 	ctx := correlation.WithContext(context.Background(), corr)
 
 	code, msg := Respond(ctx, errors.New("kernel panic: stack overflow"))
 	if code != codes.Internal {
 		t.Fatalf("code = %v, want Internal", code)
 	}
-
 	if strings.Contains(msg, "stack overflow") {
 		t.Fatalf("unknown message should be sanitized, got %q", msg)
 	}
-
 	if !strings.HasPrefix(msg, "internal error") || !strings.Contains(msg, string(corr.TraceID)) {
-		t.Fatalf(
-			"message should start with %q and contain the trace id %q, got %q",
-			"internal error",
-			corr.TraceID,
-			msg,
-		)
+		t.Fatalf("message should start with %q and contain the trace id %q, got %q", "internal error", corr.TraceID, msg)
 	}
-
 	if strings.Contains(msg, "trace_id=") || strings.Contains(msg, correlation.HeaderMarker) {
 		t.Fatalf("message should not contain the correlation header, got %q", msg)
 	}
@@ -119,27 +107,23 @@ func TestRespondPreservesCallerCancellationAndDeadline(t *testing.T) {
 		{name: "deadline", err: context.DeadlineExceeded, want: codes.DeadlineExceeded},
 	}
 	for _, test := range tests {
-		t.Run(
-			test.name,
-			func(t *testing.T) {
-				t.Parallel()
-				ctx, cancel := context.WithCancelCause(context.Background())
-				cancel(test.err)
-				if errors.Is(test.err, context.DeadlineExceeded) {
-					deadlineCtx, deadlineCancel := context.WithDeadline(
-						context.Background(),
-						time.Now().Add(-time.Second),
-					)
-					defer deadlineCancel()
-					ctx = deadlineCtx
-				}
-
-				code, _ := Respond(ctx, fmt.Errorf("acquire collection: %w", test.err))
-				if code != test.want {
-					t.Fatalf("Respond code = %v, want %v", code, test.want)
-				}
-			},
-		)
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancelCause(context.Background())
+			cancel(test.err)
+			if errors.Is(test.err, context.DeadlineExceeded) {
+				deadlineCtx, deadlineCancel := context.WithDeadline(
+					context.Background(),
+					time.Now().Add(-time.Second),
+				)
+				defer deadlineCancel()
+				ctx = deadlineCtx
+			}
+			code, _ := Respond(ctx, fmt.Errorf("acquire collection: %w", test.err))
+			if code != test.want {
+				t.Fatalf("Respond code = %v, want %v", code, test.want)
+			}
+		})
 	}
 }
 
@@ -151,7 +135,6 @@ func TestRespondHonorsClassifiedOutageWithNestedDeadline(t *testing.T) {
 	if code != codes.Unavailable {
 		t.Fatalf("Respond code = %v, want %v", code, codes.Unavailable)
 	}
-
 	if !strings.Contains(message, "vector store is unavailable") {
 		t.Fatalf("Respond message = %q, want classified outage", message)
 	}
@@ -166,33 +149,27 @@ func TestRespondMCPKnown(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *MCPError, got %T", err)
 	}
-
 	if mcp.Class != ClassNotIndexed {
 		t.Fatalf("class = %q, want not_indexed", mcp.Class)
 	}
-
 	if mcp.Code != "not_indexed" {
 		t.Fatalf("code = %q", mcp.Code)
 	}
-
 	if !strings.Contains(mcp.Message, "not indexed") {
 		t.Fatalf("message should describe the error, got %q", mcp.Message)
 	}
-
 	if strings.Contains(mcp.Message, string(corr.TraceID)) {
 		t.Fatalf("known error message should omit the trace id, got %q", mcp.Message)
 	}
-
 	if mcp.TraceID != string(corr.TraceID) {
 		t.Fatalf("trace id mismatch")
 	}
 }
 
 func TestRespondMCPUnknown(t *testing.T) {
-	corr := correlation.New("req-1").WithIdentityAttributes(correlation.IdentityAttribute{
-		Key:   "job_id",
-		Value: "job-1",
-	})
+	corr := correlation.New("req-1").WithIdentityAttributes(
+		correlation.IdentityAttribute{Key: "job_id", Value: "job-1"},
+	)
 	ctx := correlation.WithContext(context.Background(), corr)
 
 	err := RespondMCP(ctx, errors.New("opaque crash"))
@@ -200,23 +177,18 @@ func TestRespondMCPUnknown(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *MCPError, got %T", err)
 	}
-
 	if mcp.Class != ClassInternal {
 		t.Fatalf("class = %q, want internal", mcp.Class)
 	}
-
 	if strings.Contains(mcp.Message, "opaque") {
 		t.Fatalf("unknown message should be sanitized, got %q", mcp.Message)
 	}
-
 	if !strings.Contains(mcp.Message, mcp.TraceID) || strings.Contains(mcp.Message, "trace_id=") {
 		t.Fatalf("message = %q, want the trace id without the correlation header", mcp.Message)
 	}
-
 	if mcp.TraceID == "" {
 		t.Fatalf("trace_id should be set")
 	}
-
 	if mcp.JobID != "job-1" {
 		t.Fatalf("job_id = %q, want job-1", mcp.JobID)
 	}
@@ -226,7 +198,6 @@ func TestRespondPassesNil(t *testing.T) {
 	if code, _ := Respond(context.Background(), nil); code != codes.OK {
 		t.Fatalf("Respond(nil) code = %v, want OK", code)
 	}
-
 	if err := RespondMCP(context.Background(), nil); err != nil {
 		t.Fatalf("RespondMCP(nil) = %v", err)
 	}

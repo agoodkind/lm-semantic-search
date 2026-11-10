@@ -59,15 +59,7 @@ func Open(project string, cacheDir string) (*Engine, error) {
 
 	restoreCacheDir, err := setCacheDirLocked(cacheDir)
 	if err != nil {
-		slog.Error(
-			"set cbm cache directory failed",
-			"project",
-			project,
-			"cache_dir",
-			cacheDir,
-			"err",
-			err,
-		)
+		slog.Error("set cbm cache directory failed", "project", project, "cache_dir", cacheDir, "err", err)
 		return nil, fmt.Errorf("set cbm cache directory: %w", err)
 	}
 	defer restoreCacheDir()
@@ -127,52 +119,27 @@ func (engine *Engine) Index(ctx context.Context, repositoryPath string, mode str
 	}
 	argumentsJSON, errorMessage := json.Marshal(arguments)
 	if errorMessage != nil {
-		slog.ErrorContext(
-			ctx,
-			"marshal cbm index_repository arguments failed",
-			"project",
-			engine.project,
-			"err",
-			errorMessage,
-		)
+		slog.ErrorContext(ctx, "marshal cbm index_repository arguments failed", "project", engine.project, "err", errorMessage)
 		return fmt.Errorf("marshal index_repository arguments: %w", errorMessage)
 	}
 
-	rawJSON, errorMessage := engine.callToolLocked("index_repository", string(argumentsJSON))
+	rawJSON, errorMessage := engine.callToolLocked(
+		"index_repository",
+		string(argumentsJSON),
+	)
 	if errorMessage != nil {
-		slog.ErrorContext(
-			ctx,
-			"cbm index_repository call failed",
-			"project",
-			engine.project,
-			"err",
-			errorMessage,
-		)
+		slog.ErrorContext(ctx, "cbm index_repository call failed", "project", engine.project, "err", errorMessage)
 		return errorMessage
 	}
 
 	var envelope mcpEnvelope
 	if errorMessage = json.Unmarshal([]byte(rawJSON), &envelope); errorMessage != nil {
-		slog.ErrorContext(
-			ctx,
-			"cbm index_repository returned invalid JSON",
-			"project",
-			engine.project,
-			"err",
-			errorMessage,
-		)
+		slog.ErrorContext(ctx, "cbm index_repository returned invalid JSON", "project", engine.project, "err", errorMessage)
 		return fmt.Errorf("index_repository returned invalid JSON: %w", errorMessage)
 	}
 	if envelope.IsError {
 		indexError := fmt.Errorf("index_repository returned error: %s", envelopeText(envelope))
-		slog.ErrorContext(
-			ctx,
-			"cbm index_repository reported error",
-			"project",
-			engine.project,
-			"err",
-			indexError,
-		)
+		slog.ErrorContext(ctx, "cbm index_repository reported error", "project", engine.project, "err", indexError)
 		return indexError
 	}
 
@@ -190,15 +157,7 @@ func (engine *Engine) Tool(toolName string, argumentsJSON string) (string, error
 
 	restoreCacheDir, err := setCacheDirLocked(engine.cacheDir)
 	if err != nil {
-		slog.Error(
-			"set cbm cache directory failed",
-			"project",
-			engine.project,
-			"cache_dir",
-			engine.cacheDir,
-			"err",
-			err,
-		)
+		slog.Error("set cbm cache directory failed", "project", engine.project, "cache_dir", engine.cacheDir, "err", err)
 		return "", fmt.Errorf("set cbm cache directory: %w", err)
 	}
 	defer restoreCacheDir()

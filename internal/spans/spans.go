@@ -19,10 +19,7 @@ import (
 // creation sites to back-fill job_id and codebase_id onto the
 // correlation context that downstream spans inherit.
 func Attach(ctx context.Context, attrs ...correlation.IdentityAttribute) context.Context {
-	return correlation.WithContext(
-		ctx,
-		correlation.FromContext(ctx).WithIdentityAttributes(attrs...),
-	)
+	return correlation.WithContext(ctx, correlation.FromContext(ctx).WithIdentityAttributes(attrs...))
 }
 
 // Open returns a child context plus a deferred completion function.
@@ -32,22 +29,16 @@ func Attach(ctx context.Context, attrs ...correlation.IdentityAttribute) context
 //
 //	ctx, done := spans.Open(ctx, "semantic.replace")
 //	defer done(&err)
-func Open(
-	ctx context.Context,
-	name string,
-	attrs ...correlation.IdentityAttribute,
-) (context.Context, func(*error)) {
+func Open(ctx context.Context, name string, attrs ...correlation.IdentityAttribute) (context.Context, func(*error)) {
 	corr := correlation.FromContext(ctx).Child().WithIdentityAttributes(attrs...)
 	ctx = correlation.WithContext(ctx, corr)
 	started := clock.Now()
 	slog.InfoContext(ctx, "daemon.span.started", "span", name)
-
 	return ctx, func(errPtr *error) {
 		var err error
 		if errPtr != nil {
 			err = *errPtr
 		}
-
 		level := slog.LevelInfo
 		errorClass := ""
 		if err != nil {
@@ -57,11 +48,7 @@ func Open(
 				errorClass = string(adapterErr.Class)
 			}
 		}
-
-		slog.LogAttrs(
-			ctx,
-			level,
-			"daemon.span.completed",
+		slog.LogAttrs(ctx, level, "daemon.span.completed",
 			slog.String("span", name),
 			slog.Int64("duration_ms", clock.Now().Sub(started).Milliseconds()),
 			slog.String("error_class", errorClass),

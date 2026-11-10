@@ -31,7 +31,6 @@ func watchJob(options cliOptions, jobID string, timeout time.Duration) error {
 		// A deduplicated or already-indexed registration has no job to watch.
 		return nil
 	}
-
 	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	ctx, cancel := context.WithTimeout(signalCtx, timeout)
@@ -39,17 +38,9 @@ func watchJob(options cliOptions, jobID string, timeout time.Duration) error {
 
 	connection, client, err := daemonclient.DialDaemon(ctx, options.socketPath)
 	if err != nil {
-		slog.Error(
-			"dial daemon for job watch failed",
-			"socket_path",
-			options.socketPath,
-			"err",
-			err,
-		)
-
+		slog.Error("dial daemon for job watch failed", "socket_path", options.socketPath, "err", err)
 		return fmt.Errorf("dial daemon: %w", err)
 	}
-
 	defer func() { _ = connection.Close() }()
 
 	ticker := time.NewTicker(watchPollInterval)
@@ -62,10 +53,8 @@ func watchJob(options cliOptions, jobID string, timeout time.Duration) error {
 				printSentToBackground(jobID)
 				return nil
 			}
-
 			return formatCallError(getErr)
 		}
-
 		if done, exitErr := renderJobUpdate(current.GetJob()); done {
 			return exitErr
 		}
@@ -82,12 +71,7 @@ func watchJob(options cliOptions, jobID string, timeout time.Duration) error {
 // printSentToBackground is the single detach line for both the timeout and
 // the interrupt: the job keeps running in the daemon either way.
 func printSentToBackground(jobID string) {
-	fmt.Fprintf(
-		os.Stderr,
-		"\nsent to background: job %s keeps running in the daemon; check it with `lm-semantic-search job get %s`\n",
-		jobID,
-		jobID,
-	)
+	fmt.Fprintf(os.Stderr, "\nsent to background: job %s keeps running in the daemon; check it with `lm-semantic-search job get %s`\n", jobID, jobID)
 }
 
 // jobOutcome is the daemon-resolved terminal result carried on the wire's
@@ -109,22 +93,14 @@ func renderJobUpdate(job *pb.Job) (bool, error) {
 	if job == nil {
 		return false, nil
 	}
-
 	progress := job.GetProgress()
 	unit := progress.GetUnit()
 	if unit == "" {
 		unit = "file"
 	}
-
-	fmt.Fprintf(
-		os.Stderr,
-		"\r\033[K%s %.1f%% (%d/%d %ss)",
-		progress.GetPhase(),
-		progress.GetOverallPercent(),
-		progress.GetFilesProcessed(),
-		progress.GetFilesTotal(),
-		unit,
-	)
+	fmt.Fprintf(os.Stderr, "\r\033[K%s %.1f%% (%d/%d %ss)",
+		progress.GetPhase(), progress.GetOverallPercent(),
+		progress.GetFilesProcessed(), progress.GetFilesTotal(), unit)
 	if reused := progress.GetChunksReused(); reused > 0 {
 		fmt.Fprintf(os.Stderr, " · %d reused", reused)
 	}
@@ -139,7 +115,6 @@ func renderJobUpdate(job *pb.Job) (bool, error) {
 		if message == "" {
 			message = "job failed; see `lm-semantic-search job get " + job.GetId() + "`"
 		}
-
 		return true, errors.New(message)
 	case outcomeCanceled:
 		fmt.Fprintln(os.Stderr)

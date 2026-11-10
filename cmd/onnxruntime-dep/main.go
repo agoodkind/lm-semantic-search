@@ -61,14 +61,17 @@ func main() {
 
 func runMain() int {
 	slog.Debug("onnxruntime dependency setup starting")
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
 	defer stop()
 
 	if err := run(ctx); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "%s: %v\n", toolLogPrefix, err)
 		return 1
 	}
-
 	return 0
 }
 
@@ -78,12 +81,10 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
 	target, err := resolveBuildTarget(ctx)
 	if err != nil {
 		return err
 	}
-
 	prefix := resolvePrefix(rootDirectory, target)
 
 	installer := dependencyInstaller{
@@ -96,7 +97,6 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
 	if cached {
 		fmt.Printf(
 			"%s: using cached ONNX Runtime %s for %s/%s\n",
@@ -105,7 +105,6 @@ func run(ctx context.Context) error {
 			target.goos,
 			target.goarch,
 		)
-
 		return nil
 	}
 
@@ -113,7 +112,6 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return wrapError("create temporary directory", err)
 	}
-
 	defer func() {
 		_ = os.RemoveAll(temporaryDirectory)
 	}()
@@ -121,11 +119,9 @@ func run(ctx context.Context) error {
 	if err := installer.preparePrefix(); err != nil {
 		return err
 	}
-
 	if err := installer.install(ctx, temporaryDirectory); err != nil {
 		return err
 	}
-
 	if err := os.WriteFile(
 		installer.versionFile(),
 		[]byte(dependencyCacheSentinel()+"\n"),
@@ -141,7 +137,6 @@ func run(ctx context.Context) error {
 		target.goos,
 		target.goarch,
 	)
-
 	return nil
 }
 
@@ -167,7 +162,6 @@ func findModuleRoot() (string, error) {
 		if statErr == nil && fileInfo.Mode().IsRegular() {
 			return currentDirectory, nil
 		}
-
 		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 			return "", wrapError("inspect "+modulePath, statErr)
 		}
@@ -176,7 +170,6 @@ func findModuleRoot() (string, error) {
 		if parentDirectory == currentDirectory {
 			return "", errors.New("find module root: go.mod is missing")
 		}
-
 		currentDirectory = parentDirectory
 	}
 }
@@ -188,7 +181,6 @@ func resolveBuildTarget(ctx context.Context) (buildTarget, error) {
 		if err != nil {
 			return buildTarget{}, err
 		}
-
 		targetGOOS = value
 	}
 
@@ -198,7 +190,6 @@ func resolveBuildTarget(ctx context.Context) (buildTarget, error) {
 		if err != nil {
 			return buildTarget{}, err
 		}
-
 		targetGOARCH = value
 	}
 
@@ -215,12 +206,10 @@ func readGoEnvironment(ctx context.Context, name string) (string, error) {
 	if err != nil {
 		return "", wrapError("read go env "+name, err)
 	}
-
 	value := strings.TrimSpace(string(output))
 	if value == "" {
 		return "", fmt.Errorf("read go env %s: empty value", name)
 	}
-
 	return value, nil
 }
 
@@ -234,11 +223,9 @@ func resolvePrefix(rootDirectory string, target buildTarget) string {
 			string(target.goos)+"-"+string(target.goarch),
 		)
 	}
-
 	if filepath.IsAbs(prefix) {
 		return prefix
 	}
-
 	return rootDirectory + string(filepath.Separator) + prefix
 }
 
@@ -256,27 +243,22 @@ func (installer dependencyInstaller) isCached() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-
 	pkgConfigExists, err := regularFileExists(installer.pkgConfigFile())
 	if err != nil {
 		return false, err
 	}
-
 	if !versionExists || !pkgConfigExists {
 		return false, nil
 	}
-
 	libraryPaths := installer.cachedLibraryPaths()
 	if len(libraryPaths) == 0 {
 		return false, nil
 	}
-
 	for _, path := range libraryPaths {
 		libraryExists, libraryErr := regularFileExists(path)
 		if libraryErr != nil {
 			return false, libraryErr
 		}
-
 		if !libraryExists {
 			return false, nil
 		}
@@ -286,7 +268,6 @@ func (installer dependencyInstaller) isCached() (bool, error) {
 	if err != nil {
 		return false, wrapError("read version file", err)
 	}
-
 	version := strings.TrimRight(string(versionContents), "\n")
 	if version != dependencyCacheSentinel() {
 		return false, nil
@@ -296,12 +277,10 @@ func (installer dependencyInstaller) isCached() (bool, error) {
 	if err != nil {
 		return false, wrapError("read pkg-config file", err)
 	}
-
 	pkgConfig := string(pkgConfigContents)
 	if strings.Contains(pkgConfig, rejectedLinkedRuntime) {
 		return false, nil
 	}
-
 	switch installer.target.goos {
 	case operatingSystemDarwin:
 		if strings.Contains(pkgConfig, rejectedDarwinCoreML) ||
@@ -309,13 +288,11 @@ func (installer dependencyInstaller) isCached() (bool, error) {
 			strings.Contains(pkgConfig, rejectedDarwinStaticDescription) {
 			return false, nil
 		}
-
 		return strings.Contains(pkgConfig, expectedDarwinRPath), nil
 	case operatingSystemLinux:
 		if strings.Contains(pkgConfig, rejectedLinuxRPath) {
 			return false, nil
 		}
-
 		return strings.Contains(pkgConfig, expectedLinuxRPath), nil
 	default:
 		return false, nil
@@ -327,7 +304,6 @@ func (installer dependencyInstaller) cachedLibraryPaths() []string {
 	if err != nil {
 		return nil
 	}
-
 	return installer.libraryPaths(names)
 }
 
@@ -345,17 +321,14 @@ func regularFileExists(path string) (bool, error) {
 	if err == nil {
 		return fileInfo.Mode().IsRegular(), nil
 	}
-
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
-
 	return false, wrapError("inspect "+path, err)
 }
 
 func (installer dependencyInstaller) preparePrefix() error {
 	slog.Debug("prepare ONNX Runtime dependency prefix", "prefix", installer.prefix)
-
 	directoriesToRemove := []string{
 		filepath.Join(installer.prefix, "share", "onnxruntime"),
 		filepath.Join(installer.prefix, "src"),
@@ -371,27 +344,25 @@ func (installer dependencyInstaller) preparePrefix() error {
 		filepath.Join(installer.prefix, "lib", "libonnxruntime.a"),
 		installer.pkgConfigFile(),
 	}
-
 	for _, goos := range []operatingSystem{operatingSystemDarwin, operatingSystemLinux} {
 		names, err := onnxruntimedist.LibraryNamesFor(string(goos))
 		if err != nil {
 			return wrapError("resolve library names", err)
 		}
-
 		filesToRemove = append(filesToRemove, installer.libraryPaths(names)...)
 	}
-
 	for _, path := range filesToRemove {
 		if err := removeFileIfPresent(path); err != nil {
 			return err
 		}
 	}
 
-	linuxArchives, err := filepath.Glob(filepath.Join(installer.prefix, "lib", "onnxruntime-*.a"))
+	linuxArchives, err := filepath.Glob(
+		filepath.Join(installer.prefix, "lib", "onnxruntime-*.a"),
+	)
 	if err != nil {
 		return wrapError("find staged Linux archives", err)
 	}
-
 	for _, path := range linuxArchives {
 		if err := removeFileIfPresent(path); err != nil {
 			return err
@@ -408,7 +379,6 @@ func (installer dependencyInstaller) preparePrefix() error {
 			return wrapError("create "+path, err)
 		}
 	}
-
 	return nil
 }
 
@@ -418,7 +388,6 @@ func removeFileIfPresent(path string) error {
 	if err == nil || errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-
 	return wrapError("remove "+path, err)
 }
 
@@ -433,7 +402,6 @@ func (installer dependencyInstaller) install(
 	if err != nil {
 		return wrapError("resolve ONNX Runtime archive", err)
 	}
-
 	return installer.installSharedArchive(ctx, temporaryDirectory, archive)
 }
 
@@ -447,7 +415,6 @@ func (installer dependencyInstaller) installSharedArchive(
 	if err != nil {
 		return wrapError("resolve ONNX Runtime library names", err)
 	}
-
 	archiveDirectory, err := onnxruntimedist.FetchArchive(
 		ctx,
 		installer.httpClient,
@@ -457,7 +424,6 @@ func (installer dependencyInstaller) installSharedArchive(
 	if err != nil {
 		return wrapError("fetch ONNX Runtime archive", err)
 	}
-
 	if err := onnxruntimedist.InstallLibrary(
 		archiveDirectory,
 		names,
@@ -472,11 +438,9 @@ func (installer dependencyInstaller) installSharedArchive(
 	); err != nil {
 		return wrapError("copy headers", err)
 	}
-
 	if installer.target.goos == operatingSystemDarwin {
 		return installer.writeDarwinPkgConfig()
 	}
-
 	return installer.writeLinuxPkgConfig()
 }
 
@@ -486,43 +450,41 @@ func copyHeaderFiles(sourceDirectory string, destinationDirectory string) error 
 	if err != nil {
 		return wrapError("read header directory", err)
 	}
-
 	headerCount := 0
-
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".h" {
 			continue
 		}
-
 		sourcePath := filepath.Join(sourceDirectory, entry.Name())
 		destinationPath := filepath.Join(destinationDirectory, entry.Name())
 		if err := copyFile(sourcePath, destinationPath); err != nil {
 			return err
 		}
-
 		headerCount++
 	}
-
 	if headerCount == 0 {
 		return fmt.Errorf("no header files found in %s", sourceDirectory)
 	}
-
 	return nil
 }
 
 func copyFile(sourcePath string, destinationPath string) error {
-	slog.Debug("copy dependency file", "source", sourcePath, "destination", destinationPath)
+	slog.Debug(
+		"copy dependency file",
+		"source",
+		sourcePath,
+		"destination",
+		destinationPath,
+	)
 	source, err := os.Open(sourcePath)
 	if err != nil {
 		return wrapError("open source file", err)
 	}
-
 	sourceInfo, err := source.Stat()
 	if err != nil {
 		_ = source.Close()
 		return wrapError("inspect source file", err)
 	}
-
 	destination, err := os.OpenFile(
 		destinationPath,
 		os.O_CREATE|os.O_WRONLY|os.O_TRUNC,
@@ -539,22 +501,18 @@ func copyFile(sourcePath string, destinationPath string) error {
 	if copyErr != nil {
 		return wrapError("copy dependency file", copyErr)
 	}
-
 	if destinationCloseErr != nil {
 		return wrapError("close destination file", destinationCloseErr)
 	}
-
 	if sourceCloseErr != nil {
 		return wrapError("close source file", sourceCloseErr)
 	}
-
 	return nil
 }
 
 func (installer dependencyInstaller) writeDarwinPkgConfig() error {
 	slog.Debug("write Darwin ONNX Runtime pkg-config")
-	contents := fmt.Sprintf(
-		`prefix=%s
+	contents := fmt.Sprintf(`prefix=%s
 exec_prefix=${prefix}
 includedir=${prefix}/include
 
@@ -563,10 +521,7 @@ Description: dynamically linked ONNX Runtime
 Version: %s
 Cflags: -I${includedir}
 Libs: -L${prefix}/lib -Wl,-rpath,${prefix}/lib -ltokenizers
-`,
-		installer.prefix,
-		onnxruntimedist.Version,
-	)
+`, installer.prefix, onnxruntimedist.Version)
 	if err := os.WriteFile(
 		installer.pkgConfigFile(),
 		[]byte(contents),
@@ -574,7 +529,6 @@ Libs: -L${prefix}/lib -Wl,-rpath,${prefix}/lib -ltokenizers
 	); err != nil {
 		return wrapError("write Darwin pkg-config file", err)
 	}
-
 	return nil
 }
 
@@ -589,8 +543,7 @@ func (installer dependencyInstaller) writeLinuxPkgConfig() error {
 	// the emitted flag contains no shell metacharacter and Go's pkgconf parser
 	// accepts it. The origin-relative runpath cannot go here because that parser
 	// rejects the literal $ in $ORIGIN.
-	contents := fmt.Sprintf(
-		`prefix=%s
+	contents := fmt.Sprintf(`prefix=%s
 exec_prefix=${prefix}
 includedir=${prefix}/include
 
@@ -599,10 +552,7 @@ Description: dynamically linked ONNX Runtime
 Version: %s
 Cflags: -I${includedir}
 Libs: -L${prefix}/lib -Wl,-rpath,${prefix}/lib -ltokenizers -lstdc++ -ldl -lpthread -lm
-`,
-		installer.prefix,
-		onnxruntimedist.Version,
-	)
+`, installer.prefix, onnxruntimedist.Version)
 	if err := os.WriteFile(
 		installer.pkgConfigFile(),
 		[]byte(contents),
@@ -610,6 +560,5 @@ Libs: -L${prefix}/lib -Wl,-rpath,${prefix}/lib -ltokenizers -lstdc++ -ldl -lpthr
 	); err != nil {
 		return wrapError("write Linux pkg-config file", err)
 	}
-
 	return nil
 }

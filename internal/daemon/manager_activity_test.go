@@ -26,14 +26,12 @@ func TestWatcherActivityReportsConvergingAndQueued(t *testing.T) {
 	if !syncer.beginConverge("cb-running") {
 		t.Fatal("beginConverge returned false on an idle codebase")
 	}
-
 	defer syncer.endConverge("cb-running")
 	// Admission alone is not running: the converge still has to win an index slot
 	// and the shared advisory lock, which is what markConvergeRunning records.
 	syncer.markConvergeRunning("cb-running")
 
 	byID := map[string]WatcherActivity{}
-
 	for _, entry := range syncer.WatcherActivity() {
 		byID[entry.CodebaseID] = entry
 	}
@@ -42,11 +40,9 @@ func TestWatcherActivityReportsConvergingAndQueued(t *testing.T) {
 	if !found {
 		t.Fatalf("converging codebase absent from activity: %+v", byID)
 	}
-
 	if running.State != WatcherStateRunning {
 		t.Fatalf("running state = %q, want %q", running.State, WatcherStateRunning)
 	}
-
 	if running.StartedAt.IsZero() {
 		t.Fatal("running entry carries no start time, so a surface cannot report its age")
 	}
@@ -55,16 +51,11 @@ func TestWatcherActivityReportsConvergingAndQueued(t *testing.T) {
 	if !found {
 		t.Fatalf("queued codebase absent from activity: %+v", byID)
 	}
-
 	if queued.State != WatcherStateQueued {
 		t.Fatalf("queued state = %q, want %q", queued.State, WatcherStateQueued)
 	}
-
 	if queued.PendingPaths != 2 {
-		t.Fatalf(
-			"queued pending paths = %d, want 2 (a.go and b.go, coalesced)",
-			queued.PendingPaths,
-		)
+		t.Fatalf("queued pending paths = %d, want 2 (a.go and b.go, coalesced)", queued.PendingPaths)
 	}
 }
 
@@ -82,7 +73,6 @@ func TestWatcherActivityReportsAConvergingCodebaseOnce(t *testing.T) {
 	if !syncer.beginConverge("cb-1") {
 		t.Fatal("beginConverge returned false on an idle codebase")
 	}
-
 	defer syncer.endConverge("cb-1")
 	syncer.markConvergeRunning("cb-1")
 
@@ -90,16 +80,11 @@ func TestWatcherActivityReportsAConvergingCodebaseOnce(t *testing.T) {
 	if len(activity) != 1 {
 		t.Fatalf("activity rows = %d, want 1: %+v", len(activity), activity)
 	}
-
 	if activity[0].State != WatcherStateRunning {
 		t.Fatalf("state = %q, want %q", activity[0].State, WatcherStateRunning)
 	}
-
 	if activity[0].PendingPaths != 1 {
-		t.Fatalf(
-			"pending paths = %d, want 1 (the path queued behind the converge)",
-			activity[0].PendingPaths,
-		)
+		t.Fatalf("pending paths = %d, want 1 (the path queued behind the converge)", activity[0].PendingPaths)
 	}
 }
 
@@ -126,39 +111,25 @@ func TestWatcherActivityReportsAdmittedButWaitingAsQueued(t *testing.T) {
 	if !syncer.beginConverge("cb-waiting") {
 		t.Fatal("beginConverge returned false on an idle codebase")
 	}
-
 	defer syncer.endConverge("cb-waiting")
 
 	activity := syncer.WatcherActivity()
 	if len(activity) != 1 {
 		t.Fatalf("activity rows = %d, want 1: %+v", len(activity), activity)
 	}
-
 	if activity[0].State != WatcherStateQueued {
-		t.Fatalf(
-			"state = %q, want %q for an admitted converge still waiting on capacity",
-			activity[0].State,
-			WatcherStateQueued,
-		)
+		t.Fatalf("state = %q, want %q for an admitted converge still waiting on capacity",
+			activity[0].State, WatcherStateQueued)
 	}
-
 	if !activity[0].StartedAt.IsZero() {
-		t.Fatalf(
-			"started_at = %v, want zero until the converge actually starts",
-			activity[0].StartedAt,
-		)
+		t.Fatalf("started_at = %v, want zero until the converge actually starts", activity[0].StartedAt)
 	}
 
 	syncer.markConvergeRunning("cb-waiting")
 	activity = syncer.WatcherActivity()
 	if activity[0].State != WatcherStateRunning {
-		t.Fatalf(
-			"state after markConvergeRunning = %q, want %q",
-			activity[0].State,
-			WatcherStateRunning,
-		)
+		t.Fatalf("state after markConvergeRunning = %q, want %q", activity[0].State, WatcherStateRunning)
 	}
-
 	if activity[0].StartedAt.IsZero() {
 		t.Fatal("started_at is zero after the converge started, so a surface cannot report its age")
 	}
@@ -216,24 +187,16 @@ func TestStatusSnapshotSeesADrainingSlotExactlyOnce(t *testing.T) {
 		snapshot := manager.StatusSnapshot()
 		units := len(snapshot.ActiveJobs) + len(snapshot.Pending)
 		if units != 1 {
-			t.Fatalf(
-				"snapshot reported %d units of work, want exactly 1: jobs=%+v pending=%+v",
-				units,
-				snapshot.ActiveJobs,
-				snapshot.Pending,
-			)
+			t.Fatalf("snapshot reported %d units of work, want exactly 1: jobs=%+v pending=%+v",
+				units, snapshot.ActiveJobs, snapshot.Pending)
 		}
 	}
-
 	<-drained
 
 	final := manager.StatusSnapshot()
 	if len(final.ActiveJobs) != 1 || len(final.Pending) != 0 {
-		t.Fatalf(
-			"after the drain: jobs=%d pending=%d, want 1 and 0",
-			len(final.ActiveJobs),
-			len(final.Pending),
-		)
+		t.Fatalf("after the drain: jobs=%d pending=%d, want 1 and 0",
+			len(final.ActiveJobs), len(final.Pending))
 	}
 }
 
@@ -258,19 +221,14 @@ func TestStatusSnapshotOmitsTerminalJobs(t *testing.T) {
 
 	snapshot := manager.StatusSnapshot()
 	if len(snapshot.ActiveJobs) != 2 {
-		t.Fatalf(
-			"active jobs = %d, want 2 (running and queued): %+v",
-			len(snapshot.ActiveJobs),
-			snapshot.ActiveJobs,
-		)
+		t.Fatalf("active jobs = %d, want 2 (running and queued): %+v",
+			len(snapshot.ActiveJobs), snapshot.ActiveJobs)
 	}
-
 	for _, job := range snapshot.ActiveJobs {
 		if isTerminalJobState(job.State) {
 			t.Fatalf("terminal job %q reached the snapshot", job.ID)
 		}
 	}
-
 	if snapshot.Scheduler.Capacity != 4 {
 		t.Fatalf("scheduler capacity = %d, want 4", snapshot.Scheduler.Capacity)
 	}
@@ -303,7 +261,6 @@ func TestStatusSnapshotResolvesHealthLikeEverySurface(t *testing.T) {
 	if !stillDown.StatusSnapshot().Health.Degraded() {
 		t.Fatal("snapshot cleared an outage with no evidence of recovery")
 	}
-
 	if !newManager().DependencyHealth().Degraded() {
 		t.Fatal("DependencyHealth cleared an outage with no evidence of recovery")
 	}
@@ -312,11 +269,7 @@ func TestStatusSnapshotResolvesHealthLikeEverySurface(t *testing.T) {
 	viaSnapshot := newManager().StatusSnapshot().Health
 	viaAccessor := newManager().DependencyHealth()
 	if viaSnapshot.Degraded() != viaAccessor.Degraded() || viaSnapshot.Mode != viaAccessor.Mode {
-		t.Fatalf(
-			"snapshot health %+v disagrees with DependencyHealth %+v",
-			viaSnapshot,
-			viaAccessor,
-		)
+		t.Fatalf("snapshot health %+v disagrees with DependencyHealth %+v", viaSnapshot, viaAccessor)
 	}
 }
 
@@ -334,15 +287,12 @@ func TestWatcherActivityReportsDeferredFirstBuildPaths(t *testing.T) {
 	if len(activity) != 1 {
 		t.Fatalf("activity rows = %d, want 1: %+v", len(activity), activity)
 	}
-
 	if activity[0].CodebaseID != "cb-first-build" {
 		t.Fatalf("codebase = %q, want cb-first-build", activity[0].CodebaseID)
 	}
-
 	if activity[0].State != WatcherStateQueued {
 		t.Fatalf("state = %q, want %q", activity[0].State, WatcherStateQueued)
 	}
-
 	if activity[0].PendingPaths != 2 {
 		t.Fatalf("pending paths = %d, want 2 (a.go and b.go, coalesced)", activity[0].PendingPaths)
 	}
@@ -363,11 +313,7 @@ func TestWatcherActivitySumsQueuedAndDeferredPaths(t *testing.T) {
 	if len(activity) != 1 {
 		t.Fatalf("activity rows = %d, want 1: %+v", len(activity), activity)
 	}
-
 	if activity[0].PendingPaths != 3 {
-		t.Fatalf(
-			"pending paths = %d, want 3 (one queued plus two deferred)",
-			activity[0].PendingPaths,
-		)
+		t.Fatalf("pending paths = %d, want 3 (one queued plus two deferred)", activity[0].PendingPaths)
 	}
 }

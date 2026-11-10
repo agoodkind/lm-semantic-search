@@ -36,18 +36,11 @@ const (
 	searchCollectionModeMissing
 )
 
-func decideStartIndexMode(
-	codebaseFound bool,
-	status model.CodebaseStatus,
-	configMatches bool,
-	force bool,
-	presence collectionPresence,
-) startIndexMode {
+func decideStartIndexMode(codebaseFound bool, status model.CodebaseStatus, configMatches bool, force bool, presence collectionPresence) startIndexMode {
 	if !codebaseFound {
 		if presence == collectionPresencePresent {
 			return startIndexModeIncremental
 		}
-
 		return startIndexModeBootstrap
 	}
 
@@ -57,21 +50,16 @@ func decideStartIndexMode(
 		if presence == collectionPresenceMissing {
 			return startIndexModeBootstrap
 		}
-
 		return startIndexModeIncremental
-	case model.CodebaseStatusNotIndexed,
-		model.CodebaseStatusPending,
-		model.CodebaseStatusDiscovered:
+	case model.CodebaseStatusNotIndexed, model.CodebaseStatusPending, model.CodebaseStatusDiscovered:
 		return startIndexModeBootstrap
 	case model.CodebaseStatusIndexed:
 		if !force && configMatches && presence != collectionPresenceMissing {
 			return startIndexModeAlreadyIndexed
 		}
-
 		if presence == collectionPresenceMissing {
 			return startIndexModeBootstrap
 		}
-
 		return startIndexModeIncremental
 	default:
 		return startIndexModeBootstrap
@@ -82,12 +70,9 @@ func decideEmptyDiffMode(evidence collectionEvidence, seedFileCount int) emptyDi
 	if evidence.presence == collectionPresenceMissing {
 		return emptyDiffModeFallbackBootstrap
 	}
-
-	if evidence.presence == collectionPresencePresent && evidence.rowsKnown && evidence.rows == 0 &&
-		seedFileCount > 0 {
+	if evidence.presence == collectionPresencePresent && evidence.rowsKnown && evidence.rows == 0 && seedFileCount > 0 {
 		return emptyDiffModeFallbackBootstrap
 	}
-
 	return emptyDiffModeCompleteNoop
 }
 
@@ -103,12 +88,8 @@ func shouldResumeInterruptedBuild(codebase model.Codebase, hasActiveJob bool) bo
 	if hasActiveJob {
 		return false
 	}
-
 	switch codebase.Status {
-	case model.CodebaseStatusPending,
-		model.CodebaseStatusIndexing,
-		model.CodebaseStatusNotIndexed,
-		model.CodebaseStatusMissing:
+	case model.CodebaseStatusPending, model.CodebaseStatusIndexing, model.CodebaseStatusNotIndexed, model.CodebaseStatusMissing:
 		return true
 	case model.CodebaseStatusIndexed, model.CodebaseStatusStale, model.CodebaseStatusFailed,
 		model.CodebaseStatusDiscovered, model.CodebaseStatusQuarantined:
@@ -124,11 +105,9 @@ func shouldDeferWatcherConvergeForFirstBuild(codebase model.Codebase) bool {
 	if codebase.Kind == model.CodebaseKindDocument {
 		return false
 	}
-
 	if codebase.LastSuccessfulRun != nil {
 		return false
 	}
-
 	return isPreIndexedStatus(codebase.Status)
 }
 
@@ -139,7 +118,6 @@ func shouldSkipForActiveFirstBuildStaging(codebase model.Codebase, hasActiveJob 
 	if !hasActiveJob {
 		return false
 	}
-
 	return shouldDeferWatcherConvergeForFirstBuild(codebase)
 }
 
@@ -166,19 +144,13 @@ func isPreIndexedStatus(status model.CodebaseStatus) bool {
 // it on every sweep, forever. That is the same mistake the checkpoint reads
 // made, on the collection, so it reads the same run record through the same
 // place.
-func shouldQueueMissingCollectionRepair(
-	codebase model.Codebase,
-	hasActiveJob bool,
-	presence collectionPresence,
-) bool {
+func shouldQueueMissingCollectionRepair(codebase model.Codebase, hasActiveJob bool, presence collectionPresence) bool {
 	if hasActiveJob || presence != collectionPresenceMissing {
 		return false
 	}
-
 	if ranWithoutCreatingACollection(codebase.LastSuccessfulRun) {
 		return false
 	}
-
 	switch codebase.Status {
 	case model.CodebaseStatusIndexed, model.CodebaseStatusStale:
 		return true
@@ -191,34 +163,22 @@ func shouldQueueMissingCollectionRepair(
 	}
 }
 
-func decideSearchCollectionMode(
-	codebase model.Codebase,
-	activeJob *model.Job,
-	presence collectionPresence,
-) searchCollectionMode {
+func decideSearchCollectionMode(codebase model.Codebase, activeJob *model.Job, presence collectionPresence) searchCollectionMode {
 	if presence != collectionPresenceMissing {
 		return searchCollectionModeProceed
 	}
-
-	if activeJob != nil || codebase.Status == model.CodebaseStatusStale ||
-		codebase.Status == model.CodebaseStatusIndexing {
+	if activeJob != nil || codebase.Status == model.CodebaseStatusStale || codebase.Status == model.CodebaseStatusIndexing {
 		return searchCollectionModeAutomaticRepair
 	}
-
 	return searchCollectionModeMissing
 }
 
-func presenceFromCollectionSet(
-	collectionName string,
-	collectionSet map[string]struct{},
-) collectionPresence {
+func presenceFromCollectionSet(collectionName string, collectionSet map[string]struct{}) collectionPresence {
 	if collectionName == "" {
 		return collectionPresenceUnknown
 	}
-
 	if _, found := collectionSet[collectionName]; found {
 		return collectionPresencePresent
 	}
-
 	return collectionPresenceMissing
 }

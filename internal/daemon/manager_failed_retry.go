@@ -14,23 +14,18 @@ func (manager *Manager) retryFailedBuild(ctx context.Context, codebase model.Cod
 	if manager.indexingDependencyError() != nil {
 		return
 	}
-
 	manager.mu.Lock()
 	if manager.failedBuildRetries == nil {
 		manager.failedBuildRetries = map[string]int{}
 	}
-
 	if manager.failedBuildRetries[codebase.ID] >= maxFailedBuildRetries {
 		manager.mu.Unlock()
 		return
 	}
-
-	if codebase.LastFailedRun != nil &&
-		codebase.LastFailedRun.Code == adapterr.CodeIndexBudgetExceeded {
+	if codebase.LastFailedRun != nil && codebase.LastFailedRun.Code == adapterr.CodeIndexBudgetExceeded {
 		manager.mu.Unlock()
 		return
 	}
-
 	manager.mu.Unlock()
 
 	started, err := manager.startAutomaticIndex(
@@ -39,43 +34,26 @@ func (manager *Manager) retryFailedBuild(ctx context.Context, codebase model.Cod
 		model.ClientInfo{Name: "daemon-failed-retry", PID: 0},
 		codebase.EffectiveConfig,
 		indexPolicyIntent{
-			Patch: model.SchedulingPolicyPatch{
-				Priority:         nil,
-				Quiet:            nil,
-				IdleAfterSeconds: nil,
-			},
+			Patch:      model.SchedulingPolicyPatch{Priority: nil, Quiet: nil, IdleAfterSeconds: nil},
 			Initialize: true,
 		},
 	)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"failed build retry could not start",
-			"codebase_id",
-			codebase.ID,
-			"path",
-			codebase.CanonicalPath,
-			"err",
-			err,
-		)
-
+		slog.WarnContext(ctx, "failed build retry could not start", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)
 		return
 	}
-
 	if started.held || started.paused {
 		// The retry waits for a sibling worktree's first build or for maintenance
 		// mode to end, and a later sweep starts it again, so neither consumes an
 		// attempt.
 		return
 	}
-
 	if started.deduplicated {
 		// A retry for this codebase is already in flight (a concurrent sweep, or a
 		// redirect to a covering parent), so this call did not start a new build
 		// and must not consume an attempt.
 		return
 	}
-
 	// Count the attempt only after a new build actually started, so a
 	// deduplicated or failed StartIndex never burns a retry and the cap reflects
 	// real attempts.
@@ -83,18 +61,5 @@ func (manager *Manager) retryFailedBuild(ctx context.Context, codebase model.Cod
 	manager.failedBuildRetries[codebase.ID]++
 	attemptCount := manager.failedBuildRetries[codebase.ID]
 	manager.mu.Unlock()
-	slog.InfoContext(
-		ctx,
-		"retrying failed codebase build",
-		"codebase_id",
-		started.codebase.ID,
-		"path",
-		codebase.CanonicalPath,
-		"job_id",
-		started.job.ID,
-		"attempt",
-		attemptCount,
-		"max_attempts",
-		maxFailedBuildRetries,
-	)
+	slog.InfoContext(ctx, "retrying failed codebase build", "codebase_id", started.codebase.ID, "path", codebase.CanonicalPath, "job_id", started.job.ID, "attempt", attemptCount, "max_attempts", maxFailedBuildRetries)
 }

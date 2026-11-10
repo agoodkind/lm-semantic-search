@@ -17,12 +17,10 @@ func TestLoadReuseVectorsForContentsUsesCandidateIndexNotRowScan(t *testing.T) {
 	t.Parallel()
 
 	const codebasePath = "/tmp/localvec-candidate-index"
-	provider := &fakeEmbeddingProvider{
-		vectors: map[string][]float32{
-			"first":  {1, 0},
-			"second": {0, 1},
-		},
-	}
+	provider := &fakeEmbeddingProvider{vectors: map[string][]float32{
+		"first":  {1, 0},
+		"second": {0, 1},
+	}}
 	store, err := newStoreWithProvider(
 		config.Config{StateRoot: t.TempDir()},
 		provider,
@@ -30,7 +28,6 @@ func TestLoadReuseVectorsForContentsUsesCandidateIndexNotRowScan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newStoreWithProvider returned error: %v", err)
 	}
-
 	stageAndPromote(
 		t,
 		store,
@@ -46,18 +43,15 @@ func TestLoadReuseVectorsForContentsUsesCandidateIndexNotRowScan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("collectionForName returned error: %v", err)
 	}
-
 	stored.mutex.Lock()
 	if err := stored.loadLocked(); err != nil {
 		stored.mutex.Unlock()
 		t.Fatalf("loadLocked returned error: %v", err)
 	}
-
 	if len(stored.rows) != 2 {
 		stored.mutex.Unlock()
 		t.Fatalf("stored rows = %d, want 2", len(stored.rows))
 	}
-
 	candidateContent := stored.rows[0].Content
 	candidateKey := stored.rows[0].ContentVectorKey
 	wantVector := slices.Clone(stored.rows[0].Vector)
@@ -75,7 +69,6 @@ func TestLoadReuseVectorsForContentsUsesCandidateIndexNotRowScan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadReuseVectorsForContents returned error: %v", err)
 	}
-
 	gotVector := reuse[semantic.ContentVectorKey(candidateContent)].Vector
 	if !slices.Equal(gotVector, wantVector) {
 		t.Fatalf("reused vector = %v, want indexed vector %v", gotVector, wantVector)
@@ -95,7 +88,6 @@ func TestLoadReuseVectorsForContentsDoesNotCopyWholeCollection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newStoreWithProvider returned error: %v", err)
 	}
-
 	rows := make([]row, rowCount)
 	for rowIndex := range rows {
 		content := fmt.Sprintf("candidate-%d", rowIndex)
@@ -105,7 +97,6 @@ func TestLoadReuseVectorsForContentsDoesNotCopyWholeCollection(t *testing.T) {
 			Vector:           make([]float32, vectorSize),
 		}
 	}
-
 	stored := newCollection(collectionName, "")
 	stored.rows = rows
 	stored.reuseRows = buildReuseRowIndex(rows)
@@ -115,24 +106,19 @@ func TestLoadReuseVectorsForContentsDoesNotCopyWholeCollection(t *testing.T) {
 
 	candidate := model.StoredChunk{Content: rows[0].Content}
 	var latest map[string]model.ReuseVector
-	allocations := testing.AllocsPerRun(
-		10,
-		func() {
-			latest, err = store.LoadReuseVectorsForContents(
-				context.Background(),
-				collectionName,
-				[]model.StoredChunk{candidate},
-			)
-		},
-	)
+	allocations := testing.AllocsPerRun(10, func() {
+		latest, err = store.LoadReuseVectorsForContents(
+			context.Background(),
+			collectionName,
+			[]model.StoredChunk{candidate},
+		)
+	})
 	if err != nil {
 		t.Fatalf("LoadReuseVectorsForContents returned error: %v", err)
 	}
-
 	if len(latest) != 1 {
 		t.Fatalf("reused vectors = %d, want 1", len(latest))
 	}
-
 	if allocations > 10 {
 		t.Fatalf("allocations per candidate lookup = %.0f, want at most 10", allocations)
 	}
@@ -142,18 +128,15 @@ func TestLoadReuseVectorsForContentsRebuildsIndexAfterMutationAndReload(t *testi
 	t.Parallel()
 
 	const codebasePath = "/tmp/localvec-candidate-index-rebuild"
-	provider := &fakeEmbeddingProvider{
-		vectors: map[string][]float32{
-			"first":  {1, 0},
-			"second": {0, 1},
-		},
-	}
+	provider := &fakeEmbeddingProvider{vectors: map[string][]float32{
+		"first":  {1, 0},
+		"second": {0, 1},
+	}}
 	configuration := config.Config{StateRoot: t.TempDir()}
 	store, err := newStoreWithProvider(configuration, provider)
 	if err != nil {
 		t.Fatalf("newStoreWithProvider returned error: %v", err)
 	}
-
 	stageAndPromote(
 		t,
 		store,
@@ -172,14 +155,12 @@ func TestLoadReuseVectorsForContentsRebuildsIndexAfterMutationAndReload(t *testi
 	); err != nil {
 		t.Fatalf("Reindex returned error: %v", err)
 	}
-
 	assertReusedVector(t, store, codebasePath, "second", []float32{0, 1})
 
 	reloaded, err := newStoreWithProvider(configuration, provider)
 	if err != nil {
 		t.Fatalf("newStoreWithProvider for reload returned error: %v", err)
 	}
-
 	assertReusedVector(t, reloaded, codebasePath, "second", []float32{0, 1})
 }
 
@@ -187,12 +168,10 @@ func TestLocalReuseLookupP95BelowConfiguredEmbedding(t *testing.T) {
 	if os.Getenv("LMS_LOCALVEC_REUSE_PERF") != "1" {
 		t.Skip("set LMS_LOCALVEC_REUSE_PERF=1 to measure the configured embedder")
 	}
-
 	configuration, err := config.Default()
 	if err != nil {
 		t.Fatalf("load configured embedder: %v", err)
 	}
-
 	configuration.StateRoot = t.TempDir()
 	store, err := New(context.Background(), configuration)
 	if err != nil {
@@ -204,20 +183,15 @@ func TestLocalReuseLookupP95BelowConfiguredEmbedding(t *testing.T) {
 		sampleCount  = 20
 	)
 	contents := make([]string, 0, sampleCount)
-
 	chunks := make([]model.StoredChunk, 0, sampleCount)
 	for sampleIndex := range sampleCount {
 		content := fmt.Sprintf("harmless local reuse performance control %02d", sampleIndex)
 		contents = append(contents, content)
-		chunks = append(
-			chunks,
-			model.StoredChunk{
-				Content:      content,
-				RelativePath: fmt.Sprintf("control-%02d.txt", sampleIndex),
-			},
-		)
+		chunks = append(chunks, model.StoredChunk{
+			Content:      content,
+			RelativePath: fmt.Sprintf("control-%02d.txt", sampleIndex),
+		})
 	}
-
 	stageAndPromote(t, store, codebasePath, chunks, semantic.CodeColumns())
 	if _, err := store.embedder.EmbedBatch(
 		context.Background(),
@@ -225,7 +199,6 @@ func TestLocalReuseLookupP95BelowConfiguredEmbedding(t *testing.T) {
 	); err != nil {
 		t.Fatalf("warm configured embedder: %v", err)
 	}
-
 	if _, err := store.LoadReuseVectorsForContents(
 		context.Background(),
 		store.CollectionName(codebasePath),
@@ -236,7 +209,6 @@ func TestLocalReuseLookupP95BelowConfiguredEmbedding(t *testing.T) {
 
 	lookupDurations := make([]time.Duration, 0, sampleCount)
 	embedDurations := make([]time.Duration, 0, sampleCount)
-
 	for _, content := range contents {
 		lookupStarted := time.Now()
 		reuse, lookupErr := store.LoadReuseVectorsForContents(
@@ -248,7 +220,6 @@ func TestLocalReuseLookupP95BelowConfiguredEmbedding(t *testing.T) {
 		if lookupErr != nil {
 			t.Fatalf("candidate lookup for %q: %v", content, lookupErr)
 		}
-
 		if len(reuse) != 1 {
 			t.Fatalf("candidate lookup for %q returned %d vectors, want 1", content, len(reuse))
 		}
@@ -259,7 +230,6 @@ func TestLocalReuseLookupP95BelowConfiguredEmbedding(t *testing.T) {
 		if embedErr != nil {
 			t.Fatalf("embed performance control %q: %v", content, embedErr)
 		}
-
 		if len(result.Vectors) != 1 || len(result.Vectors[0]) == 0 {
 			t.Fatalf("embed performance control %q returned no vector", content)
 		}
@@ -296,12 +266,10 @@ func localDurationPercentile(values []time.Duration, percentile int) time.Durati
 	if percentile <= 0 {
 		return sorted[0]
 	}
-
 	index := (len(sorted)*percentile+99)/100 - 1
 	if index >= len(sorted) {
 		index = len(sorted) - 1
 	}
-
 	return sorted[index]
 }
 
@@ -325,7 +293,6 @@ func assertReusedVector(
 	if err != nil {
 		t.Fatalf("LoadReuseVectorsForContents returned error: %v", err)
 	}
-
 	got := reuse[semantic.ContentVectorKey(content)].Vector
 	if !slices.Equal(got, want) {
 		t.Fatalf("reused vector = %v, want %v", got, want)

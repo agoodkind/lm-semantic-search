@@ -43,17 +43,14 @@ func moduleRoot(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
-
 	for {
 		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
 			return dir
 		}
-
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			t.Fatal("go.mod not found above the test directory")
 		}
-
 		dir = parent
 	}
 }
@@ -64,58 +61,44 @@ func moduleRoot(t *testing.T) string {
 func productionGoFiles(t *testing.T, root string) []string {
 	t.Helper()
 	var files []string
-	walkErr := filepath.WalkDir(
-		root,
-		func(path string, entry os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-
-			if entry.IsDir() {
-				switch entry.Name() {
-				case "gen", "third_party", "vendor", ".git", ".claude", "dist":
-					return filepath.SkipDir
-				default:
-					return nil
-				}
-			}
-
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+	walkErr := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case "gen", "third_party", "vendor", ".git", ".claude", "dist":
+				return filepath.SkipDir
+			default:
 				return nil
 			}
-
-			rel, relErr := filepath.Rel(root, path)
-			if relErr != nil {
-				return relErr
-			}
-
-			files = append(files, rel)
-
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
-		},
-	)
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		files = append(files, rel)
+		return nil
+	})
 	if walkErr != nil {
 		t.Fatalf("walk: %v", walkErr)
 	}
-
 	return files
 }
 
 // stringLiterals returns every string-literal value in one parsed file.
 func stringLiterals(file *ast.File) []string {
 	var literals []string
-	ast.Inspect(
-		file,
-		func(node ast.Node) bool {
-			lit, ok := node.(*ast.BasicLit)
-			if ok && lit.Kind == token.STRING {
-				literals = append(literals, lit.Value)
-			}
-
-			return true
-		},
-	)
-
+	ast.Inspect(file, func(node ast.Node) bool {
+		lit, ok := node.(*ast.BasicLit)
+		if ok && lit.Kind == token.STRING {
+			literals = append(literals, lit.Value)
+		}
+		return true
+	})
 	return literals
 }
 
@@ -133,12 +116,10 @@ func TestBreakdownVocabularyOnlyInRenderer(t *testing.T) {
 		if rel == renderFile {
 			continue
 		}
-
 		parsed, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
-
 		for _, literal := range stringLiterals(parsed) {
 			for _, phrase := range forbiddenVocabulary {
 				if strings.Contains(literal, phrase) {
@@ -156,24 +137,17 @@ func TestBreakdownVocabularyOnlyInRenderer(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read template %s: %v", path, err)
 		}
-
 		for _, connector := range []string{"├─", "└─"} {
 			if strings.Contains(string(data), connector) {
 				rel, _ := filepath.Rel(root, path)
-				violations = append(
-					violations,
-					rel+": template draws the tree connector "+connector,
-				)
+				violations = append(violations, rel+": template draws the tree connector "+connector)
 			}
 		}
 	}
 
 	if len(violations) > 0 {
-		t.Fatalf(
-			"status breakdown vocabulary found outside %s; route output through render.BreakdownLines:\n%s",
-			renderFile,
-			strings.Join(violations, "\n"),
-		)
+		t.Fatalf("status breakdown vocabulary found outside %s; route output through render.BreakdownLines:\n%s",
+			renderFile, strings.Join(violations, "\n"))
 	}
 }
 
@@ -192,37 +166,27 @@ func TestBreakdownConstructedOnlyInSanctionedPlaces(t *testing.T) {
 		if breakdownConstructorFiles[rel] {
 			continue
 		}
-
 		parsed, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
-
-		ast.Inspect(
-			parsed,
-			func(node ast.Node) bool {
-				switch typed := node.(type) {
-				case *ast.CompositeLit:
-					if name := viewSelector(typed.Type); name == "OutcomeBreakdown" ||
-						name == "OutcomeRow" {
-						violations = append(violations, rel+": constructs view."+name+" literal")
-					}
-				case *ast.CallExpr:
-					if viewSelector(typed.Fun) == "NewOutcomeRow" {
-						violations = append(violations, rel+": calls view.NewOutcomeRow")
-					}
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.CompositeLit:
+				if name := viewSelector(typed.Type); name == "OutcomeBreakdown" || name == "OutcomeRow" {
+					violations = append(violations, rel+": constructs view."+name+" literal")
 				}
-
-				return true
-			},
-		)
+			case *ast.CallExpr:
+				if viewSelector(typed.Fun) == "NewOutcomeRow" {
+					violations = append(violations, rel+": calls view.NewOutcomeRow")
+				}
+			}
+			return true
+		})
 	}
 
 	if len(violations) > 0 {
-		t.Fatalf(
-			"breakdown built outside view/pbconv; use view.ResolveBreakdown:\n%s",
-			strings.Join(violations, "\n"),
-		)
+		t.Fatalf("breakdown built outside view/pbconv; use view.ResolveBreakdown:\n%s", strings.Join(violations, "\n"))
 	}
 }
 
@@ -232,12 +196,10 @@ func viewSelector(expr ast.Expr) string {
 	if !ok {
 		return ""
 	}
-
 	pkg, ok := selector.X.(*ast.Ident)
 	if !ok || pkg.Name != "view" {
 		return ""
 	}
-
 	return selector.Sel.Name
 }
 
@@ -253,36 +215,27 @@ func TestRenderExposesNoGlyphAccessor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read render dir: %v", err)
 	}
-
 	fset := token.NewFileSet()
 	var violations []string
-
 	for _, entry := range entries {
 		name := entry.Name()
 		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-
 		parsed, parseErr := parser.ParseFile(fset, filepath.Join(renderDir, name), nil, 0)
 		if parseErr != nil {
 			t.Fatalf("parse %s: %v", name, parseErr)
 		}
-
 		for _, decl := range parsed.Decls {
 			for _, ident := range exportedTopLevelNames(decl) {
-				if strings.Contains(ident, "Glyph") || strings.Contains(ident, "Label") ||
-					strings.Contains(ident, "Presentation") {
+				if strings.Contains(ident, "Glyph") || strings.Contains(ident, "Label") || strings.Contains(ident, "Presentation") {
 					violations = append(violations, name+": exports "+ident)
 				}
 			}
 		}
 	}
-
 	if len(violations) > 0 {
-		t.Fatalf(
-			"render exports a glyph/label accessor; keep the presentation table unexported:\n%s",
-			strings.Join(violations, "\n"),
-		)
+		t.Fatalf("render exports a glyph/label accessor; keep the presentation table unexported:\n%s", strings.Join(violations, "\n"))
 	}
 }
 
@@ -311,6 +264,5 @@ func exportedTopLevelNames(decl ast.Decl) []string {
 			}
 		}
 	}
-
 	return names
 }

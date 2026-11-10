@@ -25,36 +25,24 @@ func resolveGitHubToken(ctx context.Context, log *slog.Logger) string {
 	if log == nil {
 		log = slog.Default()
 	}
-
 	for _, name := range githubTokenEnvNames {
 		if token := strings.TrimSpace(os.Getenv(name)); token != "" {
 			log.DebugContext(ctx, "update.credentials.resolved", "source", name)
 			return token
 		}
 	}
-
 	helperContext, cancel := context.WithTimeout(ctx, githubCLITimeout)
 	defer cancel()
-	output, err := exec.CommandContext(
-		helperContext,
-		"gh",
-		"auth",
-		"token",
-		"--hostname",
-		"github.com",
-	).Output()
+	output, err := exec.CommandContext(helperContext, "gh", "auth", "token", "--hostname", "github.com").Output()
 	if err != nil {
 		log.DebugContext(ctx, "update.credentials.unavailable", "source", "gh")
 		return ""
 	}
-
 	token := strings.TrimSpace(string(output))
 	if token == "" {
 		log.DebugContext(ctx, "update.credentials.unavailable", "source", "gh")
 		return ""
 	}
-
 	log.DebugContext(ctx, "update.credentials.resolved", "source", "gh")
-
 	return token
 }

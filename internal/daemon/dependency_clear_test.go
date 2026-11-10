@@ -28,7 +28,6 @@ func TestUpdateJobCompletedClearsDependencyOnlyWhenFilesEmbedded(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EvalSymlinks returned error: %v", err)
 		}
-
 		manager.semantic = nil
 
 		indexConfig := defaultIndexConfig()
@@ -38,17 +37,7 @@ func TestUpdateJobCompletedClearsDependencyOnlyWhenFilesEmbedded(t *testing.T) {
 		codebase.EffectiveConfig = indexConfig
 		codebase.UpdatedAt = clock.Now()
 
-		job := newQueuedJob(
-			codebase.ID,
-			canonicalPath,
-			canonicalPath,
-			testClientInfo(),
-			string(jobOperationSync),
-			false,
-			indexConfig,
-			emptyAdmissionBudget,
-			clock.Now(),
-		)
+		job := newQueuedJob(codebase.ID, canonicalPath, canonicalPath, testClientInfo(), string(jobOperationSync), false, indexConfig, emptyAdmissionBudget, clock.Now())
 		job.State = model.JobStateRunning
 		job.Progress.FilesEmbedded = filesEmbedded
 
@@ -58,54 +47,36 @@ func TestUpdateJobCompletedClearsDependencyOnlyWhenFilesEmbedded(t *testing.T) {
 		manager.jobs[job.ID] = job
 		manager.mu.Unlock()
 
-		manager.updateJobCompleted(
-			context.Background(),
-			job.ID,
-			indexer.Result{
-				IndexedFiles:      3,
-				TotalChunks:       5,
-				Chunks:            nil,
-				FileHashes:        map[string]string{"main.go": "hash"},
-				SkippedFiles:      nil,
-				SkippedOversize:   0,
-				SkippedUnreadable: 0,
-				SkippedPending:    0,
-			},
-		)
-
+		manager.updateJobCompleted(context.Background(), job.ID, indexer.Result{
+			IndexedFiles:      3,
+			TotalChunks:       5,
+			Chunks:            nil,
+			FileHashes:        map[string]string{"main.go": "hash"},
+			SkippedFiles:      nil,
+			SkippedOversize:   0,
+			SkippedUnreadable: 0,
+			SkippedPending:    0,
+		})
 		return manager
 	}
 
-	t.Run(
-		"zero embedded files keeps the store outage banner",
-		func(t *testing.T) {
-			manager := completeWithEmbedded(t, 0)
-			manager.mu.Lock()
-			mode := manager.health.Mode
-			manager.mu.Unlock()
-			if mode != dependencyStoreUnavailable {
-				t.Fatalf(
-					"dependency mode = %q after a zero-embed completion, want it to stay %q; a no-op sync must not clear a real outage",
-					mode,
-					dependencyStoreUnavailable,
-				)
-			}
-		},
-	)
+	t.Run("zero embedded files keeps the store outage banner", func(t *testing.T) {
+		manager := completeWithEmbedded(t, 0)
+		manager.mu.Lock()
+		mode := manager.health.Mode
+		manager.mu.Unlock()
+		if mode != dependencyStoreUnavailable {
+			t.Fatalf("dependency mode = %q after a zero-embed completion, want it to stay %q; a no-op sync must not clear a real outage", mode, dependencyStoreUnavailable)
+		}
+	})
 
-	t.Run(
-		"embedded files clear the store outage banner",
-		func(t *testing.T) {
-			manager := completeWithEmbedded(t, 5)
-			manager.mu.Lock()
-			mode := manager.health.Mode
-			manager.mu.Unlock()
-			if mode == dependencyStoreUnavailable {
-				t.Fatalf(
-					"dependency mode still %q after an embedding completion, want it cleared",
-					mode,
-				)
-			}
-		},
-	)
+	t.Run("embedded files clear the store outage banner", func(t *testing.T) {
+		manager := completeWithEmbedded(t, 5)
+		manager.mu.Lock()
+		mode := manager.health.Mode
+		manager.mu.Unlock()
+		if mode == dependencyStoreUnavailable {
+			t.Fatalf("dependency mode still %q after an embedding completion, want it cleared", mode)
+		}
+	})
 }

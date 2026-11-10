@@ -30,7 +30,6 @@ func ReadModelDownloadNetworkSettings(configPath string) (ModelDownloadNetworkSe
 	if err != nil {
 		return ModelDownloadNetworkSettings{}, err
 	}
-
 	return resolveModelDownloadNetworkSettings(fileConfig)
 }
 
@@ -42,29 +41,15 @@ func readModelDownloadNetworkConfig(path string) (persistedConfig, error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return cfg, nil
 	}
-
 	if err != nil {
 		slog.Error("read model download network settings config failed", "path", path, "err", err)
 		return cfg, fmt.Errorf("read model download network settings from %s: %w", path, err)
 	}
-
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		slog.Error(
-			"invalid JSON in model download network settings config",
-			"path",
-			path,
-			"err",
-			err,
-		)
+		slog.Error("invalid JSON in model download network settings config", "path", path, "err", err)
 		var emptyConfig persistedConfig
-
-		return emptyConfig, fmt.Errorf(
-			"parse model download network settings JSON from %s: %w",
-			path,
-			err,
-		)
+		return emptyConfig, fmt.Errorf("parse model download network settings JSON from %s: %w", path, err)
 	}
-
 	return cfg, nil
 }
 
@@ -75,7 +60,6 @@ func resolveModelDownloadNetworkSettings(
 	if err != nil {
 		return ModelDownloadNetworkSettings{}, err
 	}
-
 	return ModelDownloadNetworkSettings{
 		Policy:   policy,
 		Override: resolveModelDownloadNetworkOverride(fileConfig.ModelDownloadNetworkOverride),
@@ -83,7 +67,10 @@ func resolveModelDownloadNetworkSettings(
 }
 
 func resolveModelDownloadNetworkOverride(fileValue *bool) bool {
-	return envBoolOrDefault(modelDownloadNetworkOverrideEnvVar, boolOrDefault(fileValue, false))
+	return envBoolOrDefault(
+		modelDownloadNetworkOverrideEnvVar,
+		boolOrDefault(fileValue, false),
+	)
 }
 
 func resolveModelDownloadNetworkPolicy(fileValue string) (networkcost.Preference, error) {
@@ -95,16 +82,11 @@ func resolveModelDownloadNetworkPolicy(fileValue string) (networkcost.Preference
 	if err != nil {
 		slog.Error(
 			"invalid model download network policy",
-			"value",
-			configuredValue,
-			"config_field",
-			modelDownloadNetworkPolicyJSONField,
-			"env_var",
-			modelDownloadNetworkPolicyEnvVar,
-			"err",
-			err,
+			"value", configuredValue,
+			"config_field", modelDownloadNetworkPolicyJSONField,
+			"env_var", modelDownloadNetworkPolicyEnvVar,
+			"err", err,
 		)
-
 		return "", fmt.Errorf(
 			"resolve model download network policy from %s or %s: %w",
 			modelDownloadNetworkPolicyJSONField,
@@ -112,6 +94,5 @@ func resolveModelDownloadNetworkPolicy(fileValue string) (networkcost.Preference
 			err,
 		)
 	}
-
 	return preference, nil
 }

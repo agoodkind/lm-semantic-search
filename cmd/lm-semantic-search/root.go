@@ -29,7 +29,6 @@ func (options *rootOptions) resolvedMode() response.Mode {
 	if options.jsonOutput {
 		mode = response.ModeJSON
 	}
-
 	return mode
 }
 
@@ -45,7 +44,6 @@ func executeRoot(args []string) error {
 	if defaultSocketPath == "" {
 		err := errors.New("daemon socket path is empty")
 		slog.Error("load config failed", "err", err)
-
 		return fmt.Errorf("load config: %w", err)
 	}
 
@@ -54,7 +52,6 @@ func executeRoot(args []string) error {
 	if err := root.Execute(); err != nil {
 		return fmt.Errorf("execute root command: %w", err)
 	}
-
 	return nil
 }
 
@@ -84,24 +81,9 @@ func newRoot(defaultSocketPath string) *cobra.Command {
 		_, _ = fmt.Fprint(cmd.OutOrStdout(), helpText(cmd))
 	})
 
-	root.PersistentFlags().StringVar(
-		&options.socketPath,
-		"socket",
-		options.socketPath,
-		"unix socket path",
-	)
-	root.PersistentFlags().BoolVar(
-		&options.jsonOutput,
-		"json",
-		options.jsonOutput,
-		"print compact JSON instead of human text",
-	)
-	root.PersistentFlags().StringVar(
-		&options.outputValue,
-		"output",
-		options.outputValue,
-		"output mode: human, json, or single-line",
-	)
+	root.PersistentFlags().StringVar(&options.socketPath, "socket", options.socketPath, "unix socket path")
+	root.PersistentFlags().BoolVar(&options.jsonOutput, "json", options.jsonOutput, "print compact JSON instead of human text")
+	root.PersistentFlags().StringVar(&options.outputValue, "output", options.outputValue, "output mode: human, json, or single-line")
 
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newStatusCmd(options))
@@ -111,7 +93,6 @@ func newRoot(defaultSocketPath string) *cobra.Command {
 	root.AddCommand(newUpdateCmd(options))
 	root.AddCommand(newInstallCmd())
 	root.AddCommand(newProfileCmd())
-
 	return root
 }
 
@@ -120,12 +101,10 @@ func helpText(cmd *cobra.Command) string {
 	if description == "" {
 		description = strings.TrimSpace(cmd.Short)
 	}
-
 	usage := cmd.UsageString()
 	if description == "" {
 		return usage
 	}
-
 	return description + "\n\n" + usage
 }
 
@@ -134,7 +113,6 @@ func requireNoArgs(name string) cobra.PositionalArgs {
 		if len(args) == 0 {
 			return nil
 		}
-
 		return fmt.Errorf("%s accepts no arguments", name)
 	}
 }
@@ -144,13 +122,11 @@ func requireExactArgs(message string, count int) cobra.PositionalArgs {
 		if len(args) != count {
 			return errors.New(message)
 		}
-
 		for _, arg := range args {
 			if strings.TrimSpace(arg) == "" {
 				return errors.New(message)
 			}
 		}
-
 		return nil
 	}
 }

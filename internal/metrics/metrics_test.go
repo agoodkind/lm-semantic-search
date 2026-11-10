@@ -56,19 +56,15 @@ func TestEmbedBatchStartedAndDoneTrackInflight(t *testing.T) {
 	if after.EmbedInflight != 0 {
 		t.Fatalf("EmbedInflight after done = %d, want 0", after.EmbedInflight)
 	}
-
 	if after.EmbedBatchesTotal != 1 {
 		t.Fatalf("EmbedBatchesTotal = %d, want 1", after.EmbedBatchesTotal)
 	}
-
 	if after.EmbedVectorsTotal != 7 {
 		t.Fatalf("EmbedVectorsTotal = %d, want 7", after.EmbedVectorsTotal)
 	}
-
 	if after.EmbedLatencyMSSum != 25 {
 		t.Fatalf("EmbedLatencyMSSum = %d, want 25", after.EmbedLatencyMSSum)
 	}
-
 	if after.EmbedBatchesFailed != 0 {
 		t.Fatalf("EmbedBatchesFailed = %d, want 0", after.EmbedBatchesFailed)
 	}
@@ -83,7 +79,6 @@ func TestEmbedBatchDoneFailedCounts(t *testing.T) {
 	if after.EmbedBatchesFailed != 1 {
 		t.Fatalf("EmbedBatchesFailed = %d, want 1", after.EmbedBatchesFailed)
 	}
-
 	if after.EmbedBatchesTotal != 1 {
 		t.Fatalf("EmbedBatchesTotal = %d, want 1", after.EmbedBatchesTotal)
 	}
@@ -113,16 +108,13 @@ func TestEachIncrementMovesExactlyItsCounter(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(
-			tc.name,
-			func(t *testing.T) {
-				reset()
-				before := Read()
-				tc.call()
-				after := Read()
-				assertOnlyDelta(t, before, after, tc.field, tc.expect)
-			},
-		)
+		t.Run(tc.name, func(t *testing.T) {
+			reset()
+			before := Read()
+			tc.call()
+			after := Read()
+			assertOnlyDelta(t, before, after, tc.field, tc.expect)
+		})
 	}
 }
 
@@ -147,7 +139,6 @@ func TestSweepRanChangedFlag(t *testing.T) {
 	if mid.SweepRunsTotal != 1 {
 		t.Fatalf("SweepRunsTotal = %d, want 1", mid.SweepRunsTotal)
 	}
-
 	if mid.SweepChangedTotal != 0 {
 		t.Fatalf("SweepChangedTotal = %d, want 0", mid.SweepChangedTotal)
 	}
@@ -157,7 +148,6 @@ func TestSweepRanChangedFlag(t *testing.T) {
 	if after.SweepRunsTotal != 2 {
 		t.Fatalf("SweepRunsTotal = %d, want 2", after.SweepRunsTotal)
 	}
-
 	if after.SweepChangedTotal != 1 {
 		t.Fatalf("SweepChangedTotal = %d, want 1", after.SweepChangedTotal)
 	}
@@ -190,66 +180,28 @@ func TestMilvusCollectionMetricsTrackAggregateResidency(t *testing.T) {
 
 	got := Read()
 	if got.MilvusCollectionLoadsTotal != 1 || got.MilvusCollectionLoadInflight != 0 {
-		t.Fatalf(
-			"load totals = (%d, %d), want (1, 0)",
-			got.MilvusCollectionLoadsTotal,
-			got.MilvusCollectionLoadInflight,
-		)
+		t.Fatalf("load totals = (%d, %d), want (1, 0)", got.MilvusCollectionLoadsTotal, got.MilvusCollectionLoadInflight)
 	}
-
-	if got.MilvusCollectionLoadFailuresTotal != 0 ||
-		got.MilvusCollectionLoadWaitTimeoutsTotal != 1 {
-		t.Fatalf(
-			"load failures and waits = (%d, %d), want (0, 1)",
-			got.MilvusCollectionLoadFailuresTotal,
-			got.MilvusCollectionLoadWaitTimeoutsTotal,
-		)
+	if got.MilvusCollectionLoadFailuresTotal != 0 || got.MilvusCollectionLoadWaitTimeoutsTotal != 1 {
+		t.Fatalf("load failures and waits = (%d, %d), want (0, 1)", got.MilvusCollectionLoadFailuresTotal, got.MilvusCollectionLoadWaitTimeoutsTotal)
 	}
-
 	if got.MilvusCollectionLoadLatencyMSSum != 25 {
-		t.Fatalf(
-			"MilvusCollectionLoadLatencyMSSum = %d, want 25",
-			got.MilvusCollectionLoadLatencyMSSum,
-		)
+		t.Fatalf("MilvusCollectionLoadLatencyMSSum = %d, want 25", got.MilvusCollectionLoadLatencyMSSum)
 	}
-
 	if got.MilvusCollectionUnloadsTotal != 1 || got.MilvusCollectionUnloadFailuresTotal != 1 {
-		t.Fatalf(
-			"unload totals = (%d, %d), want (1, 1)",
-			got.MilvusCollectionUnloadsTotal,
-			got.MilvusCollectionUnloadFailuresTotal,
-		)
+		t.Fatalf("unload totals = (%d, %d), want (1, 1)", got.MilvusCollectionUnloadsTotal, got.MilvusCollectionUnloadFailuresTotal)
 	}
-
-	if got.MilvusCollectionUnloadSkippedInUseTotal != 1 ||
-		got.MilvusCollectionUnloadLatencyMSSum != 10 {
-		t.Fatalf(
-			"unload skip and latency = (%d, %d), want (1, 10)",
-			got.MilvusCollectionUnloadSkippedInUseTotal,
-			got.MilvusCollectionUnloadLatencyMSSum,
-		)
+	if got.MilvusCollectionUnloadSkippedInUseTotal != 1 || got.MilvusCollectionUnloadLatencyMSSum != 10 {
+		t.Fatalf("unload skip and latency = (%d, %d), want (1, 10)", got.MilvusCollectionUnloadSkippedInUseTotal, got.MilvusCollectionUnloadLatencyMSSum)
 	}
-
 	if got.MilvusCollectionLeasesActive != 0 {
 		t.Fatalf("MilvusCollectionLeasesActive = %d, want 0", got.MilvusCollectionLeasesActive)
 	}
-
-	if got.MilvusCollectionsIdle != 3 || got.MilvusCollectionsLoading != 2 ||
-		got.MilvusCollectionsReady != 5 {
-		t.Fatalf(
-			"state gauges = (%d, %d, %d), want (3, 2, 5)",
-			got.MilvusCollectionsIdle,
-			got.MilvusCollectionsLoading,
-			got.MilvusCollectionsReady,
-		)
+	if got.MilvusCollectionsIdle != 3 || got.MilvusCollectionsLoading != 2 || got.MilvusCollectionsReady != 5 {
+		t.Fatalf("state gauges = (%d, %d, %d), want (3, 2, 5)", got.MilvusCollectionsIdle, got.MilvusCollectionsLoading, got.MilvusCollectionsReady)
 	}
-
 	if got.MilvusMmapMigrationsTotal != 2 || got.MilvusMmapMigrationFailuresTotal != 1 {
-		t.Fatalf(
-			"mmap totals = (%d, %d), want (2, 1)",
-			got.MilvusMmapMigrationsTotal,
-			got.MilvusMmapMigrationFailuresTotal,
-		)
+		t.Fatalf("mmap totals = (%d, %d), want (2, 1)", got.MilvusMmapMigrationsTotal, got.MilvusMmapMigrationFailuresTotal)
 	}
 }
 
@@ -332,10 +284,8 @@ func assertOnlyDelta(t *testing.T, before, after Snapshot, field string, expect 
 			if delta != expect {
 				t.Fatalf("target counter %s delta = %d, want %d", name, delta, expect)
 			}
-
 			continue
 		}
-
 		if delta != 0 {
 			t.Errorf("unrelated counter %s moved: %d -> %d", name, beforeValue, afterFields[name])
 		}

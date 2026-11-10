@@ -26,18 +26,15 @@ func ReadMaintenance(path string) (model.MaintenanceState, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return off, nil
 	}
-
 	if err != nil {
 		slog.Error("read maintenance file failed", "path", path, "err", err)
 		return off, fmt.Errorf("read maintenance file %s: %w", path, err)
 	}
-
 	var state model.MaintenanceState
 	if err := json.Unmarshal(data, &state); err != nil {
 		slog.Error("unmarshal maintenance file failed", "path", path, "err", err)
 		return off, fmt.Errorf("unmarshal maintenance file %s: %w", path, err)
 	}
-
 	return state, nil
 }
 
@@ -48,16 +45,10 @@ func WriteMaintenance(path string, state model.MaintenanceState) error {
 		slog.Error("marshal maintenance file failed", "path", path, "err", err)
 		return fmt.Errorf("marshal maintenance file %s: %w", path, err)
 	}
-
-	return replaceFileAtomically(
-		path,
-		"maintenance file",
-		func(file *os.File) error {
-			if _, writeErr := file.Write(data); writeErr != nil {
-				return fmt.Errorf("write maintenance bytes: %w", writeErr)
-			}
-
-			return nil
-		},
-	)
+	return replaceFileAtomically(path, "maintenance file", func(file *os.File) error {
+		if _, writeErr := file.Write(data); writeErr != nil {
+			return fmt.Errorf("write maintenance bytes: %w", writeErr)
+		}
+		return nil
+	})
 }

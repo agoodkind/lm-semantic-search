@@ -89,14 +89,12 @@ func ArchiveFor(goos string, goarch string) (Archive, error) {
 		if !ok {
 			return Archive{}, fmt.Errorf("unsupported Darwin GOARCH %s", goarch)
 		}
-
 		return archive, nil
 	case operatingSystemLinux:
 		archive, ok := linuxArchives[goarch]
 		if !ok {
 			return Archive{}, fmt.Errorf("unsupported Linux GOARCH %s", goarch)
 		}
-
 		return archive, nil
 	default:
 		return Archive{}, fmt.Errorf("unsupported GOOS %s", goos)
@@ -139,7 +137,6 @@ func StageSharedLibrary(
 	if err != nil {
 		return wrapError("create temporary directory", err)
 	}
-
 	defer func() {
 		_ = os.RemoveAll(temporaryDirectory)
 	}()
@@ -148,19 +145,13 @@ func StageSharedLibrary(
 	if err != nil {
 		return err
 	}
-
 	if err := os.MkdirAll(directory, defaultDirectoryMode); err != nil {
 		return wrapError("create library directory", err)
 	}
-
 	sourceLibraryPath := filepath.Join(archiveDirectory, "lib", names.Versioned)
-	if err := copyFileReplacing(
-		sourceLibraryPath,
-		filepath.Join(directory, names.Versioned),
-	); err != nil {
+	if err := copyFileReplacing(sourceLibraryPath, filepath.Join(directory, names.Versioned)); err != nil {
 		return wrapError("copy ONNX Runtime shared library", err)
 	}
-
 	return nil
 }
 
@@ -173,21 +164,13 @@ func FetchArchive(
 	workDirectory string,
 ) (string, error) {
 	archivePath := filepath.Join(workDirectory, "onnxruntime.tgz")
-	if err := downloadAndVerify(
-		ctx,
-		httpClient,
-		archive.URL,
-		archive.SHA256,
-		archivePath,
-	); err != nil {
+	if err := downloadAndVerify(ctx, httpClient, archive.URL, archive.SHA256, archivePath); err != nil {
 		return "", err
 	}
-
 	extractedDirectory := filepath.Join(workDirectory, "onnxruntime")
 	if err := extractTarGzip(archivePath, extractedDirectory); err != nil {
 		return "", wrapError("extract ONNX Runtime archive", err)
 	}
-
 	return filepath.Join(extractedDirectory, archive.Name), nil
 }
 
@@ -202,14 +185,12 @@ func InstallLibrary(archiveDirectory string, names LibraryNames, libraryDirector
 	if err := copyFileReplacing(sourceLibraryPath, destinationLibraryPath); err != nil {
 		return wrapError("copy ONNX Runtime shared library", err)
 	}
-
 	for _, linkName := range []string{names.SONAME, names.Unversioned} {
 		linkPath := filepath.Join(libraryDirectory, linkName)
 		if err := symlinkReplacing(names.Versioned, linkPath); err != nil {
 			return wrapError("create ONNX Runtime shared library symlink", err)
 		}
 	}
-
 	return nil
 }
 
@@ -224,7 +205,6 @@ func copyFileReplacing(sourcePath string, destinationPath string) error {
 	if err != nil {
 		return wrapError("open source file", err)
 	}
-
 	defer func() {
 		_ = source.Close()
 	}()
@@ -232,7 +212,6 @@ func copyFileReplacing(sourcePath string, destinationPath string) error {
 	if err != nil {
 		return wrapError("inspect source file", err)
 	}
-
 	destination, err := os.CreateTemp(
 		filepath.Dir(destinationPath),
 		"."+filepath.Base(destinationPath)+".*",
@@ -240,7 +219,6 @@ func copyFileReplacing(sourcePath string, destinationPath string) error {
 	if err != nil {
 		return wrapError("create destination file", err)
 	}
-
 	temporaryPath := destination.Name()
 	_, copyErr := io.Copy(destination, source)
 	closeErr := destination.Close()
@@ -248,22 +226,18 @@ func copyFileReplacing(sourcePath string, destinationPath string) error {
 		_ = os.Remove(temporaryPath)
 		return wrapError("copy dependency file", copyErr)
 	}
-
 	if closeErr != nil {
 		_ = os.Remove(temporaryPath)
 		return wrapError("close destination file", closeErr)
 	}
-
 	if err := os.Chmod(temporaryPath, sourceInfo.Mode().Perm()); err != nil {
 		_ = os.Remove(temporaryPath)
 		return wrapError("set destination file mode", err)
 	}
-
 	if err := os.Rename(temporaryPath, destinationPath); err != nil {
 		_ = os.Remove(temporaryPath)
 		return wrapError("replace destination file", err)
 	}
-
 	return nil
 }
 
@@ -273,16 +247,13 @@ func symlinkReplacing(target string, linkPath string) error {
 	if err := os.Remove(temporaryLinkPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return wrapError("remove stale temporary symlink", err)
 	}
-
 	if err := os.Symlink(target, temporaryLinkPath); err != nil {
 		return wrapError("create temporary symlink", err)
 	}
-
 	if err := os.Rename(temporaryLinkPath, linkPath); err != nil {
 		_ = os.Remove(temporaryLinkPath)
 		return wrapError("replace symlink", err)
 	}
-
 	return nil
 }
 
@@ -298,7 +269,6 @@ func downloadAndVerify(
 	if err != nil {
 		return wrapError("create download request", err)
 	}
-
 	response, err := httpClient.Do(request)
 	if err != nil {
 		return wrapError("download "+url, err)
@@ -314,13 +284,11 @@ func downloadAndVerify(
 	if err != nil {
 		return wrapError("create download destination", err)
 	}
-
 	_, copyErr := io.Copy(destination, response.Body)
 	closeErr := destination.Close()
 	if copyErr != nil {
 		return wrapError("write download", copyErr)
 	}
-
 	if closeErr != nil {
 		return wrapError("close download", closeErr)
 	}
@@ -328,7 +296,6 @@ func downloadAndVerify(
 	if err := verifySHA256(destinationPath, expectedSHA256); err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -338,23 +305,25 @@ func verifySHA256(path string, expected string) error {
 	if err != nil {
 		return wrapError("open "+path+" for checksum", err)
 	}
-
 	hash := sha256.New()
 	_, copyErr := io.Copy(hash, file)
 	closeErr := file.Close()
 	if copyErr != nil {
 		return wrapError("hash "+path, copyErr)
 	}
-
 	if closeErr != nil {
 		return wrapError("close "+path+" after checksum", closeErr)
 	}
 
 	actual := hex.EncodeToString(hash.Sum(nil))
 	if actual != expected {
-		return fmt.Errorf("checksum mismatch for %s: got %s, want %s", path, actual, expected)
+		return fmt.Errorf(
+			"checksum mismatch for %s: got %s, want %s",
+			path,
+			actual,
+			expected,
+		)
 	}
-
 	return nil
 }
 
@@ -366,7 +335,6 @@ func safeArchivePath(rootDirectory string, entryName string) (string, error) {
 	if !filepath.IsLocal(localName) {
 		return "", fmt.Errorf("unsafe archive path %q", entryName)
 	}
-
 	return filepath.Join(rootDirectory, filepath.Clean(localName)), nil
 }
 
@@ -382,6 +350,5 @@ func pathWithinRoot(rootDirectory string, candidatePath string) bool {
 	if cleanCandidate == cleanRoot {
 		return true
 	}
-
 	return strings.HasPrefix(cleanCandidate, cleanRoot+string(filepath.Separator))
 }

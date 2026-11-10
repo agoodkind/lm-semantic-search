@@ -15,19 +15,21 @@ func TestActivitySnapshotUnavailableSource(t *testing.T) {
 	if snapshot.InputAvailable {
 		t.Fatal("InputAvailable = true, want false")
 	}
-
 	if snapshot.InputReason != reason {
-		t.Fatalf("InputReason = %q, want activity unavailable", snapshot.InputReason)
+		t.Fatalf(
+			"InputReason = %q, want activity unavailable",
+			snapshot.InputReason,
+		)
 	}
-
 	if snapshot.ThermalAvailable {
 		t.Fatal("ThermalAvailable = true, want false")
 	}
-
 	if snapshot.ThermalReason != reason {
-		t.Fatalf("ThermalReason = %q, want activity unavailable", snapshot.ThermalReason)
+		t.Fatalf(
+			"ThermalReason = %q, want activity unavailable",
+			snapshot.ThermalReason,
+		)
 	}
-
 	source.Close()
 }
 
@@ -36,6 +38,5 @@ func TestNewReturnsSource(t *testing.T) {
 	if source == nil {
 		t.Fatal("New returned nil source")
 	}
-
 	t.Cleanup(source.Close)
 }

@@ -42,7 +42,6 @@ func (events *removalTestEvents) snapshot() []removalTestEvent {
 	defer events.mu.Unlock()
 	snapshot := make([]removalTestEvent, len(events.events))
 	copy(snapshot, events.events)
-
 	return snapshot
 }
 
@@ -64,11 +63,7 @@ func (handler *removalLogHandler) Handle(_ context.Context, record slog.Record) 
 		attrs[attr.Key] = attr.Value.String()
 		return true
 	})
-	handler.events.append(removalTestEvent{
-		kind:  record.Message,
-		attrs: attrs,
-	})
-
+	handler.events.append(removalTestEvent{kind: record.Message, attrs: attrs})
 	return nil
 }
 
@@ -146,16 +141,11 @@ func (server *removalMilvusServer) Delete(
 	deleteCallCount := server.deleteCallCount
 	server.mu.Unlock()
 
-	server.events.append(removalTestEvent{
-		kind:  "delete",
-		attrs: nil,
-	})
+	server.events.append(removalTestEvent{kind: "delete", attrs: nil})
 	if deleteCallCount == server.failDeleteCall {
 		return nil, status.Error(codes.Internal, "configured delete failure")
 	}
-
 	deleteCount := server.deleteCounts[deleteCallCount-1]
-
 	return &milvuspb.MutationResult{
 		Status:    removalSuccessStatus(),
 		DeleteCnt: deleteCount,
@@ -165,7 +155,6 @@ func (server *removalMilvusServer) Delete(
 func (server *removalMilvusServer) deleteCalls() int {
 	server.mu.Lock()
 	defer server.mu.Unlock()
-
 	return server.deleteCallCount
 }
 
@@ -194,38 +183,27 @@ func TestReindexLogsRemovedRowCountsAfterEveryDeleteSucceeds(t *testing.T) {
 
 	got := events.snapshot()
 	if len(got) != 2 {
-		t.Fatalf(
-			"event count = %d, want one delete followed by one success log: %+v",
-			len(got),
-			got,
-		)
+		t.Fatalf("event count = %d, want one delete followed by one success log: %+v", len(got), got)
 	}
-
 	if got[0].kind != "delete" {
 		t.Fatalf("event 0 = %q, want delete before the success log", got[0].kind)
 	}
-
 	completed := got[1]
 	if completed.kind != removalCompletedMessage {
+		t.Fatalf("last event = %q, want %q after every delete", completed.kind, removalCompletedMessage)
+	}
+	if completed.attrs["path_rows_removed"] != "500" {
 		t.Fatalf(
-			"last event = %q, want %q after every delete",
-			completed.kind,
-			removalCompletedMessage,
+			"path_rows_removed = %q, want \"500\"",
+			completed.attrs["path_rows_removed"],
 		)
 	}
-
-	if completed.attrs["path_rows_removed"] != "500" {
-		t.Fatalf("path_rows_removed = %q, want \"500\"", completed.attrs["path_rows_removed"])
-	}
-
 	if completed.attrs["rows_removed"] != "500" {
 		t.Fatalf("rows_removed = %q, want \"500\"", completed.attrs["rows_removed"])
 	}
-
 	if _, found := completed.attrs["path_filters"]; found {
 		t.Fatal("success log still exposes the requested path-filter count")
 	}
-
 	if _, found := completed.attrs["prefix_filters"]; found {
 		t.Fatal("success log still exposes the requested prefix-filter count")
 	}
@@ -247,8 +225,12 @@ func newRemovalTestService(
 	failDeleteCall int,
 ) *semantic.Service {
 	t.Helper()
-	_, service := newRemovalTestServerAndService(t, events, deleteCounts, failDeleteCall)
-
+	_, service := newRemovalTestServerAndService(
+		t,
+		events,
+		deleteCounts,
+		failDeleteCall,
+	)
 	return service
 }
 
@@ -264,7 +246,6 @@ func newRemovalTestServerAndService(
 	if err != nil {
 		t.Fatalf("Listen returned error: %v", err)
 	}
-
 	server := &removalMilvusServer{
 		failDeleteCall: failDeleteCall,
 		deleteCounts:   deleteCounts,
@@ -291,12 +272,10 @@ func newRemovalTestServerAndService(
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
-
 	t.Cleanup(func() {
 		if closeErr := service.Close(context.Background()); closeErr != nil {
 			t.Fatalf("Close returned error: %v", closeErr)
 		}
 	})
-
 	return server, service
 }

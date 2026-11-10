@@ -37,19 +37,13 @@ const (
 	// onnxInputContainsNUL marks an input carrying a NUL byte. The binding passes
 	// the text as a NUL-terminated C string, so the tokenizer would measure only
 	// the bytes before that NUL and any vector would cover that prefix alone.
-	onnxInputContainsNUL onnxInputRejection = onnxInputRejection(
-		adapterr.EmbedRejectionInputContainsNUL,
-	)
+	onnxInputContainsNUL onnxInputRejection = onnxInputRejection(adapterr.EmbedRejectionInputContainsNUL)
 	// onnxInputBytesExceeded marks an input past onnxMaximumInputBytesPerToken per
 	// allowed token, rejected before tokenization rather than measured exactly.
-	onnxInputBytesExceeded onnxInputRejection = onnxInputRejection(
-		adapterr.EmbedRejectionInputBytesExceeded,
-	)
+	onnxInputBytesExceeded onnxInputRejection = onnxInputRejection(adapterr.EmbedRejectionInputBytesExceeded)
 	// onnxInputOverTokenLimit marks an input the tokenizer measured past the
 	// model's maximum token count.
-	onnxInputOverTokenLimit onnxInputRejection = onnxInputRejection(
-		adapterr.EmbedRejectionContextLengthExceeded,
-	)
+	onnxInputOverTokenLimit onnxInputRejection = onnxInputRejection(adapterr.EmbedRejectionContextLengthExceeded)
 	// onnxInputEmpty marks an input carrying no non-whitespace character. The
 	// tokenizer would reduce it to the model's special tokens alone, so the vector
 	// would describe the model rather than any content.
@@ -80,14 +74,17 @@ func newGenericTokenizer(
 	if maximumTokens == 0 {
 		return nil, fmt.Errorf("ONNX tokenizer maximum token count must be positive")
 	}
-
 	tokenizerData, err := os.ReadFile(tokenizerPath)
 	if err != nil {
-		slog.Error("read ONNX tokenizer failed", "path", tokenizerPath, "err", err)
-
+		slog.Error(
+			"read ONNX tokenizer failed",
+			"path",
+			tokenizerPath,
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("read ONNX tokenizer %s: %w", tokenizerPath, err)
 	}
-
 	// The tokenizer deliberately carries no truncation setting. Truncating here
 	// would hide the overflow and let the provider return a vector for content
 	// the model never saw; encode instead reports the input's true token count
@@ -95,11 +92,15 @@ func newGenericTokenizer(
 	// split-and-retry loop divides it into pieces that fit.
 	loadedTokenizer, err := tokenizers.FromBytes(tokenizerData)
 	if err != nil {
-		slog.Error("load ONNX tokenizer failed", "path", tokenizerPath, "err", err)
-
+		slog.Error(
+			"load ONNX tokenizer failed",
+			"path",
+			tokenizerPath,
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("load ONNX tokenizer %s: %w", tokenizerPath, err)
 	}
-
 	return &genericTokenizer{
 		tokenizer:     loadedTokenizer,
 		maximumTokens: int(maximumTokens),
@@ -121,15 +122,12 @@ func (tokenizer *genericTokenizer) classifyInput(text string) onnxInputRejection
 	if embedding.HasNothingToEmbed(text) {
 		return onnxInputEmpty
 	}
-
 	if strings.ContainsRune(text, 0) {
 		return onnxInputContainsNUL
 	}
-
 	if len(text) > tokenizer.maximumInputBytes() {
 		return onnxInputBytesExceeded
 	}
-
 	return onnxInputAccepted
 }
 
@@ -144,7 +142,6 @@ func (tokenizer *genericTokenizer) encode(text string) (encodedONNXInput, error)
 	if rejection := tokenizer.classifyInput(text); rejection != onnxInputAccepted {
 		return rejectedEncodedONNXInput(rejection, 0), nil
 	}
-
 	encoding, err := tokenizer.tokenizer.EncodeWithOptionsErr(
 		text,
 		true,
@@ -155,11 +152,9 @@ func (tokenizer *genericTokenizer) encode(text string) (encodedONNXInput, error)
 		slog.Error("encode ONNX input failed", "err", err)
 		return emptyEncodedONNXInput(), fmt.Errorf("encode ONNX input: %w", err)
 	}
-
 	if len(encoding.IDs) == 0 {
 		return emptyEncodedONNXInput(), fmt.Errorf("ONNX tokenizer returned no token ids")
 	}
-
 	if len(encoding.IDs) > tokenizer.maximumTokens {
 		return rejectedEncodedONNXInput(onnxInputOverTokenLimit, len(encoding.IDs)), nil
 	}
@@ -172,7 +167,6 @@ func (tokenizer *genericTokenizer) encode(text string) (encodedONNXInput, error)
 			attentionMask[index] = 1
 		}
 	}
-
 	if len(attentionMask) != len(inputIDs) {
 		return emptyEncodedONNXInput(), fmt.Errorf(
 			"ONNX tokenizer returned %d attention values for %d token ids",
@@ -185,7 +179,6 @@ func (tokenizer *genericTokenizer) encode(text string) (encodedONNXInput, error)
 	if len(tokenTypeIDs) == 0 {
 		tokenTypeIDs = make([]int64, len(inputIDs))
 	}
-
 	if len(tokenTypeIDs) != len(inputIDs) {
 		return emptyEncodedONNXInput(), fmt.Errorf(
 			"ONNX tokenizer returned %d type ids for %d token ids",
@@ -236,7 +229,6 @@ func (tokenizer *genericTokenizer) Close() error {
 		slog.Error("close ONNX tokenizer failed", "err", err)
 		return fmt.Errorf("close ONNX tokenizer: %w", err)
 	}
-
 	return nil
 }
 
@@ -245,6 +237,5 @@ func uint32sToInt64s(values []uint32) []int64 {
 	for _, value := range values {
 		converted = append(converted, int64(value))
 	}
-
 	return converted
 }

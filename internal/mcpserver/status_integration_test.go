@@ -33,7 +33,6 @@ func TestStatusMCPProcess(t *testing.T) {
 	if os.Getenv(statusProcessEnv) != "1" {
 		t.Skip("The stdio MCP client starts this subprocess helper.")
 	}
-
 	if err := mcpserver.Run(context.Background()); err != nil {
 		t.Fatalf("serve stdio MCP: %v", err)
 	}
@@ -45,45 +44,22 @@ func TestIndexingStatusReturnsCurrentProgressWithoutWaiting(t *testing.T) {
 		model.CodebaseStatusPending,
 		model.CodebaseStatusIndexing,
 	} {
-		t.Run(
-			string(state),
-			func(t *testing.T) {
-				socketPath, codebasePath := startStatusTestDaemon(t, state)
-				client := newStatusTestClient(t, socketPath)
-				started := time.Now()
-				status := callStatusTestTool(
-					t,
-					client,
-					"get_indexing_status",
-					map[string]any{
-						"absolutePath": codebasePath,
-					},
-				)
-				elapsed := time.Since(started)
-				t.Logf(
-					"get_indexing_status state=%s searchable=%t elapsed=%s",
-					status.GetCodebase().GetStatus(),
-					status.GetSearchable(),
-					elapsed,
-				)
-				if elapsed >= statusResponseLimit {
-					t.Fatalf(
-						"get_indexing_status took %s; it must return current progress within %s",
-						elapsed,
-						statusResponseLimit,
-					)
-				}
-
-				if !status.GetTracked() || status.GetSearchable() ||
-					status.GetCodebase().GetStatus() != string(state) {
-					t.Fatalf(
-						"status = %v, want tracked %s without a searchable index",
-						status,
-						state,
-					)
-				}
-			},
-		)
+		t.Run(string(state), func(t *testing.T) {
+			socketPath, codebasePath := startStatusTestDaemon(t, state)
+			client := newStatusTestClient(t, socketPath)
+			started := time.Now()
+			status := callStatusTestTool(t, client, "get_indexing_status", map[string]any{
+				"absolutePath": codebasePath,
+			})
+			elapsed := time.Since(started)
+			t.Logf("get_indexing_status state=%s searchable=%t elapsed=%s", status.GetCodebase().GetStatus(), status.GetSearchable(), elapsed)
+			if elapsed >= statusResponseLimit {
+				t.Fatalf("get_indexing_status took %s; it must return current progress within %s", elapsed, statusResponseLimit)
+			}
+			if !status.GetTracked() || status.GetSearchable() || status.GetCodebase().GetStatus() != string(state) {
+				t.Fatalf("status = %v, want tracked %s without a searchable index", status, state)
+			}
+		})
 	}
 }
 
@@ -91,28 +67,16 @@ func TestWaitForIndexingStillWaitsForCurrentProgress(t *testing.T) {
 	socketPath, codebasePath := startStatusTestDaemon(t, model.CodebaseStatusPending)
 	client := newStatusTestClient(t, socketPath)
 	started := time.Now()
-	status := callStatusTestTool(
-		t,
-		client,
-		"wait_for_indexing",
-		map[string]any{
-			"absolutePath":         codebasePath,
-			"wait_timeout_seconds": 1,
-		},
-	)
+	status := callStatusTestTool(t, client, "wait_for_indexing", map[string]any{
+		"absolutePath":         codebasePath,
+		"wait_timeout_seconds": 1,
+	})
 	elapsed := time.Since(started)
-	t.Logf(
-		"wait_for_indexing state=%s searchable=%t elapsed=%s",
-		status.GetCodebase().GetStatus(),
-		status.GetSearchable(),
-		elapsed,
-	)
+	t.Logf("wait_for_indexing state=%s searchable=%t elapsed=%s", status.GetCodebase().GetStatus(), status.GetSearchable(), elapsed)
 	if elapsed < statusResponseLimit {
 		t.Fatalf("wait_for_indexing returned after %s before its one-second timeout", elapsed)
 	}
-
-	if status.GetSearchable() ||
-		status.GetCodebase().GetStatus() != string(model.CodebaseStatusPending) {
+	if status.GetSearchable() || status.GetCodebase().GetStatus() != string(model.CodebaseStatusPending) {
 		t.Fatalf("status = %v, want current pending progress after timeout", status)
 	}
 }
@@ -133,32 +97,14 @@ func TestIndexingStatusReturnsQueuedJobWithoutWaiting(t *testing.T) {
 	if err != nil || result == nil || result.IsError {
 		t.Fatalf("queue index_codebase result=%v error=%v", result, err)
 	}
-
 	started := time.Now()
-	status := callStatusTestTool(
-		t,
-		client,
-		"get_indexing_status",
-		map[string]any{
-			"absolutePath": codebasePath,
-		},
-	)
+	status := callStatusTestTool(t, client, "get_indexing_status", map[string]any{
+		"absolutePath": codebasePath,
+	})
 	elapsed := time.Since(started)
-	t.Logf(
-		"get_indexing_status state=%s job=%s searchable=%t elapsed=%s",
-		status.GetCodebase().GetStatus(),
-		status.GetActiveJob().GetState(),
-		status.GetSearchable(),
-		elapsed,
-	)
-	if elapsed >= statusResponseLimit || status.GetSearchable() ||
-		status.GetActiveJob().GetState() != string(model.JobStateQueued) {
-		t.Fatalf(
-			"status after %s = %v, want queued progress within %s",
-			elapsed,
-			status,
-			statusResponseLimit,
-		)
+	t.Logf("get_indexing_status state=%s job=%s searchable=%t elapsed=%s", status.GetCodebase().GetStatus(), status.GetActiveJob().GetState(), status.GetSearchable(), elapsed)
+	if elapsed >= statusResponseLimit || status.GetSearchable() || status.GetActiveJob().GetState() != string(model.JobStateQueued) {
+		t.Fatalf("status after %s = %v, want queued progress within %s", elapsed, status, statusResponseLimit)
 	}
 }
 
@@ -172,25 +118,17 @@ func TestIndexingStatusReportsUnavailableDaemon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call get_indexing_status: %v", err)
 	}
-
 	if !result.IsError || len(result.Content) != 1 {
 		t.Fatalf("result = %v, want one tool error", result)
 	}
-
 	text := result.Content[0].(mcp.TextContent).Text
 	if !strings.Contains(text, "dial unix") || !strings.Contains(text, "no such file") {
 		t.Fatalf("tool error = %q, want daemon socket failure", text)
 	}
-
 	t.Logf("get_indexing_status unavailable daemon: %s", text)
 }
 
-func callStatusTestTool(
-	t *testing.T,
-	client *mcpclient.Client,
-	toolName string,
-	arguments map[string]any,
-) *pb.GetIndexResponse {
+func callStatusTestTool(t *testing.T, client *mcpclient.Client, toolName string, arguments map[string]any) *pb.GetIndexResponse {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*statusResponseLimit)
 	defer cancel()
@@ -200,21 +138,17 @@ func callStatusTestTool(
 	if err != nil {
 		t.Fatalf("call %s: %v", toolName, err)
 	}
-
 	if result.IsError || len(result.Content) != 1 {
 		t.Fatalf("%s result = %#v, want one successful status", toolName, result)
 	}
-
 	text, ok := result.Content[0].(mcp.TextContent)
 	if !ok {
 		t.Fatalf("%s content type = %T, want text", toolName, result.Content[0])
 	}
-
 	status := &pb.GetIndexResponse{}
 	if err := protojson.Unmarshal([]byte(text.Text), status); err != nil {
 		t.Fatalf("decode %s status: %v", toolName, err)
 	}
-
 	return status
 }
 
@@ -223,30 +157,20 @@ func newStatusTestClient(t *testing.T, socketPath string) *mcpclient.Client {
 	return newMCPProcessClient(t, socketPath, response.ModeJSON)
 }
 
-func newMCPProcessClient(
-	t *testing.T,
-	socketPath string,
-	outputMode response.Mode,
-) *mcpclient.Client {
+func newMCPProcessClient(t *testing.T, socketPath string, outputMode response.Mode) *mcpclient.Client {
 	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatalf("find test executable: %v", err)
 	}
-
-	client, err := mcpclient.NewStdioMCPClient(
-		executable,
-		[]string{
-			"CLAUDE_CONTEXTD_SOCKET_PATH=" + socketPath,
-			"CLAUDE_CONTEXT_MCP_OUTPUT=" + string(outputMode),
-			statusProcessEnv + "=1",
-		},
-		"-test.run=^TestStatusMCPProcess$",
-	)
+	client, err := mcpclient.NewStdioMCPClient(executable, []string{
+		"CLAUDE_CONTEXTD_SOCKET_PATH=" + socketPath,
+		"CLAUDE_CONTEXT_MCP_OUTPUT=" + string(outputMode),
+		statusProcessEnv + "=1",
+	}, "-test.run=^TestStatusMCPProcess$")
 	if err != nil {
 		t.Fatalf("create MCP client: %v", err)
 	}
-
 	t.Cleanup(func() {
 		if err := client.Close(); err != nil {
 			t.Errorf("close MCP client: %v", err)
@@ -254,16 +178,12 @@ func newMCPProcessClient(
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err = client.Initialize(
-		ctx,
-		mcp.InitializeRequest{
-			Params: mcp.InitializeParams{ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION},
-		},
-	)
+	_, err = client.Initialize(ctx, mcp.InitializeRequest{
+		Params: mcp.InitializeParams{ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION},
+	})
 	if err != nil {
 		t.Fatalf("initialize MCP client: %v", err)
 	}
-
 	return client
 }
 
@@ -273,50 +193,38 @@ func statusToolRequest(arguments map[string]any) mcp.CallToolRequest {
 
 func startStatusTestDaemon(t *testing.T, state model.CodebaseStatus) (string, string) {
 	t.Helper()
-
 	for _, variable := range sandbox.Env(t.TempDir()) {
 		t.Setenv(variable.Name, variable.Value)
 	}
-
 	t.Setenv("CLAUDE_CONTEXT_PROFILE", config.ProfileStandard)
 	t.Setenv("MILVUS_ADDRESS", "")
 	cfg, err := config.Default()
 	if err != nil {
 		t.Fatalf("load sandbox config: %v", err)
 	}
-
 	for _, directory := range sandbox.Directories(cfg) {
 		if err := os.MkdirAll(directory, 0o755); err != nil {
 			t.Fatalf("create sandbox directory: %v", err)
 		}
 	}
-
 	codebasePath, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatalf("resolve codebase directory: %v", err)
 	}
-
-	if err := store.WriteRegistry(
-		cfg.RegistryPath,
-		model.RegistryFile{
-			Codebases: []model.Codebase{
-				{
-					ID:               statusTestCodebaseID,
-					CanonicalPath:    codebasePath,
-					Status:           state,
-					SchedulingPolicy: model.DefaultSchedulingPolicy(),
-				},
-			},
-		},
-	); err != nil {
+	if err := store.WriteRegistry(cfg.RegistryPath, model.RegistryFile{
+		Codebases: []model.Codebase{{
+			ID:               statusTestCodebaseID,
+			CanonicalPath:    codebasePath,
+			Status:           state,
+			SchedulingPolicy: model.DefaultSchedulingPolicy(),
+		}},
+	}); err != nil {
 		t.Fatalf("write sandbox registry: %v", err)
 	}
-
 	manager, err := daemon.NewManager(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("start sandbox manager: %v", err)
 	}
-
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -329,7 +237,6 @@ func startStatusTestDaemon(t *testing.T, state model.CodebaseStatus) (string, st
 	if err != nil {
 		t.Fatalf("listen on daemon socket: %v", err)
 	}
-
 	grpcServer := grpc.NewServer()
 	pb.RegisterSemanticSearchDaemonServiceServer(grpcServer, daemon.NewGRPCServer(manager, nil))
 	go func() {
@@ -338,7 +245,6 @@ func startStatusTestDaemon(t *testing.T, state model.CodebaseStatus) (string, st
 		}
 	}()
 	t.Cleanup(grpcServer.GracefulStop)
-
 	return socketPath, codebasePath
 }
 
@@ -349,12 +255,10 @@ func statusTestSocketPath(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("create socket directory: %v", err)
 	}
-
 	t.Cleanup(func() {
 		if err := os.RemoveAll(socketDirectory); err != nil {
 			t.Errorf("remove socket directory: %v", err)
 		}
 	})
-
 	return filepath.Join(socketDirectory, "d.sock")
 }

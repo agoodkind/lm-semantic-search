@@ -21,7 +21,6 @@ func TestStatusSnapshotDoesNotWaitForJournalWrite(t *testing.T) {
 	manager.appendJobEvent = func(string, model.JobEvent) error {
 		close(writeStarted)
 		<-releaseWrite
-
 		return nil
 	}
 
@@ -48,7 +47,6 @@ func TestStatusSnapshotDoesNotWaitForJournalWrite(t *testing.T) {
 		if err := <-appendDone; err != nil {
 			t.Fatalf("appendJobLocked returned error: %v", err)
 		}
-
 		t.Fatal("StatusSnapshot blocked while journal append was in flight")
 	}
 
@@ -70,37 +68,26 @@ func TestJobJournalWriterPreservesEventOrder(t *testing.T) {
 			close(firstWriteStarted)
 			<-releaseFirstWrite
 		}
-
 		return store.AppendJobEvent(path, event)
 	}
 	writer := newJobJournalWriter(journalPath, appendJobEvent, store.AppendJobEventSync, 1)
 	t.Cleanup(writer.close)
 
 	job := model.Job{ID: "job-ordered", State: model.JobStateQueued}
-	if err := writer.enqueue(model.JobEvent{
-		Event: "job_queued",
-		Job:   job,
-	}); err != nil {
+	if err := writer.enqueue(model.JobEvent{Event: "job_queued", Job: job}); err != nil {
 		t.Fatalf("enqueue queued event returned error: %v", err)
 	}
-
 	<-firstWriteStarted
 
 	job.State = model.JobStateRunning
-	if err := writer.enqueue(model.JobEvent{
-		Event: "job_running",
-		Job:   job,
-	}); err != nil {
+	if err := writer.enqueue(model.JobEvent{Event: "job_running", Job: job}); err != nil {
 		t.Fatalf("enqueue running event returned error: %v", err)
 	}
 
 	job.State = model.JobStateCompleted
 	finalEnqueueDone := make(chan error, 1)
 	go func() {
-		finalEnqueueDone <- writer.enqueue(model.JobEvent{
-			Event: "job_completed",
-			Job:   job,
-		})
+		finalEnqueueDone <- writer.enqueue(model.JobEvent{Event: "job_completed", Job: job})
 	}()
 	select {
 	case err := <-finalEnqueueDone:
@@ -112,27 +99,22 @@ func TestJobJournalWriterPreservesEventOrder(t *testing.T) {
 	if err := <-finalEnqueueDone; err != nil {
 		t.Fatalf("enqueue completed event returned error: %v", err)
 	}
-
 	writer.close()
 
 	data, err := os.ReadFile(journalPath)
 	if err != nil {
 		t.Fatalf("ReadFile returned error: %v", err)
 	}
-
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(lines) != 3 {
 		t.Fatalf("journal line count = %d, want 3", len(lines))
 	}
-
 	wantEvents := []string{"job_queued", "job_running", "job_completed"}
-
 	for i, line := range lines {
 		var event model.JobEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			t.Fatalf("Unmarshal journal line %d returned error: %v", i, err)
 		}
-
 		if event.Event != wantEvents[i] {
 			t.Fatalf("journal event %d = %q, want %q", i, event.Event, wantEvents[i])
 		}
@@ -142,7 +124,6 @@ func TestJobJournalWriterPreservesEventOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadJobEvents returned error: %v", err)
 	}
-
 	if jobs[job.ID].State != model.JobStateCompleted {
 		t.Fatalf("replayed state = %q, want %q", jobs[job.ID].State, model.JobStateCompleted)
 	}
@@ -154,18 +135,11 @@ func TestJobJournalWriterJournalBarrierWaitsForPriorAsyncEvent(t *testing.T) {
 	t.Cleanup(writer.close)
 
 	job := model.Job{ID: "job-barrier", State: model.JobStateQueued}
-	if err := writer.enqueue(model.JobEvent{
-		Event: "job_queued",
-		Job:   job,
-	}); err != nil {
+	if err := writer.enqueue(model.JobEvent{Event: "job_queued", Job: job}); err != nil {
 		t.Fatalf("enqueue queued event returned error: %v", err)
 	}
-
 	job.State = model.JobStateRunning
-	if err := writer.enqueueAndSync(model.JobEvent{
-		Event: "job_paused",
-		Job:   job,
-	}); err != nil {
+	if err := writer.enqueueAndSync(model.JobEvent{Event: "job_paused", Job: job}); err != nil {
 		t.Fatalf("enqueueAndSync paused event returned error: %v", err)
 	}
 
@@ -173,20 +147,16 @@ func TestJobJournalWriterJournalBarrierWaitsForPriorAsyncEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile returned error: %v", err)
 	}
-
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("journal line count = %d, want 2", len(lines))
 	}
-
 	wantEvents := []string{"job_queued", "job_paused"}
-
 	for i, line := range lines {
 		var event model.JobEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			t.Fatalf("Unmarshal journal line %d returned error: %v", i, err)
 		}
-
 		if event.Event != wantEvents[i] {
 			t.Fatalf("journal event %d = %q, want %q", i, event.Event, wantEvents[i])
 		}
@@ -204,14 +174,12 @@ func TestJobJournalWriterJournalBarrierReturnsSyncFailure(t *testing.T) {
 	)
 	t.Cleanup(writer.close)
 
-	err := writer.enqueueAndSync(model.JobEvent{
-		Event: "job_paused",
-		Job:   model.Job{ID: "job-barrier-failure"},
-	})
+	err := writer.enqueueAndSync(
+		model.JobEvent{Event: "job_paused", Job: model.Job{ID: "job-barrier-failure"}},
+	)
 	if !errors.Is(err, syncErr) {
 		t.Fatalf("enqueueAndSync error = %v, want injected sync failure", err)
 	}
-
 	if !strings.Contains(err.Error(), journalPath) {
 		t.Fatalf("enqueueAndSync error = %q, want journal path %q", err, journalPath)
 	}
@@ -224,18 +192,11 @@ func TestManagerJobTransitionBarrierIsInitializedAndOrdered(t *testing.T) {
 	}
 
 	job := model.Job{ID: "job-manager-barrier", State: model.JobStateQueued}
-	if err := manager.jobJournal.enqueue(model.JobEvent{
-		Event: "job_queued",
-		Job:   job,
-	}); err != nil {
+	if err := manager.jobJournal.enqueue(model.JobEvent{Event: "job_queued", Job: job}); err != nil {
 		t.Fatalf("enqueue queued event returned error: %v", err)
 	}
-
 	job.State = model.JobStateRunning
-	if err := manager.appendJobTransition(model.JobEvent{
-		Event: "job_paused",
-		Job:   job,
-	}); err != nil {
+	if err := manager.appendJobTransition(model.JobEvent{Event: "job_paused", Job: job}); err != nil {
 		t.Fatalf("appendJobTransition returned error: %v", err)
 	}
 
@@ -243,20 +204,16 @@ func TestManagerJobTransitionBarrierIsInitializedAndOrdered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile returned error: %v", err)
 	}
-
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("journal line count = %d, want 2", len(lines))
 	}
-
 	wantEvents := []string{"job_queued", "job_paused"}
-
 	for i, line := range lines {
 		var event model.JobEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			t.Fatalf("Unmarshal journal line %d returned error: %v", i, err)
 		}
-
 		if event.Event != wantEvents[i] {
 			t.Fatalf("journal event %d = %q, want %q", i, event.Event, wantEvents[i])
 		}

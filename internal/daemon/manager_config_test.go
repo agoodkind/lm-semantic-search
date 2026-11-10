@@ -19,7 +19,11 @@ func TestEnrichIndexConfigReportsConfiguredVectorBackend(t *testing.T) {
 	got := manager.enrichIndexConfig(model.IndexConfig{})
 
 	if got.VectorBackend != config.IndexBackendLocal {
-		t.Fatalf("VectorBackend = %q, want %q", got.VectorBackend, config.IndexBackendLocal)
+		t.Fatalf(
+			"VectorBackend = %q, want %q",
+			got.VectorBackend,
+			config.IndexBackendLocal,
+		)
 	}
 }
 

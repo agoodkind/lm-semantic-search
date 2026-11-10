@@ -66,16 +66,13 @@ func (snapshot *Snapshot) Hash() string {
 	for path := range snapshot.Files {
 		paths = append(paths, path)
 	}
-
 	slices.Sort(paths)
-
 	for _, path := range paths {
 		hash.Write([]byte(path))
 		hash.Write([]byte{0})
 		hash.Write([]byte(snapshot.Files[path]))
 		hash.Write([]byte{0})
 	}
-
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
@@ -86,15 +83,12 @@ func (snapshot *Snapshot) LookupByInode(ref InodeRef) []string {
 	if ref.IsZero() || len(snapshot.Inodes) == 0 {
 		return nil
 	}
-
 	matches := make([]string, 0)
-
 	for path, recorded := range snapshot.Inodes {
 		if recorded == ref {
 			matches = append(matches, path)
 		}
 	}
-
 	return matches
 }
 
@@ -105,14 +99,11 @@ func (snapshot *Snapshot) RecordInode(relativePath string, ref InodeRef) {
 		if snapshot.Inodes != nil {
 			delete(snapshot.Inodes, relativePath)
 		}
-
 		return
 	}
-
 	if snapshot.Inodes == nil {
 		snapshot.Inodes = map[string]InodeRef{}
 	}
-
 	snapshot.Inodes[relativePath] = ref
 }
 
@@ -122,7 +113,6 @@ func (snapshot *Snapshot) ForgetInode(relativePath string) {
 	if snapshot.Inodes == nil {
 		return
 	}
-
 	delete(snapshot.Inodes, relativePath)
 }
 
@@ -144,19 +134,15 @@ func (snapshot *Snapshot) CoversPath(relativePath string) bool {
 	if relativePath == "" || relativePath == "." {
 		return len(snapshot.Files) > 0
 	}
-
 	if snapshot.HasFile(relativePath) {
 		return true
 	}
-
 	prefix := relativePath + "/"
-
 	for indexedPath := range snapshot.Files {
 		if strings.HasPrefix(indexedPath, prefix) {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -202,7 +188,6 @@ func Capture(
 		if symlink {
 			info, err = os.Stat(path)
 		}
-
 		if err != nil {
 			// A file the walk listed can vanish before the stat (a delete or a
 			// dangling symlink between discovery and capture). Skip it like the
@@ -211,9 +196,7 @@ func Capture(
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-
 			slog.ErrorContext(ctx, "stat file for snapshot failed", "path", path, "err", err)
-
 			return Snapshot{}, fmt.Errorf("stat file for snapshot %s: %w", path, err)
 		}
 
@@ -229,10 +212,12 @@ func Capture(
 				"err",
 				err,
 			)
-
-			return Snapshot{}, fmt.Errorf("compute snapshot relative path for %s: %w", path, err)
+			return Snapshot{}, fmt.Errorf(
+				"compute snapshot relative path for %s: %w",
+				path,
+				err,
+			)
 		}
-
 		// Route the stat-stage gate through the resolver so the snapshot's file
 		// set matches the indexer's; discovery already applied scope and ignore,
 		// so this re-check only adds the size and not-regular verdicts.
@@ -245,9 +230,7 @@ func Capture(
 			if errors.Is(err, os.ErrNotExist) || skipReadFailureForSnapshot(path) {
 				continue
 			}
-
 			slog.ErrorContext(ctx, "read file for snapshot failed", "path", path, "err", err)
-
 			return Snapshot{}, fmt.Errorf("read file for snapshot %s: %w", path, err)
 		}
 
@@ -257,13 +240,11 @@ func Capture(
 		if !resolver.DecideContent(data).Indexed {
 			continue
 		}
-
 		snapshot.Files[relativePath] = digestBytes(data)
 		if !symlink {
 			snapshot.RecordInode(relativePath, inodeFromFileInfo(info))
 		}
 	}
-
 	return snapshot, nil
 }
 
@@ -275,7 +256,6 @@ func skipReadFailureForSnapshot(path string) bool {
 		// real read failure that should surface.
 		return errors.Is(err, os.ErrNotExist)
 	}
-
 	return !info.Mode().IsRegular()
 }
 
@@ -299,30 +279,31 @@ func WriteSnapshot(path string, snapshot Snapshot) error {
 		slog.Error("create temp Merkle snapshot failed", "path", path, "err", err)
 		return fmt.Errorf("create temp snapshot %s: %w", path, err)
 	}
-
 	tempPath := tempFile.Name()
 
 	if _, err := tempFile.Write(data); err != nil {
 		tempFile.Close()
 		_ = os.Remove(tempPath)
 		slog.Error("write temp Merkle snapshot failed", "path", tempPath, "err", err)
-
 		return fmt.Errorf("write temp snapshot %s: %w", tempPath, err)
 	}
-
 	if err := tempFile.Close(); err != nil {
 		_ = os.Remove(tempPath)
 		slog.Error("close temp Merkle snapshot failed", "path", tempPath, "err", err)
-
 		return fmt.Errorf("close temp snapshot %s: %w", tempPath, err)
 	}
-
 	if err := os.Rename(tempPath, path); err != nil {
-		slog.Error("rename temp Merkle snapshot failed", "from", tempPath, "to", path, "err", err)
-
+		slog.Error(
+			"rename temp Merkle snapshot failed",
+			"from",
+			tempPath,
+			"to",
+			path,
+			"err",
+			err,
+		)
 		return fmt.Errorf("rename temp snapshot %s to %s: %w", tempPath, path, err)
 	}
-
 	return nil
 }
 
@@ -349,42 +330,24 @@ var ErrConfigDigestMismatch = errors.New("merkle snapshot was written for a diff
 // field. When a snapshot's stored digest is empty and the supplied
 // legacy digest matches the request, the snapshot is treated as valid
 // and returned with the request digest stamped in memory.
-func LoadSnapshotForConfig(
-	path string,
-	configDigest string,
-	legacyAcceptDigest string,
-) (Snapshot, error) {
+func LoadSnapshotForConfig(path string, configDigest string, legacyAcceptDigest string) (Snapshot, error) {
 	empty := Snapshot{ConfigDigest: configDigest, Files: map[string]string{}, Inodes: nil}
 	snapshot, err := ReadSnapshot(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("load merkle snapshot failed; treating as empty", "path", path, "err", err)
 		}
-
 		return empty, err
 	}
-
 	storedDigest := snapshot.ConfigDigest
 	if storedDigest == "" {
 		storedDigest = legacyAcceptDigest
 	}
-
 	if storedDigest != configDigest {
-		slog.Info(
-			"merkle snapshot config digest mismatch; starting fresh checkpoint",
-			"path",
-			path,
-			"snapshot_digest",
-			snapshot.ConfigDigest,
-			"request_digest",
-			configDigest,
-		)
-
+		slog.Info("merkle snapshot config digest mismatch; starting fresh checkpoint", "path", path, "snapshot_digest", snapshot.ConfigDigest, "request_digest", configDigest)
 		return empty, fmt.Errorf("load snapshot %s: %w", path, ErrConfigDigestMismatch)
 	}
-
 	snapshot.ConfigDigest = configDigest
-
 	return snapshot, nil
 }
 
@@ -392,11 +355,7 @@ func LoadSnapshotForConfig(
 // whose absence carries no information, so the caller has nothing to do with
 // the error. That is the staging bootstrap checkpoint, which a build that was
 // interrupted before its first per-file write legitimately never created.
-func LoadOptionalSnapshotForConfig(
-	path string,
-	configDigest string,
-	legacyAcceptDigest string,
-) Snapshot {
+func LoadOptionalSnapshotForConfig(path string, configDigest string, legacyAcceptDigest string) Snapshot {
 	snapshot, _ := LoadSnapshotForConfig(path, configDigest, legacyAcceptDigest)
 	return snapshot
 }
@@ -416,7 +375,6 @@ func ReadSnapshot(path string) (Snapshot, error) {
 		} else {
 			slog.Error("read Merkle snapshot failed", "path", path, "err", err)
 		}
-
 		return Snapshot{}, fmt.Errorf("read snapshot %s: %w", path, err)
 	}
 
@@ -425,11 +383,9 @@ func ReadSnapshot(path string) (Snapshot, error) {
 		slog.Error("unmarshal Merkle snapshot failed", "path", path, "err", err)
 		return Snapshot{}, fmt.Errorf("unmarshal snapshot %s: %w", path, err)
 	}
-
 	if snapshot.Files == nil {
 		snapshot.Files = map[string]string{}
 	}
-
 	return snapshot, nil
 }
 
@@ -459,12 +415,10 @@ func DiffSnapshots(prev Snapshot, current Snapshot) Diff {
 			added = append(added, path)
 			continue
 		}
-
 		if previousHash != currentHash {
 			modified = append(modified, path)
 		}
 	}
-
 	for path := range prev.Files {
 		if _, found := current.Files[path]; !found {
 			removed = append(removed, path)
@@ -474,7 +428,6 @@ func DiffSnapshots(prev Snapshot, current Snapshot) Diff {
 	slices.Sort(added)
 	slices.Sort(modified)
 	slices.Sort(removed)
-
 	return Diff{Added: added, Modified: modified, Removed: removed}
 }
 
@@ -488,7 +441,6 @@ func Equal(left Snapshot, right Snapshot) bool {
 	for path := range left.Files {
 		keys = append(keys, path)
 	}
-
 	slices.Sort(keys)
 
 	for _, path := range keys {
@@ -496,7 +448,6 @@ func Equal(left Snapshot, right Snapshot) bool {
 			return false
 		}
 	}
-
 	return true
 }
 

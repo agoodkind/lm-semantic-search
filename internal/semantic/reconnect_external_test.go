@@ -30,7 +30,6 @@ func TestMain(testMain *testing.M) {
 		_, _ = fmt.Fprintf(os.Stderr, "start promotion test Milvus server: %v\n", err)
 		os.Exit(1)
 	}
-
 	grpcServer := grpc.NewServer()
 	milvuspb.RegisterMilvusServiceServer(grpcServer, semantic.PromotionRecoveryServerForTest())
 	semantic.SetPromotionRecoveryServerAddressForTest(listener.Addr().String())
@@ -77,18 +76,16 @@ func (reconnectMilvusServer) ShowCollections(
 // collections before the reconnector can publish it.
 func TestReconnectMakesServiceAvailableAgainstFakeMilvus(t *testing.T) {
 	restoreTimeout := semantic.SetBootDialTimeoutForTest(20 * time.Millisecond)
-	restoreSleep := semantic.SetReconnectSleepForTest(
-		func(ctx context.Context, _ time.Duration) bool {
-			timer := time.NewTimer(time.Millisecond)
-			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-				return false
-			case <-timer.C:
-				return true
-			}
-		},
-	)
+	restoreSleep := semantic.SetReconnectSleepForTest(func(ctx context.Context, _ time.Duration) bool {
+		timer := time.NewTimer(time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return true
+		}
+	})
 	restoreJitter := semantic.SetReconnectJitterForTest(func(time.Duration) time.Duration {
 		return time.Millisecond
 	})
@@ -102,7 +99,6 @@ func TestReconnectMakesServiceAvailableAgainstFakeMilvus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen returned error: %v", err)
 	}
-
 	address := listener.Addr().String()
 	if err := listener.Close(); err != nil {
 		t.Fatalf("Close listener returned error: %v", err)
@@ -119,7 +115,6 @@ func TestReconnectMakesServiceAvailableAgainstFakeMilvus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
-
 	t.Cleanup(func() {
 		if closeErr := service.Close(context.Background()); closeErr != nil {
 			t.Fatalf("Close returned error: %v", closeErr)
@@ -133,7 +128,6 @@ func TestReconnectMakesServiceAvailableAgainstFakeMilvus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen returned error: %v", err)
 	}
-
 	grpcServer := grpc.NewServer()
 	milvuspb.RegisterMilvusServiceServer(grpcServer, reconnectMilvusServer{})
 	t.Cleanup(func() {
@@ -148,9 +142,7 @@ func TestReconnectMakesServiceAvailableAgainstFakeMilvus(t *testing.T) {
 		if service.Available() && !service.Degraded() {
 			return
 		}
-
 		time.Sleep(10 * time.Millisecond)
 	}
-
 	t.Fatal("service did not become available after the fake Milvus started")
 }

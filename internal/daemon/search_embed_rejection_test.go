@@ -36,23 +36,14 @@ type embedRefusalCase struct {
 func searchQueryRefusalCases() []embedRefusalCase {
 	return []embedRefusalCase{
 		{
-			name: "endpoint names the offending index",
-			body: `{"error":{"code":"context_length_exceeded","type":"invalid_request_error","message":"This model's maximum context length is 8192 tokens, however the input at index 0 resolved to 10000 tokens. Reduce the input length."}}`,
-			wantFragments: []string{
-				"context_length_exceeded",
-				"8192",
-				"10000",
-				"shorten the input",
-			},
+			name:          "endpoint names the offending index",
+			body:          `{"error":{"code":"context_length_exceeded","type":"invalid_request_error","message":"This model's maximum context length is 8192 tokens, however the input at index 0 resolved to 10000 tokens. Reduce the input length."}}`,
+			wantFragments: []string{"context_length_exceeded", "8192", "10000", "shorten the input"},
 		},
 		{
-			name: "endpoint words the refusal without an index",
-			body: `{"error":{"code":"context_length_exceeded","type":"invalid_request_error","message":"The input is too long for this model."}}`,
-			wantFragments: []string{
-				"context_length_exceeded",
-				"no size figures",
-				"shorten the input",
-			},
+			name:          "endpoint words the refusal without an index",
+			body:          `{"error":{"code":"context_length_exceeded","type":"invalid_request_error","message":"The input is too long for this model."}}`,
+			wantFragments: []string{"context_length_exceeded", "no size figures", "shorten the input"},
 		},
 	}
 }
@@ -66,105 +57,74 @@ func searchQueryRefusalCases() []embedRefusalCase {
 // healthy, it simply refused one oversized input.
 func TestSearchCodeTellsTheClientWhyTheEmbedderRefusedTheQuery(t *testing.T) {
 	for _, refusal := range searchQueryRefusalCases() {
-		t.Run(
-			refusal.name,
-			func(t *testing.T) {
-				endpoint := httptest.NewServer(
-					http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-						writer.Header().Set("Content-Type", "application/json")
-						writer.WriteHeader(http.StatusBadRequest)
-						_, _ = writer.Write([]byte(refusal.body))
-					}),
-				)
-				defer endpoint.Close()
+		t.Run(refusal.name, func(t *testing.T) {
+			endpoint := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(http.StatusBadRequest)
+				_, _ = writer.Write([]byte(refusal.body))
+			}))
+			defer endpoint.Close()
 
-				provider, err := embeddingprovider.New(
-					context.Background(),
-					config.Config{
-						EmbeddingProvider: "OpenAI",
-						OpenAIAPIKey:      "test-key",
-						OpenAIBaseURL:     endpoint.URL,
-						EmbeddingModel:    "model",
-					},
-				)
-				if err != nil {
-					t.Fatalf("NewProvider returned error: %v", err)
-				}
+			provider, err := embeddingprovider.New(context.Background(), config.Config{
+				EmbeddingProvider: "OpenAI",
+				OpenAIAPIKey:      "test-key",
+				OpenAIBaseURL:     endpoint.URL,
+				EmbeddingModel:    "model",
+			})
+			if err != nil {
+				t.Fatalf("NewProvider returned error: %v", err)
+			}
+			_, embedErr := provider.Embed(context.Background(), strings.Repeat("a", 40000))
+			if embedErr == nil {
+				t.Fatal("the provider accepted a query the endpoint refused as too long")
+			}
 
-				_, embedErr := provider.Embed(context.Background(), strings.Repeat("a", 40000))
-				if embedErr == nil {
-					t.Fatal("the provider accepted a query the endpoint refused as too long")
-				}
+			manager, _, repoPath := newTestManager(t)
+			canonical, symlinkErr := filepath.EvalSymlinks(repoPath)
+			if symlinkErr != nil {
+				t.Fatalf("EvalSymlinks returned error: %v", symlinkErr)
+			}
+			codebase := newCodebaseRecord(canonical)
+			codebase.Status = model.CodebaseStatusIndexed
+			manager.mu.Lock()
+			manager.codebases[codebase.ID] = codebase
+			manager.mu.Unlock()
+			// The semantic layer wraps whatever the provider returned, exactly as
+			// searchCollection does on the real path.
+			manager.semantic = &fakeSemantic{
+				search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
+					return nil, fmt.Errorf("embed query: %w", embedErr)
+				},
+			}
 
-				manager, _, repoPath := newTestManager(t)
-				canonical, symlinkErr := filepath.EvalSymlinks(repoPath)
-				if symlinkErr != nil {
-					t.Fatalf("EvalSymlinks returned error: %v", symlinkErr)
+			server := NewGRPCServer(manager, nil)
+			_, searchErr := server.SearchCode(context.Background(), &pb.SearchCodeRequest{
+				Path:  repoPath,
+				Query: "anything",
+				Limit: 5,
+			})
+			if searchErr == nil {
+				t.Fatal("SearchCode succeeded for a query the embedder refused")
+			}
+			responded, ok := grpcstatus.FromError(searchErr)
+			if !ok {
+				t.Fatalf("SearchCode returned a non-status error: %v", searchErr)
+			}
+			if responded.Code() != codes.InvalidArgument {
+				t.Fatalf("gRPC code = %v, want %v so the caller knows the request itself is fixable", responded.Code(), codes.InvalidArgument)
+			}
+			message := responded.Message()
+			if strings.Contains(message, "internal error") {
+				t.Fatalf("the client saw an opaque internal error with no way to act on it: %q", message)
+			}
+			for _, want := range refusal.wantFragments {
+				if !strings.Contains(message, want) {
+					t.Fatalf("client message %q does not carry %q", message, want)
 				}
-
-				codebase := newCodebaseRecord(canonical)
-				codebase.Status = model.CodebaseStatusIndexed
-				manager.mu.Lock()
-				manager.codebases[codebase.ID] = codebase
-				manager.mu.Unlock()
-				// The semantic layer wraps whatever the provider returned, exactly as
-				// searchCollection does on the real path.
-				manager.semantic = &fakeSemantic{
-					search: func(context.Context, string, string, int32, []string, string) (
-						[]model.StoredChunk,
-						error,
-					) {
-						return nil, fmt.Errorf("embed query: %w", embedErr)
-					},
-				}
-
-				server := NewGRPCServer(manager, nil)
-				_, searchErr := server.SearchCode(
-					context.Background(),
-					&pb.SearchCodeRequest{
-						Path:  repoPath,
-						Query: "anything",
-						Limit: 5,
-					},
-				)
-				if searchErr == nil {
-					t.Fatal("SearchCode succeeded for a query the embedder refused")
-				}
-
-				responded, ok := grpcstatus.FromError(searchErr)
-				if !ok {
-					t.Fatalf("SearchCode returned a non-status error: %v", searchErr)
-				}
-
-				if responded.Code() != codes.InvalidArgument {
-					t.Fatalf(
-						"gRPC code = %v, want %v so the caller knows the request itself is fixable",
-						responded.Code(),
-						codes.InvalidArgument,
-					)
-				}
-
-				message := responded.Message()
-				if strings.Contains(message, "internal error") {
-					t.Fatalf(
-						"the client saw an opaque internal error with no way to act on it: %q",
-						message,
-					)
-				}
-
-				for _, want := range refusal.wantFragments {
-					if !strings.Contains(message, want) {
-						t.Fatalf("client message %q does not carry %q", message, want)
-					}
-				}
-
-				if health := manager.DependencyHealth(); health.Degraded() {
-					t.Fatalf(
-						"a refused query degraded embedder health to %q; the endpoint answered correctly and is healthy",
-						health.Mode,
-					)
-				}
-			},
-		)
+			}
+			if health := manager.DependencyHealth(); health.Degraded() {
+				t.Fatalf("a refused query degraded embedder health to %q; the endpoint answered correctly and is healthy", health.Mode)
+			}
+		})
 	}
 }

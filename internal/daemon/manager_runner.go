@@ -37,10 +37,8 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 		manager.policyMutationMutex.Unlock()
 		cancel()
 		close(done)
-
 		return
 	}
-
 	manager.cancels[jobID] = cancel
 	manager.done[jobID] = done
 	manager.mu.Unlock()
@@ -51,24 +49,75 @@ func (manager *Manager) runJobAsync(ctx context.Context, jobID string) {
 			cancel()
 			if recovered := recover(); recovered != nil {
 				panicErr := fmt.Errorf("indexing goroutine panic: %v", recovered)
-				slog.ErrorContext(
-					backgroundContext,
-					"indexing goroutine panic",
-					"err",
-					panicErr,
-					"job_id",
-					jobID,
-				)
+				slog.ErrorContext(backgroundContext, "indexing goroutine panic", "err", panicErr, "job_id", jobID)
 				manager.updateJobFailed(context.WithoutCancel(backgroundContext), jobID, panicErr)
 			}
-
 			manager.mu.Lock()
 			delete(manager.cancels, jobID)
 			delete(manager.done, jobID)
 			manager.mu.Unlock()
 			close(done)
 		}()
-		manager.runQueuedJob(backgroundContext, jobID)
+		if !manager.awaitEmbeddingModel(backgroundContext, jobID) {
+			manager.updateJobCancelled(backgroundContext, jobID)
+			return
+		}
+		for attempt := 1; attempt <= jobStartRetryAttempts; attempt++ {
+			manager.mu.Lock()
+			job, found := manager.jobs[jobID]
+			manager.mu.Unlock()
+			if !found {
+				return
+			}
+			if isTerminalJobState(job.State) {
+				return
+			}
+			holdSyncLock := manager.semantic != nil && manager.semantic.Available()
+			capacity, outcome, capacityErr := manager.acquireJobCapacity(
+				backgroundContext,
+				job,
+				holdSyncLock,
+			)
+			if outcome != syncLockAcquired {
+				manager.finishCapacityAdmissionFailure(
+					backgroundContext,
+					jobID,
+					outcome,
+					capacityErr,
+				)
+				return
+			}
+			lockOutcome, lockErr := manager.refreshSyncLockAfterAdmission(
+				backgroundContext,
+				capacity,
+				holdSyncLock,
+			)
+			if lockOutcome != syncLockAcquired {
+				capacity.release(context.WithoutCancel(backgroundContext))
+				manager.finishCapacityAdmissionFailure(
+					backgroundContext,
+					jobID,
+					lockOutcome,
+					lockErr,
+				)
+				return
+			}
+			runContext := withJobCapacity(backgroundContext, capacity)
+			runContext = withJobSchedulerLease(runContext, jobID, capacity.lease)
+			graphTask, retryStart := func() (*graphIndexTask, bool) {
+				defer capacity.release(context.WithoutCancel(backgroundContext))
+				return manager.runJob(runContext, jobID)
+			}()
+			if manager.retryJobStart(backgroundContext, jobID, retryStart, attempt) {
+				continue
+			}
+			if manager.jobIsQueued(jobID) {
+				manager.updateJobCancelled(backgroundContext, jobID)
+				return
+			}
+			manager.runGraphIndexTask(backgroundContext, graphTask)
+			return
+		}
 	}()
 }
 
@@ -82,7 +131,6 @@ func (manager *Manager) finishCapacityAdmissionFailure(
 		manager.updateJobFailed(ctx, jobID, err)
 		return
 	}
-
 	manager.updateJobCancelled(ctx, jobID)
 }
 
@@ -95,7 +143,6 @@ func (manager *Manager) retryJobStart(
 	if !retryStart || attempt >= jobStartRetryAttempts {
 		return false
 	}
-
 	select {
 	case <-time.After(jobStartRetryDelay):
 		return true
@@ -113,14 +160,11 @@ func (manager *Manager) refreshSyncLockAfterAdmission(
 	if holdSyncLock || manager.semantic == nil || !manager.semantic.Available() {
 		return syncLockAcquired, nil
 	}
-
 	outcome, err := capacity.acquireSyncLock(ctx)
 	if outcome != syncLockAcquired {
 		return outcome, err
 	}
-
 	capacity.holdSyncLock = true
-
 	return syncLockAcquired, nil
 }
 
@@ -128,7 +172,6 @@ func (manager *Manager) jobIsQueued(jobID string) bool {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	job, found := manager.jobs[jobID]
-
 	return found && job.State == model.JobStateQueued
 }
 
@@ -163,42 +206,31 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) (*graphIndexTa
 	// rebuild take. A code job walks the filesystem through the code source; a
 	// conversation ingest feeds the manifest and documents through its own source
 	// in runConversationIngest, then shares the same delta-then-bootstrap routine.
-	codeSource := newCodeItemSource(
-		manager.runner,
-		manager.indexability,
-		job.CodebaseID,
-		job.CanonicalPath,
-		job.Config,
-	)
+	codeSource := newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config)
 	if manager.semantic != nil && manager.semantic.Available() {
 		collectionName := manager.semantic.CollectionName(job.CanonicalPath)
 		codeSource = codeSource.withCollectionName(collectionName)
 		codeSource = codeSource.withContentReuse(manager.jobContentReusePlan(ctx, job))
 	}
-
 	switch jobOperation(job.Operation) {
 	case jobOperationSync:
 		handled, graphTask := manager.runDeltaSync(ctx, job, codeSource)
 		if handled {
 			return graphTask, false
 		}
-
 		return manager.runBootstrap(ctx, job, codeSource), false
 	case jobOperationStreamingReindex:
 		handled, graphTask := manager.runDeltaSync(ctx, job, codeSource)
 		if handled {
 			return graphTask, false
 		}
-
 		return manager.runBootstrap(ctx, job, codeSource), false
 	case jobOperationIndex:
 		reason := bootstrapReasonFirstIndex
 		if job.Forced {
 			reason = bootstrapReasonForcedReindex
 		}
-
 		manager.routeToBootstrap(ctx, job.ID, reason)
-
 		return manager.runBootstrap(ctx, job, codeSource), false
 	case jobOperationConversationIngest:
 		// A job journal written by an earlier daemon version can still list a
@@ -206,7 +238,6 @@ func (manager *Manager) runJob(ctx context.Context, jobID string) (*graphIndexTa
 		// fails here.
 		manager.updateJobFailed(ctx, job.ID, errUnsupportedDocumentIngest)
 	}
-
 	return nil, false
 }
 
@@ -217,78 +248,10 @@ func (manager *Manager) JobSuccessorID(job model.Job) string {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	codebaseJobs := make([]model.Job, 0)
-
 	for _, candidate := range manager.jobs {
 		if candidate.CodebaseID == job.CodebaseID {
 			codebaseJobs = append(codebaseJobs, candidate)
 		}
 	}
-
 	return buildJobSuccessors(codebaseJobs)[job.ID]
-}
-
-func (manager *Manager) runQueuedJob(backgroundContext context.Context, jobID string) {
-	if !manager.awaitEmbeddingModel(backgroundContext, jobID) {
-		manager.updateJobCancelled(backgroundContext, jobID)
-
-		return
-	}
-
-	for attempt := 1; attempt <= jobStartRetryAttempts; attempt++ {
-		manager.mu.Lock()
-		job, found := manager.jobs[jobID]
-		manager.mu.Unlock()
-		if !found {
-			return
-		}
-
-		if isTerminalJobState(job.State) {
-			return
-		}
-
-		holdSyncLock := manager.semantic != nil && manager.semantic.Available()
-		capacity, outcome, capacityErr := manager.acquireJobCapacity(
-			backgroundContext,
-			job,
-			holdSyncLock,
-		)
-		if outcome != syncLockAcquired {
-			manager.finishCapacityAdmissionFailure(backgroundContext, jobID, outcome, capacityErr)
-
-			return
-		}
-
-		lockOutcome, lockErr := manager.refreshSyncLockAfterAdmission(
-			backgroundContext,
-			capacity,
-			holdSyncLock,
-		)
-		if lockOutcome != syncLockAcquired {
-			capacity.release(context.WithoutCancel(backgroundContext))
-			manager.finishCapacityAdmissionFailure(backgroundContext, jobID, lockOutcome, lockErr)
-
-			return
-		}
-
-		runContext := withJobCapacity(backgroundContext, capacity)
-		runContext = withJobSchedulerLease(runContext, jobID, capacity.lease)
-		graphTask, retryStart := func() (*graphIndexTask, bool) {
-			defer capacity.release(context.WithoutCancel(backgroundContext))
-
-			return manager.runJob(runContext, jobID)
-		}()
-		if manager.retryJobStart(backgroundContext, jobID, retryStart, attempt) {
-			continue
-		}
-
-		if manager.jobIsQueued(jobID) {
-			manager.updateJobCancelled(backgroundContext, jobID)
-
-			return
-		}
-
-		manager.runGraphIndexTask(backgroundContext, graphTask)
-
-		return
-	}
 }

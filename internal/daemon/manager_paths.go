@@ -23,9 +23,7 @@ func (manager *Manager) findCodebaseByExactRoot(canonicalPath string) (model.Cod
 			return codebase, true
 		}
 	}
-
 	var emptyCodebase model.Codebase
-
 	return emptyCodebase, false
 }
 
@@ -39,19 +37,13 @@ func (manager *Manager) findCodebasesByCoverage(canonicalPath string) []model.Co
 		if codebase.Kind == model.CodebaseKindDocument {
 			continue
 		}
-
 		if pathCovers(codebase.CanonicalPath, canonicalPath) {
 			matches = append(matches, codebase)
 		}
 	}
-
-	sort.Slice(
-		matches,
-		func(first int, second int) bool {
-			return len(matches[first].CanonicalPath) > len(matches[second].CanonicalPath)
-		},
-	)
-
+	sort.Slice(matches, func(first int, second int) bool {
+		return len(matches[first].CanonicalPath) > len(matches[second].CanonicalPath)
+	})
 	return matches
 }
 
@@ -62,31 +54,25 @@ func (manager *Manager) findCodebasesByCoverage(canonicalPath string) []model.Co
 func (manager *Manager) findStrictAncestor(canonicalPath string) (model.Codebase, bool) {
 	var best model.Codebase
 	bestLength := -1
-
 	for _, codebase := range manager.codebases {
 		if codebase.Kind == model.CodebaseKindDocument {
 			continue
 		}
-
 		if codebase.CanonicalPath == canonicalPath {
 			continue
 		}
-
 		if !pathCovers(codebase.CanonicalPath, canonicalPath) {
 			continue
 		}
-
 		if len(codebase.CanonicalPath) > bestLength {
 			best = codebase
 			bestLength = len(codebase.CanonicalPath)
 		}
 	}
-
 	if bestLength < 0 {
 		var empty model.Codebase
 		return empty, false
 	}
-
 	return best, true
 }
 
@@ -102,25 +88,17 @@ func (manager *Manager) findDescendants(canonicalPath string) []model.Codebase {
 		if codebase.Kind == model.CodebaseKindDocument {
 			continue
 		}
-
 		if codebase.CanonicalPath == canonicalPath {
 			continue
 		}
-
 		if !pathCovers(canonicalPath, codebase.CanonicalPath) {
 			continue
 		}
-
 		matches = append(matches, codebase)
 	}
-
-	sort.Slice(
-		matches,
-		func(first int, second int) bool {
-			return len(matches[first].CanonicalPath) > len(matches[second].CanonicalPath)
-		},
-	)
-
+	sort.Slice(matches, func(first int, second int) bool {
+		return len(matches[first].CanonicalPath) > len(matches[second].CanonicalPath)
+	})
 	return matches
 }
 
@@ -129,8 +107,7 @@ func (manager *Manager) findDescendants(canonicalPath string) []model.Codebase {
 // separator. It lets resolveCanonicalPath return a clear "unknown id" error for
 // a mistyped id instead of silently resolving it as a relative path.
 func looksLikeCodebaseID(requestedPath string) bool {
-	return strings.HasPrefix(requestedPath, "cb_") &&
-		!strings.ContainsRune(requestedPath, filepath.Separator)
+	return strings.HasPrefix(requestedPath, "cb_") && !strings.ContainsRune(requestedPath, filepath.Separator)
 }
 
 // resolveCanonicalPath maps a request argument to a codebase's canonical path,
@@ -148,7 +125,6 @@ func (manager *Manager) resolveCanonicalPath(requestedPath string) (string, erro
 	if found {
 		return codebase.CanonicalPath, nil
 	}
-
 	return canonicalizePath(requestedPath)
 }
 
@@ -163,20 +139,13 @@ func resolveRequestPath(requestedPath string, callerCwd string) (string, error) 
 	if trimmed == "" || looksLikeCodebaseID(trimmed) || strings.Contains(trimmed, "://") {
 		return requestedPath, nil
 	}
-
 	if filepath.IsAbs(trimmed) {
 		return trimmed, nil
 	}
-
 	cwd := strings.TrimSpace(callerCwd)
 	if !filepath.IsAbs(cwd) {
-		return "", fmt.Errorf(
-			"path %q is relative and the request carries no absolute caller working directory; "+
-				"pass an absolute path or upgrade the client",
-			requestedPath,
-		)
+		return "", fmt.Errorf("path %q is relative and the request carries no absolute caller working directory; pass an absolute path or upgrade the client", requestedPath)
 	}
-
 	return filepath.Join(cwd, trimmed), nil
 }
 
@@ -186,54 +155,29 @@ func canonicalizePath(requestedPath string) (string, error) {
 	if strings.TrimSpace(requestedPath) == "" {
 		return "", errors.New("codebase path is required")
 	}
-
 	if trimmed := strings.TrimSpace(requestedPath); looksLikeCodebaseID(trimmed) {
 		return "", fmt.Errorf("resolve codebase path: %w", adapterr.NewUnknownCodebaseID(trimmed))
 	}
-
 	if strings.Contains(requestedPath, "://") {
 		// A typed invalid-path error keeps the rejection client-safe; a plain
 		// error would sanitize to "internal error" at the boundary.
-		return "", fmt.Errorf(
-			"canonicalize codebase path: %w",
-			adapterr.NewInvalidPath(
-				fmt.Sprintf(
-					"path %q looks like a URI; pass a filesystem directory instead",
-					requestedPath,
-				),
-				nil,
-			),
-		)
+		return "", fmt.Errorf("canonicalize codebase path: %w", adapterr.NewInvalidPath(fmt.Sprintf("path %q looks like a URI; pass a filesystem directory instead", requestedPath), nil))
 	}
-
 	// A relative path reaching the daemon is unresolvable here: the daemon's
 	// working directory is never the caller's. resolveRequestPath at the gRPC
 	// boundary joins relative paths against the caller's cwd before this point.
 	if !filepath.IsAbs(requestedPath) {
-		return "", fmt.Errorf(
-			"canonicalize codebase path: %w",
-			adapterr.NewInvalidPath(
-				fmt.Sprintf(
-					"path %q is relative; pass an absolute path or send caller_cwd",
-					requestedPath,
-				),
-				nil,
-			),
-		)
+		return "", fmt.Errorf("canonicalize codebase path: %w", adapterr.NewInvalidPath(fmt.Sprintf("path %q is relative; pass an absolute path or send caller_cwd", requestedPath), nil))
 	}
-
 	absolutePath := filepath.Clean(requestedPath)
 	canonicalPath, err := filepath.EvalSymlinks(absolutePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return absolutePath, nil
 		}
-
 		slog.Error("resolve symlinks failed", "path", absolutePath, "err", err)
-
 		return "", fmt.Errorf("resolve symlinks for %s: %w", absolutePath, err)
 	}
-
 	return canonicalPath, nil
 }
 
@@ -247,17 +191,14 @@ func subtreePrefix(requestedPath string, coveringRoot string) string {
 	if err != nil {
 		return ""
 	}
-
 	coveringRoot = filepath.Clean(coveringRoot)
 	if canonical == coveringRoot || !pathCovers(coveringRoot, canonical) {
 		return ""
 	}
-
 	relative, err := filepath.Rel(coveringRoot, canonical)
 	if err != nil || relative == "" || relative == "." {
 		return ""
 	}
-
 	return filepath.ToSlash(relative)
 }
 
@@ -267,8 +208,6 @@ func pathCovers(rootPath string, targetPath string) bool {
 	if rootPath == targetPath {
 		return true
 	}
-
 	prefixWithSeparator := rootPath + string(filepath.Separator)
-
 	return strings.HasPrefix(targetPath, prefixWithSeparator)
 }

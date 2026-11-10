@@ -27,7 +27,6 @@ func (policyServer *mcpPolicyServer) StartIndex(
 	request *pb.StartIndexRequest,
 ) (*pb.StartIndexResponse, error) {
 	policyServer.startRequests <- proto.Clone(request).(*pb.StartIndexRequest)
-
 	return &pb.StartIndexResponse{
 		JobId:       "job-index",
 		CodebaseId:  "codebase-index",
@@ -76,38 +75,34 @@ func TestIndexSchedulingArguments(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				policyServer := &mcpPolicyServer{
-					startRequests: make(chan *pb.StartIndexRequest, 1),
-				}
-				socketPath := startMCPPolicyGRPCServer(t, policyServer)
-				mcpServer := server.NewMCPServer("test", "test")
-				registerIndexTool(mcpServer, socketPath, response.ModeHuman)
+		t.Run(testCase.name, func(t *testing.T) {
+			policyServer := &mcpPolicyServer{
+				startRequests: make(chan *pb.StartIndexRequest, 1),
+			}
+			socketPath := startMCPPolicyGRPCServer(t, policyServer)
+			mcpServer := server.NewMCPServer("test", "test")
+			registerIndexTool(mcpServer, socketPath, response.ModeHuman)
 
-				result, err := mcpServer.GetTool("index_codebase").Handler(
-					context.Background(),
-					callRequest(testCase.arguments),
+			result, err := mcpServer.GetTool("index_codebase").Handler(
+				context.Background(),
+				callRequest(testCase.arguments),
+			)
+			if err != nil {
+				t.Fatalf("index handler returned error: %v", err)
+			}
+			if result == nil || result.IsError {
+				t.Fatalf("index handler result = %#v, want success", result)
+			}
+
+			request := <-policyServer.startRequests
+			if !proto.Equal(request.GetSchedulingPolicy(), testCase.want) {
+				t.Fatalf(
+					"scheduling policy = %v, want %v",
+					request.GetSchedulingPolicy(),
+					testCase.want,
 				)
-				if err != nil {
-					t.Fatalf("index handler returned error: %v", err)
-				}
-
-				if result == nil || result.IsError {
-					t.Fatalf("index handler result = %#v, want success", result)
-				}
-
-				request := <-policyServer.startRequests
-				if !proto.Equal(request.GetSchedulingPolicy(), testCase.want) {
-					t.Fatalf(
-						"scheduling policy = %v, want %v",
-						request.GetSchedulingPolicy(),
-						testCase.want,
-					)
-				}
-			},
-		)
+			}
+		})
 	}
 }
 
@@ -130,58 +125,45 @@ func TestIndexSchedulingArgumentsRejectExplicitZeroAndFraction(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				policyServer := &mcpPolicyServer{
-					startRequests: make(chan *pb.StartIndexRequest, 1),
-				}
-				socketPath := startMCPPolicyGRPCServer(t, policyServer)
-				mcpServer := server.NewMCPServer("test", "test")
-				registerIndexTool(mcpServer, socketPath, response.ModeHuman)
+		t.Run(testCase.name, func(t *testing.T) {
+			policyServer := &mcpPolicyServer{
+				startRequests: make(chan *pb.StartIndexRequest, 1),
+			}
+			socketPath := startMCPPolicyGRPCServer(t, policyServer)
+			mcpServer := server.NewMCPServer("test", "test")
+			registerIndexTool(mcpServer, socketPath, response.ModeHuman)
 
-				result, err := mcpServer.GetTool("index_codebase").Handler(
-					context.Background(),
-					callRequest(map[string]any{
-						"absolutePath":       "/tmp/project",
-						"idle_after_seconds": testCase.value,
-					}),
-				)
-				if err != nil {
-					t.Fatalf("index handler returned transport error: %v", err)
-				}
-
-				if result == nil || !result.IsError {
-					t.Fatalf("index handler result = %#v, want tool error", result)
-				}
-
-				if got := errorText(t, result); !strings.Contains(got, testCase.wantError) {
-					t.Fatalf("error text = %q, want %q", got, testCase.wantError)
-				}
-
-				select {
-				case request := <-policyServer.startRequests:
-					t.Fatalf("invalid request reached daemon: %v", request)
-				default:
-				}
-			},
-		)
+			result, err := mcpServer.GetTool("index_codebase").Handler(
+				context.Background(),
+				callRequest(map[string]any{
+					"absolutePath":       "/tmp/project",
+					"idle_after_seconds": testCase.value,
+				}),
+			)
+			if err != nil {
+				t.Fatalf("index handler returned transport error: %v", err)
+			}
+			if result == nil || !result.IsError {
+				t.Fatalf("index handler result = %#v, want tool error", result)
+			}
+			if got := errorText(t, result); !strings.Contains(got, testCase.wantError) {
+				t.Fatalf("error text = %q, want %q", got, testCase.wantError)
+			}
+			select {
+			case request := <-policyServer.startRequests:
+				t.Fatalf("invalid request reached daemon: %v", request)
+			default:
+			}
+		})
 	}
 }
 
 func TestIndexSchedulingPolicyPatchLogsInvalidArgumentsAtDebug(t *testing.T) {
 	previousLogger := slog.Default()
 	var output bytes.Buffer
-	slog.SetDefault(
-		slog.New(
-			slog.NewTextHandler(
-				&output,
-				&slog.HandlerOptions{
-					Level: slog.LevelDebug,
-				},
-			),
-		),
-	)
+	slog.SetDefault(slog.New(slog.NewTextHandler(&output, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})))
 	t.Cleanup(func() {
 		slog.SetDefault(previousLogger)
 	})
@@ -193,7 +175,6 @@ func TestIndexSchedulingPolicyPatchLogsInvalidArgumentsAtDebug(t *testing.T) {
 	if err == nil {
 		t.Fatal("indexSchedulingPolicyPatch accepted an unsupported priority")
 	}
-
 	if got := output.String(); !strings.Contains(got, "level=DEBUG") ||
 		strings.Contains(got, "level=WARN") {
 		t.Fatalf("validation log = %q, want debug without warning", got)
@@ -206,7 +187,6 @@ func TestIndexSchedulingArgumentsAreRegistered(t *testing.T) {
 	if indexTool == nil {
 		t.Fatal("index_codebase is not registered")
 	}
-
 	for _, name := range []string{"priority", "quiet", "idle_after_seconds"} {
 		if _, found := indexTool.Tool.InputSchema.Properties[name]; !found {
 			t.Fatalf("index_codebase schema missing %q", name)
@@ -227,13 +207,11 @@ func startMCPPolicyGRPCServer(t *testing.T, policyServer *mcpPolicyServer) strin
 	if err != nil {
 		t.Fatalf("create daemon socket directory: %v", err)
 	}
-
 	socketPath := filepath.Join(socketDirectory, "daemon.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("listen on daemon socket: %v", err)
 	}
-
 	grpcServer := grpc.NewServer()
 	pb.RegisterSemanticSearchDaemonServiceServer(grpcServer, policyServer)
 	go func() {
@@ -244,7 +222,6 @@ func startMCPPolicyGRPCServer(t *testing.T, policyServer *mcpPolicyServer) strin
 		_ = listener.Close()
 		_ = os.RemoveAll(socketDirectory)
 	})
-
 	return socketPath
 }
 

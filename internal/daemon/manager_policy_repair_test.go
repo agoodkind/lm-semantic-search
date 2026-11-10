@@ -19,7 +19,6 @@ func TestUpdateCodebasePolicyCleansAmbiguousCommittedMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath: %v", err)
 	}
-
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	manager.mu.Lock()
@@ -28,7 +27,6 @@ func TestUpdateCodebasePolicyCleansAmbiguousCommittedMarker(t *testing.T) {
 		manager.mu.Unlock()
 		t.Fatalf("saveLocked: %v", err)
 	}
-
 	manager.mu.Unlock()
 
 	originalWrite := writePolicyUpdateTransaction
@@ -40,7 +38,6 @@ func TestUpdateCodebasePolicyCleansAmbiguousCommittedMarker(t *testing.T) {
 		if err := store.WritePolicyUpdate(path, transaction); err != nil {
 			return err
 		}
-
 		return errors.Join(store.ErrPolicyUpdateMarkerMayExist, syncErr)
 	}
 	t.Cleanup(func() { writePolicyUpdateTransaction = originalWrite })
@@ -54,7 +51,6 @@ func TestUpdateCodebasePolicyCleansAmbiguousCommittedMarker(t *testing.T) {
 	if !errors.Is(err, syncErr) {
 		t.Fatalf("UpdateCodebasePolicy error = %v, want post-rename sync failure", err)
 	}
-
 	assertNoPolicyUpdateMarker(t, cfg.RegistryPath)
 	manager.mu.Lock()
 	gotCodebase := manager.codebases[codebase.ID]
@@ -66,12 +62,10 @@ func TestUpdateCodebasePolicyCleansAmbiguousCommittedMarker(t *testing.T) {
 			codebase.SchedulingPolicy,
 		)
 	}
-
 	registry, readErr := store.ReadRegistry(cfg.RegistryPath)
 	if readErr != nil {
 		t.Fatalf("ReadRegistry: %v", readErr)
 	}
-
 	if len(registry.Codebases) != 1 ||
 		registry.Codebases[0].SchedulingPolicy != codebase.SchedulingPolicy {
 		t.Fatalf("registry after ambiguous marker rollback = %+v", registry.Codebases)
@@ -87,7 +81,12 @@ func TestUpdateCodebasePolicyRollbackRemovesStagedRegistration(t *testing.T) {
 		readyActivitySource{},
 	)
 	t.Cleanup(manager.jobScheduler.Close)
-	_, queuedJob := seedPolicyUpdateJob(t, manager, repoPath, model.JobStateQueued)
+	_, queuedJob := seedPolicyUpdateJob(
+		t,
+		manager,
+		repoPath,
+		model.JobStateQueued,
+	)
 
 	originalRemove := removePolicyUpdateTransaction
 	removeErr := errors.New("injected marker removal failure")
@@ -97,7 +96,6 @@ func TestUpdateCodebasePolicyRollbackRemovesStagedRegistration(t *testing.T) {
 		if removeCount == 1 {
 			return removeErr
 		}
-
 		return store.RemovePolicyUpdate(path)
 	}
 	t.Cleanup(func() { removePolicyUpdateTransaction = originalRemove })
@@ -111,7 +109,6 @@ func TestUpdateCodebasePolicyRollbackRemovesStagedRegistration(t *testing.T) {
 	if !errors.Is(err, removeErr) {
 		t.Fatalf("UpdateCodebasePolicy error = %v, want marker removal failure", err)
 	}
-
 	if got := queuedRegistrationPriority(t, manager, queuedJob); got != model.JobPriorityLow {
 		t.Fatalf("queued priority after rollback = %q, want low", got)
 	}
@@ -123,7 +120,6 @@ func TestPolicyUpdateRollbackFailureBlocksFurtherRegistryMutations(t *testing.T)
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath: %v", err)
 	}
-
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	manager.mu.Lock()
@@ -132,7 +128,6 @@ func TestPolicyUpdateRollbackFailureBlocksFurtherRegistryMutations(t *testing.T)
 		manager.mu.Unlock()
 		t.Fatalf("saveLocked: %v", err)
 	}
-
 	manager.mu.Unlock()
 
 	originalRemove := removePolicyUpdateTransaction
@@ -160,29 +155,22 @@ func TestPolicyUpdateRollbackFailureBlocksFurtherRegistryMutations(t *testing.T)
 			manager.policyMutationBlocked,
 		)
 	}
-
 	if !manager.policyMutationMutex.TryLock() {
 		t.Fatal("policy mutation mutex remained locked after rollback failure")
 	}
-
 	manager.policyMutationMutex.Unlock()
 	if _, blockedErr := manager.UpdateCodebasePolicy(
 		context.Background(),
 		repoPath,
 		model.SchedulingPolicyPatch{Priority: &priority},
 	); blockedErr == nil || blockedErr.Error() != "scheduling policy mutations are blocked after a rollback failure" {
-		t.Fatalf(
-			"UpdateCodebasePolicy after rollback failure = %v, want fail-fast block",
-			blockedErr,
-		)
+		t.Fatalf("UpdateCodebasePolicy after rollback failure = %v, want fail-fast block", blockedErr)
 	}
-
 	if manager.policyMutationMutex.TryLock() {
 		manager.policyMutationMutex.Unlock()
 	} else {
 		t.Fatal("policy mutation mutex remained locked after fail-fast block")
 	}
-
 	if _, readErr := store.ReadPolicyUpdate(
 		store.PolicyUpdatePath(cfg.RegistryPath),
 	); readErr != nil {
@@ -199,7 +187,12 @@ func TestCancelQueuedJobDiscardsStagedPolicyRegistration(t *testing.T) {
 		readyActivitySource{},
 	)
 	t.Cleanup(manager.jobScheduler.Close)
-	_, queuedJob := seedPolicyUpdateJob(t, manager, repoPath, model.JobStateQueued)
+	_, queuedJob := seedPolicyUpdateJob(
+		t,
+		manager,
+		repoPath,
+		model.JobStateQueued,
+	)
 	priority := model.JobPriorityHigh
 	if _, err := manager.UpdateCodebasePolicy(
 		context.Background(),
@@ -208,11 +201,9 @@ func TestCancelQueuedJobDiscardsStagedPolicyRegistration(t *testing.T) {
 	); err != nil {
 		t.Fatalf("UpdateCodebasePolicy: %v", err)
 	}
-
 	if _, err := manager.CancelJob(context.Background(), queuedJob.ID); err != nil {
 		t.Fatalf("CancelJob: %v", err)
 	}
-
 	if got := queuedRegistrationPriority(t, manager, queuedJob); got != model.JobPriorityLow {
 		t.Fatalf("queued priority after cancellation = %q, want low", got)
 	}
@@ -221,7 +212,12 @@ func TestCancelQueuedJobDiscardsStagedPolicyRegistration(t *testing.T) {
 func TestUpdateCodebasePolicySerializesClearIndex(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	manager.semantic = &fakeSemantic{}
-	codebase, _ := seedWatcherPolicyUpdateJob(t, manager, repoPath, model.JobStateQueued)
+	codebase, _ := seedWatcherPolicyUpdateJob(
+		t,
+		manager,
+		repoPath,
+		model.JobStateQueued,
+	)
 	journalEntered, releaseJournal, restoreJournal := blockPolicyUpdateJournal(manager)
 	t.Cleanup(restoreJournal)
 	var releaseOnce sync.Once
@@ -242,7 +238,11 @@ func TestUpdateCodebasePolicySerializesClearIndex(t *testing.T) {
 
 	clearResult := make(chan error, 1)
 	go func() {
-		_, clearErr := manager.ClearIndex(context.Background(), repoPath, testClientInfo())
+		_, clearErr := manager.ClearIndex(
+			context.Background(),
+			repoPath,
+			testClientInfo(),
+		)
 		clearResult <- clearErr
 	}()
 	assertPolicyMutationBlocked(t, clearResult, "ClearIndex")
@@ -250,11 +250,9 @@ func TestUpdateCodebasePolicySerializesClearIndex(t *testing.T) {
 	if err := receivePolicyMutationResult(t, updateResult, "UpdateCodebasePolicy"); err != nil {
 		t.Fatalf("UpdateCodebasePolicy: %v", err)
 	}
-
 	if err := receivePolicyMutationResult(t, clearResult, "ClearIndex"); err != nil {
 		t.Fatalf("ClearIndex: %v", err)
 	}
-
 	manager.mu.Lock()
 	_, found := manager.codebases[codebase.ID]
 	manager.mu.Unlock()
@@ -272,8 +270,17 @@ func TestUpdateCodebasePolicySerializesCancelJob(t *testing.T) {
 		readyActivitySource{},
 	)
 	t.Cleanup(manager.jobScheduler.Close)
-	codebase, job := seedPolicyUpdateJob(t, manager, repoPath, model.JobStateRunning)
-	cleanupScheduler := registerPolicyUpdateSchedulerJob(t, manager.jobScheduler, job)
+	codebase, job := seedPolicyUpdateJob(
+		t,
+		manager,
+		repoPath,
+		model.JobStateRunning,
+	)
+	cleanupScheduler := registerPolicyUpdateSchedulerJob(
+		t,
+		manager.jobScheduler,
+		job,
+	)
 	t.Cleanup(cleanupScheduler)
 	journalEntered, releaseJournal, restoreJournal := blockPolicyUpdateJournal(manager)
 	t.Cleanup(restoreJournal)
@@ -303,7 +310,6 @@ func TestUpdateCodebasePolicySerializesCancelJob(t *testing.T) {
 	if err := receivePolicyMutationResult(t, updateResult, "UpdateCodebasePolicy"); err != nil {
 		t.Fatalf("UpdateCodebasePolicy: %v", err)
 	}
-
 	if err := receivePolicyMutationResult(t, cancelResult, "CancelJob"); err != nil {
 		t.Fatalf("CancelJob: %v", err)
 	}
@@ -312,17 +318,12 @@ func TestUpdateCodebasePolicySerializesCancelJob(t *testing.T) {
 	gotCodebase := manager.codebases[codebase.ID]
 	manager.mu.Unlock()
 	if gotCodebase.ActiveJobID != "" {
-		t.Fatalf(
-			"active job after serialized cancellation = %q, want empty",
-			gotCodebase.ActiveJobID,
-		)
+		t.Fatalf("active job after serialized cancellation = %q, want empty", gotCodebase.ActiveJobID)
 	}
-
 	registry, err := store.ReadRegistry(cfg.RegistryPath)
 	if err != nil {
 		t.Fatalf("ReadRegistry: %v", err)
 	}
-
 	if len(registry.Codebases) != 1 || registry.Codebases[0].ActiveJobID != "" {
 		t.Fatalf("registry after serialized cancellation = %+v", registry.Codebases)
 	}
@@ -352,7 +353,11 @@ func TestUpdateCodebasePolicySerializesSyncAdmission(t *testing.T) {
 
 	syncResult := make(chan policySyncResult, 1)
 	go func() {
-		job, _, _, syncErr := manager.SyncIndex(context.Background(), repoPath, testClientInfo())
+		job, _, _, syncErr := manager.SyncIndex(
+			context.Background(),
+			repoPath,
+			testClientInfo(),
+		)
 		syncResult <- policySyncResult{job: job, err: syncErr}
 	}()
 	select {
@@ -360,23 +365,19 @@ func TestUpdateCodebasePolicySerializesSyncAdmission(t *testing.T) {
 		t.Fatalf("SyncIndex completed during policy journal barrier: %v", result.err)
 	case <-time.After(100 * time.Millisecond):
 	}
-
 	releaseUpdate()
 	if err := receivePolicyMutationResult(t, updateResult, "UpdateCodebasePolicy"); err != nil {
 		t.Fatalf("UpdateCodebasePolicy: %v", err)
 	}
-
 	var result policySyncResult
 	select {
 	case result = <-syncResult:
 	case <-time.After(5 * time.Second):
 		t.Fatal("SyncIndex did not complete after policy update")
 	}
-
 	if result.err != nil {
 		t.Fatalf("SyncIndex: %v", result.err)
 	}
-
 	if result.job.EffectiveSchedulingPolicy.Priority != model.JobPriorityHigh {
 		t.Fatalf(
 			"admitted sync priority = %q, want high",
@@ -392,7 +393,12 @@ func TestForceIndexReleasesPolicyLockWhileCancellationFinishes(t *testing.T) {
 	release := make(chan struct{})
 	var inFlight atomic.Int32
 	var maximumInFlight atomic.Int32
-	manager.runner = blockingRunner(entered, release, &inFlight, &maximumInFlight)
+	manager.runner = blockingRunner(
+		entered,
+		release,
+		&inFlight,
+		&maximumInFlight,
+	)
 	t.Cleanup(func() { closeOnce(release) })
 	repoPath := newCapTestRepo(t)
 
@@ -406,10 +412,12 @@ func TestForceIndexReleasesPolicyLockWhileCancellationFinishes(t *testing.T) {
 	); err != nil {
 		t.Fatalf("StartIndex initial job: %v", err)
 	}
-
 	waitForPolicyRunnerEntry(t, entered)
 
-	forceContext, cancelForce := context.WithTimeout(context.Background(), 3*time.Second)
+	forceContext, cancelForce := context.WithTimeout(
+		context.Background(),
+		3*time.Second,
+	)
 	defer cancelForce()
 	forceConfig := defaultIndexConfig()
 	forceConfig.IgnorePatterns = []string{"force-policy-lock-recheck"}
@@ -424,11 +432,9 @@ func TestForceIndexReleasesPolicyLockWhileCancellationFinishes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("force StartIndex: %v", err)
 	}
-
 	if forcedJob.ID == "" {
 		t.Fatal("force StartIndex returned an empty job")
 	}
-
 	closeOnce(release)
 	waitForTerminalJob(t, manager, forcedJob.ID)
 }
@@ -454,10 +460,8 @@ func blockPolicyUpdateJournal(
 			close(entered)
 			<-release
 		}
-
 		return originalAppendTransition(event)
 	}
-
 	return entered, release, func() {
 		manager.appendJobTransition = originalAppendTransition
 	}
@@ -482,26 +486,24 @@ func queuedRegistrationPriority(
 	if err != nil {
 		t.Fatalf("Acquire blocker: %v", err)
 	}
-
 	registrationContext, cancelRegistration := context.WithCancel(context.Background())
 	registrationResult := make(chan *jobCapacity, 1)
 	go func() {
-		capacity, _, _ := manager.acquireJobCapacity(registrationContext, queuedJob, false)
+		capacity, _, _ := manager.acquireJobCapacity(
+			registrationContext,
+			queuedJob,
+			false,
+		)
 		registrationResult <- capacity
 	}()
-	waitForCondition(
-		t,
-		func() bool {
-			snapshot := manager.jobScheduler.Snapshot()
-
-			return snapshot.Queued[model.JobPriorityHigh]+
-				snapshot.Queued[model.JobPriorityNormal]+
-				snapshot.Queued[model.JobPriorityLow] == 1
-		},
-	)
+	waitForCondition(t, func() bool {
+		snapshot := manager.jobScheduler.Snapshot()
+		return snapshot.Queued[model.JobPriorityHigh]+
+			snapshot.Queued[model.JobPriorityNormal]+
+			snapshot.Queued[model.JobPriorityLow] == 1
+	})
 	snapshot := manager.jobScheduler.Snapshot()
 	priority := model.JobPriority("")
-
 	for _, candidate := range []model.JobPriority{
 		model.JobPriorityHigh,
 		model.JobPriorityNormal,
@@ -511,7 +513,6 @@ func queuedRegistrationPriority(
 			priority = candidate
 		}
 	}
-
 	cancelRegistration()
 	blocker.Release()
 	select {
@@ -522,7 +523,6 @@ func queuedRegistrationPriority(
 	case <-time.After(5 * time.Second):
 		t.Fatal("queued registration did not stop")
 	}
-
 	return priority
 }
 

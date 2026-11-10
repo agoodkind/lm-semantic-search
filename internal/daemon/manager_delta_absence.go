@@ -37,19 +37,13 @@ func (manager *Manager) applyDeltaAbsencePolicy(
 			slog.InfoContext(
 				ctx,
 				"converge.retain_absent",
-				"component",
-				"daemon",
-				"subcomponent",
-				"delta",
-				"collection",
-				codebase.CollectionName,
-				"retained",
-				retained,
+				"component", "daemon",
+				"subcomponent", "delta",
+				"collection", codebase.CollectionName,
+				"retained", retained,
 			)
 		}
-
 		plan.diff.Removed = nil
 	}
-
 	return false
 }

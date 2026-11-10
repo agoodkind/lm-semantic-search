@@ -12,11 +12,9 @@ func TestApplyProfileOfflineExpandsBackendAndEmbedder(t *testing.T) {
 	if got.IndexBackend != IndexBackendLocal {
 		t.Fatalf("IndexBackend = %q, want %q", got.IndexBackend, IndexBackendLocal)
 	}
-
 	if got.EmbeddingProvider != EmbeddingProviderONNX {
 		t.Fatalf("EmbeddingProvider = %q, want %q", got.EmbeddingProvider, EmbeddingProviderONNX)
 	}
-
 	if got.OfflineEmbeddingModel != offlinemodel.EmbeddingGemma {
 		t.Fatalf(
 			"OfflineEmbeddingModel = %q, want %q",
@@ -24,15 +22,12 @@ func TestApplyProfileOfflineExpandsBackendAndEmbedder(t *testing.T) {
 			offlinemodel.EmbeddingGemma,
 		)
 	}
-
 	if got.EmbeddingModel != offlinemodel.EmbeddingGemma {
 		t.Fatalf("EmbeddingModel = %q, want %q", got.EmbeddingModel, offlinemodel.EmbeddingGemma)
 	}
-
 	if got.EmbeddingDimension != 768 {
 		t.Fatalf("EmbeddingDimension = %d, want 768", got.EmbeddingDimension)
 	}
-
 	if got.QueryInstructionPrefix != "task: code retrieval | query: " {
 		t.Fatalf("QueryInstructionPrefix = %q", got.QueryInstructionPrefix)
 	}
@@ -48,11 +43,9 @@ func TestApplyProfileOfflineDerivesSelectedModel(t *testing.T) {
 	if got.EmbeddingModel != offlinemodel.BGESmall {
 		t.Fatalf("EmbeddingModel = %q, want %q", got.EmbeddingModel, offlinemodel.BGESmall)
 	}
-
 	if got.EmbeddingDimension != 384 {
 		t.Fatalf("EmbeddingDimension = %d, want 384", got.EmbeddingDimension)
 	}
-
 	if got.QueryInstructionPrefix != "" {
 		t.Fatalf("QueryInstructionPrefix = %q, want empty", got.QueryInstructionPrefix)
 	}
@@ -74,17 +67,11 @@ func TestApplyProfileStandardIsDefaultUnchanged(t *testing.T) {
 	if got.IndexBackend != IndexBackendMilvus || got.EmbeddingProvider != "OpenAI" {
 		t.Fatalf("standard profile mutated backend or embedder: %+v", got)
 	}
-
 	if got.EmbeddingModel != "text-embedding-3-small" || got.EmbeddingDimension != 1536 {
 		t.Fatalf("standard profile mutated embedding model: %+v", got)
 	}
-
 	if got.MilvusAddress != "127.0.0.1:19530" || got.MilvusToken != "tok" {
-		t.Fatalf(
-			"standard profile cleared Milvus config: addr=%q token=%q",
-			got.MilvusAddress,
-			got.MilvusToken,
-		)
+		t.Fatalf("standard profile cleared Milvus config: addr=%q token=%q", got.MilvusAddress, got.MilvusToken)
 	}
 }
 
@@ -103,7 +90,6 @@ func TestApplyProfileOfflineClearsPrepopulatedMilvus(t *testing.T) {
 	if got.MilvusAddress != "" {
 		t.Fatalf("offline profile left MilvusAddress = %q, want empty", got.MilvusAddress)
 	}
-
 	if got.MilvusToken != "" {
 		t.Fatalf("offline profile left MilvusToken = %q, want empty", got.MilvusToken)
 	}

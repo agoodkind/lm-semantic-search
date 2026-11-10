@@ -24,13 +24,11 @@ func newIndexedReadinessManager(t *testing.T) (*Manager, *GRPCServer, string) {
 	if err != nil {
 		t.Fatalf("EvalSymlinks returned error: %v", err)
 	}
-
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	manager.mu.Lock()
 	manager.codebases[codebase.ID] = codebase
 	manager.mu.Unlock()
-
 	return manager, NewGRPCServer(manager, nil), repoPath
 }
 
@@ -45,24 +43,17 @@ func TestEmbedderBannerDoesNotShowTheStoreProbesReachability(t *testing.T) {
 	// An embedder outage recorded the way production records it, from a search
 	// whose query embed failed against the endpoint.
 	manager.semantic = &fakeSemantic{
-		search: func(context.Context, string, string, int32, []string, string) (
-			[]model.StoredChunk,
-			error,
-		) {
+		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
 			return nil, adapterr.NewEmbedderUnreachable(errors.New("connection refused"))
 		},
 	}
-	if _, searchErr := server.SearchCode(
-		context.Background(),
-		&pb.SearchCodeRequest{
-			Path:  repoPath,
-			Query: "anything",
-			Limit: 5,
-		},
-	); searchErr == nil {
+	if _, searchErr := server.SearchCode(context.Background(), &pb.SearchCodeRequest{
+		Path:  repoPath,
+		Query: "anything",
+		Limit: 5,
+	}); searchErr == nil {
 		t.Fatal("SearchCode succeeded against an unreachable embedder, so no outage was recorded")
 	}
-
 	if mode := manager.DependencyHealth().Mode; mode != dependencyEmbedderUnreachable {
 		t.Fatalf("setup: dependency mode = %q, want %q", mode, dependencyEmbedderUnreachable)
 	}
@@ -76,26 +67,16 @@ func TestEmbedderBannerDoesNotShowTheStoreProbesReachability(t *testing.T) {
 	if listErr != nil {
 		t.Fatalf("ListIndexes returned error: %v", listErr)
 	}
-
 	displayText := response.GetDisplayText()
 	headline := status.BannerHeadlineFor(dependencyEmbedderUnreachable)
 	if !strings.Contains(displayText, headline) {
 		t.Fatalf("the embedder outage stopped showing after a store probe:\n%s", displayText)
 	}
-
 	if !strings.Contains(displayText, "last reachable unknown") {
-		t.Fatalf(
-			"the embedder banner reports a last-reachable time that nothing proved about the embedder:\n%s",
-			displayText,
-		)
+		t.Fatalf("the embedder banner reports a last-reachable time that nothing proved about the embedder:\n%s", displayText)
 	}
-
 	if stamp := response.GetDependencyHealth().GetLastHealthyAt(); stamp != nil {
-		t.Fatalf(
-			"last_healthy_at = %s beside mode %q, but the embedder has never answered",
-			stamp.AsTime(),
-			response.GetDependencyHealth().GetMode(),
-		)
+		t.Fatalf("last_healthy_at = %s beside mode %q, but the embedder has never answered", stamp.AsTime(), response.GetDependencyHealth().GetMode())
 	}
 }
 
@@ -117,64 +98,36 @@ func TestEveryDegradedModeIsAttributedToItsOwnDependency(t *testing.T) {
 	}
 
 	for _, mode := range embedderModes {
-		t.Run(
-			string(mode),
-			func(t *testing.T) {
-				health := dependencyHealth{
-					Mode:                mode,
-					Since:               storeAnsweredAt,
-					StoreReachableAt:    storeAnsweredAt,
-					EmbedderReachableAt: embedderAnsweredAt,
-				}
-				if got := health.lastReachableAt(); !got.Equal(embedderAnsweredAt) {
-					t.Fatalf(
-						"%s reports last reachable %s, want the embedder's own %s",
-						mode,
-						got,
-						embedderAnsweredAt,
-					)
-				}
-
-				if covers := dependenciesFor(mode); !covers.Embedder || covers.Store {
-					t.Fatalf(
-						"%s covers {Store:%t Embedder:%t}, want the embedder alone",
-						mode,
-						covers.Store,
-						covers.Embedder,
-					)
-				}
-			},
-		)
-	}
-
-	t.Run(
-		string(dependencyStoreUnavailable),
-		func(t *testing.T) {
+		t.Run(string(mode), func(t *testing.T) {
 			health := dependencyHealth{
-				Mode:                dependencyStoreUnavailable,
-				Since:               embedderAnsweredAt,
+				Mode:                mode,
+				Since:               storeAnsweredAt,
 				StoreReachableAt:    storeAnsweredAt,
 				EmbedderReachableAt: embedderAnsweredAt,
 			}
-			if got := health.lastReachableAt(); !got.Equal(storeAnsweredAt) {
-				t.Fatalf(
-					"store outage reports last reachable %s, want the store's own %s",
-					got,
-					storeAnsweredAt,
-				)
+			if got := health.lastReachableAt(); !got.Equal(embedderAnsweredAt) {
+				t.Fatalf("%s reports last reachable %s, want the embedder's own %s", mode, got, embedderAnsweredAt)
 			}
+			if covers := dependenciesFor(mode); !covers.Embedder || covers.Store {
+				t.Fatalf("%s covers {Store:%t Embedder:%t}, want the embedder alone", mode, covers.Store, covers.Embedder)
+			}
+		})
+	}
 
-			if covers := dependenciesFor(
-				dependencyStoreUnavailable,
-			); !covers.Store || covers.Embedder {
-				t.Fatalf(
-					"store outage covers {Store:%t Embedder:%t}, want the store alone",
-					covers.Store,
-					covers.Embedder,
-				)
-			}
-		},
-	)
+	t.Run(string(dependencyStoreUnavailable), func(t *testing.T) {
+		health := dependencyHealth{
+			Mode:                dependencyStoreUnavailable,
+			Since:               embedderAnsweredAt,
+			StoreReachableAt:    storeAnsweredAt,
+			EmbedderReachableAt: embedderAnsweredAt,
+		}
+		if got := health.lastReachableAt(); !got.Equal(storeAnsweredAt) {
+			t.Fatalf("store outage reports last reachable %s, want the store's own %s", got, storeAnsweredAt)
+		}
+		if covers := dependenciesFor(dependencyStoreUnavailable); !covers.Store || covers.Embedder {
+			t.Fatalf("store outage covers {Store:%t Embedder:%t}, want the store alone", covers.Store, covers.Embedder)
+		}
+	})
 }
 
 // A store outage still carries the store's own reachability time, so fixing the
@@ -184,21 +137,15 @@ func TestStoreBannerShowsTheStoresOwnReachability(t *testing.T) {
 
 	// A search reaches both dependencies, which is what proves the store answered.
 	manager.semantic = &fakeSemantic{
-		search: func(context.Context, string, string, int32, []string, string) (
-			[]model.StoredChunk,
-			error,
-		) {
+		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
 			return []model.StoredChunk{}, nil
 		},
 	}
-	if _, searchErr := server.SearchCode(
-		context.Background(),
-		&pb.SearchCodeRequest{
-			Path:  repoPath,
-			Query: "anything",
-			Limit: 5,
-		},
-	); searchErr != nil {
+	if _, searchErr := server.SearchCode(context.Background(), &pb.SearchCodeRequest{
+		Path:  repoPath,
+		Query: "anything",
+		Limit: 5,
+	}); searchErr != nil {
 		t.Fatalf("SearchCode returned error: %v", searchErr)
 	}
 
@@ -210,20 +157,15 @@ func TestStoreBannerShowsTheStoresOwnReachability(t *testing.T) {
 	if listErr != nil {
 		t.Fatalf("ListIndexes returned error: %v", listErr)
 	}
-
 	displayText := response.GetDisplayText()
 	if !strings.Contains(displayText, status.BannerHeadlineFor(dependencyStoreUnavailable)) {
 		t.Fatalf("ListIndexes did not report the store outage:\n%s", displayText)
 	}
-
 	if strings.Contains(displayText, "last reachable unknown") {
 		t.Fatalf("the store banner lost the time the store actually answered:\n%s", displayText)
 	}
-
 	if response.GetDependencyHealth().GetLastHealthyAt() == nil {
-		t.Fatal(
-			"last_healthy_at is unset beside a store outage, but a search reached the store moments earlier",
-		)
+		t.Fatal("last_healthy_at is unset beside a store outage, but a search reached the store moments earlier")
 	}
 }
 
@@ -241,13 +183,9 @@ func TestFailingProbeDoesNotEraseASuccessRecordedWhileItWasInFlight(t *testing.T
 		probe: func(context.Context) error {
 			close(probeStarted)
 			<-releaseProbe
-
 			return adapterr.NewMilvusUnavailable(errors.New("connection refused"))
 		},
-		search: func(context.Context, string, string, int32, []string, string) (
-			[]model.StoredChunk,
-			error,
-		) {
+		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
 			return []model.StoredChunk{}, nil
 		},
 	}
@@ -256,10 +194,7 @@ func TestFailingProbeDoesNotEraseASuccessRecordedWhileItWasInFlight(t *testing.T
 	listDone := make(chan struct{})
 	go func() {
 		defer close(listDone)
-		if _, listErr := server.ListIndexes(
-			context.Background(),
-			&pb.ListIndexesRequest{},
-		); listErr != nil {
+		if _, listErr := server.ListIndexes(context.Background(), &pb.ListIndexesRequest{}); listErr != nil {
 			t.Errorf("ListIndexes returned error: %v", listErr)
 		}
 	}()
@@ -273,18 +208,13 @@ func TestFailingProbeDoesNotEraseASuccessRecordedWhileItWasInFlight(t *testing.T
 		<-listDone
 		t.Fatalf("ListIndexes never probed within %s", probeStartTimeout)
 	}
-
-	if _, searchErr := server.SearchCode(
-		context.Background(),
-		&pb.SearchCodeRequest{
-			Path:  repoPath,
-			Query: "anything",
-			Limit: 5,
-		},
-	); searchErr != nil {
+	if _, searchErr := server.SearchCode(context.Background(), &pb.SearchCodeRequest{
+		Path:  repoPath,
+		Query: "anything",
+		Limit: 5,
+	}); searchErr != nil {
 		t.Fatalf("SearchCode returned error: %v", searchErr)
 	}
-
 	close(releaseProbe)
 	<-listDone
 
@@ -294,22 +224,11 @@ func TestFailingProbeDoesNotEraseASuccessRecordedWhileItWasInFlight(t *testing.T
 	if jobsErr != nil {
 		t.Fatalf("ListJobs returned error: %v", jobsErr)
 	}
-
 	if mode := response.GetDependencyHealth().GetMode(); mode != "" {
-		t.Fatalf(
-			"dependency mode = %q; a probe that started before the search must not reinstate an outage the search disproved",
-			mode,
-		)
+		t.Fatalf("dependency mode = %q; a probe that started before the search must not reinstate an outage the search disproved", mode)
 	}
-
-	if headline := status.BannerHeadlineFor(dependencyStoreUnavailable); strings.Contains(
-		response.GetDisplayText(),
-		headline,
-	) {
-		t.Fatalf(
-			"a stale probe put the store banner back after a search reached the store:\n%s",
-			response.GetDisplayText(),
-		)
+	if headline := status.BannerHeadlineFor(dependencyStoreUnavailable); strings.Contains(response.GetDisplayText(), headline) {
+		t.Fatalf("a stale probe put the store banner back after a search reached the store:\n%s", response.GetDisplayText())
 	}
 }
 
@@ -317,24 +236,17 @@ func TestFailingProbeDoesNotEraseASuccessRecordedWhileItWasInFlight(t *testing.T
 // answer. Dropping it would let a readiness surface report healthy immediately
 // after its own probe failed.
 func TestProbeFailureWithAnUnclassifiedErrorStillReportsAnOutage(t *testing.T) {
-	_, server, _ := newIndexedReadinessManagerWithProbe(
-		t,
-		func(context.Context) error {
-			return errors.New("dial tcp: connection refused")
-		},
-	)
+	_, server, _ := newIndexedReadinessManagerWithProbe(t, func(context.Context) error {
+		return errors.New("dial tcp: connection refused")
+	})
 
 	response, listErr := server.ListIndexes(context.Background(), &pb.ListIndexesRequest{})
 	if listErr != nil {
 		t.Fatalf("ListIndexes returned error: %v", listErr)
 	}
-
 	headline := status.BannerHeadlineFor(dependencyStoreUnavailable)
 	if !strings.Contains(response.GetDisplayText(), headline) {
-		t.Fatalf(
-			"a failed probe left no outage for the caller to see:\n%s",
-			response.GetDisplayText(),
-		)
+		t.Fatalf("a failed probe left no outage for the caller to see:\n%s", response.GetDisplayText())
 	}
 }
 
@@ -346,21 +258,15 @@ func TestProbeSuccessSurvivesACallerThatWalkedAway(t *testing.T) {
 	manager, server, repoPath := newIndexedReadinessManager(t)
 
 	manager.semantic = &fakeSemantic{
-		search: func(context.Context, string, string, int32, []string, string) (
-			[]model.StoredChunk,
-			error,
-		) {
+		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
 			return nil, adapterr.NewMilvusUnavailable(errors.New("connection refused"))
 		},
 	}
-	if _, searchErr := server.SearchCode(
-		context.Background(),
-		&pb.SearchCodeRequest{
-			Path:  repoPath,
-			Query: "anything",
-			Limit: 5,
-		},
-	); searchErr == nil {
+	if _, searchErr := server.SearchCode(context.Background(), &pb.SearchCodeRequest{
+		Path:  repoPath,
+		Query: "anything",
+		Limit: 5,
+	}); searchErr == nil {
 		t.Fatal("SearchCode succeeded against an unavailable store, so no outage was recorded")
 	}
 
@@ -382,27 +288,19 @@ func TestProbeSuccessSurvivesACallerThatWalkedAway(t *testing.T) {
 	if jobsErr != nil {
 		t.Fatalf("ListJobs returned error: %v", jobsErr)
 	}
-
 	if mode := response.GetDependencyHealth().GetMode(); mode != "" {
-		t.Fatalf(
-			"dependency mode = %q; the store answered a probe, so its answer is evidence whether or not the caller waited for it",
-			mode,
-		)
+		t.Fatalf("dependency mode = %q; the store answered a probe, so its answer is evidence whether or not the caller waited for it", mode)
 	}
 }
 
 // newIndexedReadinessManagerWithProbe is newIndexedReadinessManager with the
 // probe outcome a test wants and the debounce cleared, so the next readiness call
 // probes.
-func newIndexedReadinessManagerWithProbe(
-	t *testing.T,
-	probe func(context.Context) error,
-) (*Manager, *GRPCServer, string) {
+func newIndexedReadinessManagerWithProbe(t *testing.T, probe func(context.Context) error) (*Manager, *GRPCServer, string) {
 	t.Helper()
 
 	manager, server, repoPath := newIndexedReadinessManager(t)
 	manager.semantic = &fakeSemantic{probe: probe}
 	resetProbeClock(manager)
-
 	return manager, server, repoPath
 }

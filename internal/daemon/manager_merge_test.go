@@ -23,40 +23,22 @@ func newParentWithChildRepo(t *testing.T) (parentCanonical string, childCanonica
 	if err := os.MkdirAll(childDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll returned error: %v", err)
 	}
-
-	if err := os.WriteFile(
-		filepath.Join(parentDir, "root.go"),
-		[]byte("package main\n"),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(parentDir, "root.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
-
-	if err := os.WriteFile(
-		filepath.Join(childDir, "leaf.go"),
-		[]byte("package child\n"),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(childDir, "leaf.go"), []byte("package child\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
-
 	canonical, err := filepath.EvalSymlinks(parentDir)
 	if err != nil {
 		t.Fatalf("EvalSymlinks returned error: %v", err)
 	}
-
 	return canonical, filepath.Join(canonical, "child")
 }
 
 // registerIndexedChild seeds a settled, indexed child codebase whose embedding
 // config matches cfg so the merge-down path treats its collection as reusable.
-func registerIndexedChild(
-	manager *Manager,
-	id string,
-	childCanonical string,
-	cfg model.IndexConfig,
-	collection string,
-) {
+func registerIndexedChild(manager *Manager, id string, childCanonical string, cfg model.IndexConfig, collection string) {
 	manager.mu.Lock()
 	manager.codebases[id] = model.Codebase{
 		ID:              id,
@@ -94,17 +76,7 @@ func TestMergeDownReusesAndAbsorbsIndexedChild(t *testing.T) {
 	registerIndexedChild(manager, childID, childCanonical, cfg, childCollection)
 
 	_, job := seedBootstrapCodebase(t, manager, parentCanonical, cfg)
-	graphTask := manager.runBootstrap(
-		context.Background(),
-		job,
-		newCodeItemSource(
-			manager.runner,
-			manager.indexability,
-			job.CodebaseID,
-			job.CanonicalPath,
-			job.Config,
-		),
-	)
+	graphTask := manager.runBootstrap(context.Background(), job, newCodeItemSource(manager.runner, manager.indexability, job.CodebaseID, job.CanonicalPath, job.Config))
 	manager.runGraphIndexTask(context.Background(), graphTask)
 
 	fake.mu.Lock()
@@ -113,7 +85,6 @@ func TestMergeDownReusesAndAbsorbsIndexedChild(t *testing.T) {
 	fake.mu.Unlock()
 
 	reusedChildCollection := false
-
 	for _, set := range reuseCalls {
 		for _, name := range set {
 			if name == childCollection {
@@ -121,19 +92,11 @@ func TestMergeDownReusesAndAbsorbsIndexedChild(t *testing.T) {
 			}
 		}
 	}
-
 	if !reusedChildCollection {
-		t.Fatalf(
-			"merge-down did not load reuse vectors from the child collection; reuse calls = %v",
-			reuseCalls,
-		)
+		t.Fatalf("merge-down did not load reuse vectors from the child collection; reuse calls = %v", reuseCalls)
 	}
-
 	if len(dropped) != 0 {
-		t.Fatalf(
-			"absorb dropped collection(s) %v; the shared child collection must never be dropped",
-			dropped,
-		)
+		t.Fatalf("absorb dropped collection(s) %v; the shared child collection must never be dropped", dropped)
 	}
 
 	manager.mu.Lock()
@@ -147,7 +110,6 @@ func TestMergeDownReusesAndAbsorbsIndexedChild(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("parent GetIndex after merge-down: found=%v err=%v", found, err)
 	}
-
 	if codebase.Status != model.CodebaseStatusIndexed {
 		t.Fatalf("parent status = %q, want indexed", codebase.Status)
 	}
@@ -168,45 +130,25 @@ func TestMergeUpRedirectsNestedIndexToParent(t *testing.T) {
 	cfg.IgnoreDigest = digestIndexConfig(cfg)
 	manager.mu.Lock()
 	manager.codebases["cb-merge-parent"] = model.Codebase{
-		ID:              "cb-merge-parent",
-		CanonicalPath:   parentCanonical,
-		Status:          model.CodebaseStatusIndexed,
-		CollectionName:  "hybrid_code_chunks_parent",
-		EffectiveConfig: cfg,
-		LastSuccessfulRun: &model.IndexRunSummary{
-			IndexedFiles: 2,
-			TotalChunks:  5,
-			Status:       "completed",
-			CompletedAt:  clock.Now(),
-		},
+		ID:                "cb-merge-parent",
+		CanonicalPath:     parentCanonical,
+		Status:            model.CodebaseStatusIndexed,
+		CollectionName:    "hybrid_code_chunks_parent",
+		EffectiveConfig:   cfg,
+		LastSuccessfulRun: &model.IndexRunSummary{IndexedFiles: 2, TotalChunks: 5, Status: "completed", CompletedAt: clock.Now()},
 	}
 	manager.mu.Unlock()
 
-	job, codebase, deduped, _, err := manager.StartIndex(
-		context.Background(),
-		childCanonical,
-		testClientInfo(),
-		defaultIndexConfig(),
-		false,
-		emptyAdmissionBudget,
-	)
+	job, codebase, deduped, _, err := manager.StartIndex(context.Background(), childCanonical, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget)
 	if err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
-
 	if deduped {
 		t.Fatal("merge-up redirect should not report deduplicated")
 	}
-
 	if codebase.ID != "cb-merge-parent" || codebase.CanonicalPath != parentCanonical {
-		t.Fatalf(
-			"merge-up resolved to %q (%s), want the parent cb-merge-parent (%s)",
-			codebase.ID,
-			codebase.CanonicalPath,
-			parentCanonical,
-		)
+		t.Fatalf("merge-up resolved to %q (%s), want the parent cb-merge-parent (%s)", codebase.ID, codebase.CanonicalPath, parentCanonical)
 	}
-
 	if job.ID == "" {
 		t.Fatal("merge-up should return the parent's sync job")
 	}
@@ -220,17 +162,12 @@ func TestMergeUpRedirectsNestedIndexToParent(t *testing.T) {
 
 	// Let the redirected sync job settle so its goroutine stops touching the
 	// repo before the temp dirs are removed.
-	waitForCondition(
-		t,
-		func() bool {
-			manager.mu.Lock()
-			settled, ok := manager.jobs[job.ID]
-			manager.mu.Unlock()
-
-			return ok &&
-				(settled.State == model.JobStateCompleted || settled.State == model.JobStateFailed || settled.State == model.JobStateCancelled)
-		},
-	)
+	waitForCondition(t, func() bool {
+		manager.mu.Lock()
+		settled, ok := manager.jobs[job.ID]
+		manager.mu.Unlock()
+		return ok && (settled.State == model.JobStateCompleted || settled.State == model.JobStateFailed || settled.State == model.JobStateCancelled)
+	})
 }
 
 func TestSubtreePrefixResolvesNestedPath(t *testing.T) {
@@ -238,7 +175,6 @@ func TestSubtreePrefixResolvesNestedPath(t *testing.T) {
 	if got := subtreePrefix(childCanonical, parentCanonical); got != "child" {
 		t.Fatalf("subtreePrefix(child, parent) = %q, want \"child\"", got)
 	}
-
 	if got := subtreePrefix(parentCanonical, parentCanonical); got != "" {
 		t.Fatalf("subtreePrefix(parent, parent) = %q, want \"\"", got)
 	}
@@ -252,7 +188,6 @@ func TestRenderIndexedDescendantsHintNamesSubfolderAndCommand(t *testing.T) {
 		},
 	}
 	out := descendantsHint("/repo/codex/source", descendants)
-
 	for _, want := range []string{"4292", "codex-rs", "index_codebase /repo/codex/source"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("descendants hint missing %q in:\n%s", want, out)
@@ -264,13 +199,11 @@ func TestRenderCoveringResolutionNamesLargerIndex(t *testing.T) {
 	parentCanonical, childCanonical := newParentWithChildRepo(t)
 	codebase := &model.Codebase{CanonicalPath: parentCanonical}
 	out := coveringResolutionLine(childCanonical, true, codebase)
-
 	for _, want := range []string{"Resolved to larger index", parentCanonical, "child/"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("covering resolution missing %q in:\n%s", want, out)
 		}
 	}
-
 	if got := coveringResolutionLine(parentCanonical, true, codebase); got != "" {
 		t.Fatalf("covering resolution for the root itself = %q, want empty", got)
 	}

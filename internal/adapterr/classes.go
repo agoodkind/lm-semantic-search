@@ -277,10 +277,8 @@ func NewEmbedCancelled(cause error) *AdapterError {
 // search path off the catch-all internal class.
 func NewIndexDataLost(path string, cause error) *AdapterError {
 	return &AdapterError{
-		Class: ClassCollectionMissing,
-		Message: "index data for " + quote(
-			path,
-		) + " has been lost (collection not found in Milvus)",
+		Class:         ClassCollectionMissing,
+		Message:       "index data for " + quote(path) + " has been lost (collection not found in Milvus)",
 		Code:          "collection_missing",
 		Hint:          "wait for background repair or re-run index_codebase to rebuild it",
 		Cause:         cause,
@@ -296,7 +294,6 @@ func NewMaintenance(reason string) *AdapterError {
 	if reason != "" {
 		message += " (" + reason + ")"
 	}
-
 	return &AdapterError{
 		Class:         ClassMaintenance,
 		Message:       message,
@@ -341,10 +338,8 @@ func NewCollectionSchemaMismatch(collectionID string, column string, detail stri
 	return &ColumnError{
 		Column: column,
 		adapter: &AdapterError{
-			Class: ClassCollectionSchemaMismatch,
-			Message: "collection " + quote(collectionID) + " column " + quote(
-				column,
-			) + ": " + detail,
+			Class:         ClassCollectionSchemaMismatch,
+			Message:       "collection " + quote(collectionID) + " column " + quote(column) + ": " + detail,
 			Code:          CodeCollectionSchemaMismatch,
 			Hint:          "register the collection with its existing declaration, or register the new schema under a different collection id",
 			Cause:         nil,
@@ -526,7 +521,6 @@ func (figure EmbedFigure) LogValue() slog.Value {
 	if !figure.Reported {
 		return slog.StringValue(embedFigureUnreportedLogValue)
 	}
-
 	return slog.IntValue(figure.Value)
 }
 
@@ -572,7 +566,6 @@ func NewEmbedInputRejected(rejection EmbedInputRejection, cause error) *AdapterE
 	if detail != "" {
 		message += ": " + detail
 	}
-
 	return &AdapterError{
 		Class:         ClassInvalidArgument,
 		Message:       message,
@@ -717,7 +710,6 @@ func embedUnquotableFigureClause(subject string, figure EmbedFigure) string {
 	if !figure.Reported {
 		return subject + " was not reported"
 	}
-
 	return subject + " was reported as " + strconv.Itoa(figure.Value) +
 		", which is not a possible size"
 }

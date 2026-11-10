@@ -34,43 +34,37 @@ func indexSchedulingPolicyPatch(
 		if !ok {
 			return nil, fmt.Errorf("priority must be a string")
 		}
-
 		priority := mcpSchedulingPriority(mcpSchedulingPriorityName(priorityText))
 		patch.Priority = &priority
 		changed = true
 	}
-
 	if rawQuiet, found := arguments["quiet"]; found {
 		quiet, ok := rawQuiet.(bool)
 		if !ok {
 			return nil, fmt.Errorf("quiet must be a boolean")
 		}
-
 		patch.Quiet = &quiet
 		changed = true
 	}
-
 	if _, found := arguments["idle_after_seconds"]; found {
-		idleAfterSeconds, err := mcpInt32Argument(request, "idle_after_seconds")
+		idleAfterSeconds, err := mcpInt32Argument(
+			request,
+			"idle_after_seconds",
+		)
 		if err != nil {
 			return nil, err
 		}
-
 		patch.IdleAfterSeconds = &idleAfterSeconds
 		changed = true
 	}
-
 	if !changed {
 		return nil, nil
 	}
-
 	if _, err := pbconv.FromSchedulingPolicyPatch(patch); err != nil {
 		wrappedErr := fmt.Errorf("validate scheduling policy patch: %w", err)
 		slog.DebugContext(ctx, "validate scheduling policy patch failed", "err", wrappedErr)
-
 		return nil, wrappedErr
 	}
-
 	return patch, nil
 }
 
@@ -92,7 +86,6 @@ func mcpInt32Argument(request mcp.CallToolRequest, name string) (int32, error) {
 	if !found {
 		return 0, fmt.Errorf("%s is required", name)
 	}
-
 	var value int64
 	switch typedValue := rawValue.(type) {
 	case int:
@@ -106,26 +99,21 @@ func mcpInt32Argument(request mcp.CallToolRequest, name string) (int32, error) {
 			math.Trunc(typedValue) != typedValue {
 			return 0, fmt.Errorf("%s must be a whole number", name)
 		}
-
 		if typedValue < math.MinInt64 || typedValue > math.MaxInt64 {
 			return 0, fmt.Errorf("%s exceeds the supported range", name)
 		}
-
 		value = int64(typedValue)
 	case json.Number:
 		converted, err := typedValue.Int64()
 		if err != nil {
 			return 0, fmt.Errorf("%s must be a whole number", name)
 		}
-
 		value = converted
 	default:
 		return 0, fmt.Errorf("%s must be a number", name)
 	}
-
 	if value < math.MinInt32 || value > math.MaxInt32 {
 		return 0, fmt.Errorf("%s exceeds the supported range", name)
 	}
-
 	return int32(value), nil
 }

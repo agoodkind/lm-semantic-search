@@ -13,50 +13,37 @@ import (
 // surfacing anywhere; a path that was never indexed is intentionally left alone.
 // The presence check runs through exists so the computation stays unit-testable
 // without touching the filesystem.
-func computeDroppedCodebases(
-	jobs []model.Job,
-	codebases []model.Codebase,
-	exists func(string) bool,
-) []string {
+func computeDroppedCodebases(jobs []model.Job, codebases []model.Codebase, exists func(string) bool) []string {
 	tracked := make(map[string]struct{}, len(codebases))
 	for _, codebase := range codebases {
 		if codebase.CanonicalPath == "" {
 			continue
 		}
-
 		tracked[codebase.CanonicalPath] = struct{}{}
 	}
 
 	indexedBefore := make(map[string]struct{})
-
 	for _, job := range jobs {
 		if job.State != model.JobStateCompleted {
 			continue
 		}
-
 		if job.CanonicalPath == "" {
 			continue
 		}
-
 		indexedBefore[job.CanonicalPath] = struct{}{}
 	}
 
 	dropped := make([]string, 0)
-
 	for path := range indexedBefore {
 		if _, stillTracked := tracked[path]; stillTracked {
 			continue
 		}
-
 		if !exists(path) {
 			continue
 		}
-
 		dropped = append(dropped, path)
 	}
-
 	sort.Strings(dropped)
-
 	return dropped
 }
 
@@ -66,24 +53,16 @@ func computeDroppedCodebases(
 // without the MCP adapter recomputing it client-side.
 func (manager *Manager) DroppedCodebases() []string {
 	manager.mu.Lock()
-
 	jobs := make([]model.Job, 0, len(manager.jobs))
 	for _, job := range manager.jobs {
 		jobs = append(jobs, job)
 	}
-
 	codebases := make([]model.Codebase, 0, len(manager.codebases))
 	for _, codebase := range manager.codebases {
 		codebases = append(codebases, codebase)
 	}
-
 	manager.mu.Unlock()
-
-	return computeDroppedCodebases(
-		jobs,
-		codebases,
-		func(path string) bool {
-			return !sourceDirMissing(path)
-		},
-	)
+	return computeDroppedCodebases(jobs, codebases, func(path string) bool {
+		return !sourceDirMissing(path)
+	})
 }

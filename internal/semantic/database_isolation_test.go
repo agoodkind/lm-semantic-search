@@ -47,7 +47,6 @@ func (server *databaseIsolationServer) ShowCollections(
 	server.showCalls = append(server.showCalls, databaseName)
 	collectionNames := slices.Clone(server.collections[databaseName])
 	server.mutex.Unlock()
-
 	return &milvuspb.ShowCollectionsResponse{
 		Status:          databaseIsolationSuccessStatus(),
 		CollectionNames: collectionNames,
@@ -59,15 +58,11 @@ func (server *databaseIsolationServer) GetLoadState(
 	request *milvuspb.GetLoadStateRequest,
 ) (*milvuspb.GetLoadStateResponse, error) {
 	server.mutex.Lock()
-	server.loadCalls = append(
-		server.loadCalls,
-		databaseIsolationCall{
-			database:       databaseNameFromContext(ctx),
-			collectionName: request.GetCollectionName(),
-		},
-	)
+	server.loadCalls = append(server.loadCalls, databaseIsolationCall{
+		database:       databaseNameFromContext(ctx),
+		collectionName: request.GetCollectionName(),
+	})
 	server.mutex.Unlock()
-
 	return &milvuspb.GetLoadStateResponse{
 		Status: databaseIsolationSuccessStatus(),
 		State:  commonpb.LoadState_LoadStateLoaded,
@@ -79,19 +74,16 @@ func databaseNameFromContext(ctx context.Context) string {
 	if !ok {
 		return ""
 	}
-
 	databaseNames := values.Get("dbname")
 	if len(databaseNames) == 0 {
 		return ""
 	}
-
 	return databaseNames[0]
 }
 
 func (server *databaseIsolationServer) snapshot() ([]string, []databaseIsolationCall) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
-
 	return slices.Clone(server.showCalls), slices.Clone(server.loadCalls)
 }
 
@@ -100,17 +92,14 @@ func databaseIsolationSuccessStatus() *commonpb.Status {
 }
 
 func TestServiceReconcilesOnlyConfiguredMilvusDatabase(t *testing.T) {
-	server := &databaseIsolationServer{
-		collections: map[string][]string{
-			defaultTestDatabase: {operatorCollection},
-			sandboxTestDatabase: {temporaryCollection},
-		},
-	}
+	server := &databaseIsolationServer{collections: map[string][]string{
+		defaultTestDatabase: {operatorCollection},
+		sandboxTestDatabase: {temporaryCollection},
+	}}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen for fake Milvus: %v", err)
 	}
-
 	grpcServer := grpc.NewServer()
 	milvuspb.RegisterMilvusServiceServer(grpcServer, server)
 	go func() {
@@ -118,22 +107,18 @@ func TestServiceReconcilesOnlyConfiguredMilvusDatabase(t *testing.T) {
 	}()
 	t.Cleanup(grpcServer.Stop)
 
-	service, err := semantic.NewService(
-		context.Background(),
-		config.Config{
-			EmbeddingProvider: "OpenAI",
-			EmbeddingModel:    "test-model",
-			OpenAIAPIKey:      "test-key",
-			OpenAIBaseURL:     "http://127.0.0.1:1/v1",
-			MilvusAddress:     listener.Addr().String(),
-			MilvusDatabase:    sandboxTestDatabase,
-			HybridMode:        true,
-		},
-	)
+	service, err := semantic.NewService(context.Background(), config.Config{
+		EmbeddingProvider: "OpenAI",
+		EmbeddingModel:    "test-model",
+		OpenAIAPIKey:      "test-key",
+		OpenAIBaseURL:     "http://127.0.0.1:1/v1",
+		MilvusAddress:     listener.Addr().String(),
+		MilvusDatabase:    sandboxTestDatabase,
+		HybridMode:        true,
+	})
 	if err != nil {
 		t.Fatalf("construct semantic service: %v", err)
 	}
-
 	t.Cleanup(func() {
 		if closeErr := service.Close(context.Background()); closeErr != nil {
 			t.Errorf("close semantic service: %v", closeErr)
@@ -141,34 +126,24 @@ func TestServiceReconcilesOnlyConfiguredMilvusDatabase(t *testing.T) {
 	})
 
 	deadline := time.Now().Add(databaseTestDeadline)
-
 	for {
 		showCalls, loadCalls := server.snapshot()
 		if len(showCalls) >= 2 && len(loadCalls) >= 1 {
 			for _, databaseName := range showCalls {
 				if databaseName != sandboxTestDatabase {
-					t.Fatalf(
-						"ShowCollections database = %q, want %q",
-						databaseName,
-						sandboxTestDatabase,
-					)
+					t.Fatalf("ShowCollections database = %q, want %q", databaseName, sandboxTestDatabase)
 				}
 			}
-
 			for _, call := range loadCalls {
-				if call.database != sandboxTestDatabase ||
-					call.collectionName != temporaryCollection {
+				if call.database != sandboxTestDatabase || call.collectionName != temporaryCollection {
 					t.Fatalf("GetLoadState call = %+v, want sandbox temporary collection", call)
 				}
 			}
-
 			return
 		}
-
 		if time.Now().After(deadline) {
 			t.Fatalf("reconciliation calls = show %v load %v", showCalls, loadCalls)
 		}
-
 		time.Sleep(10 * time.Millisecond)
 	}
 }

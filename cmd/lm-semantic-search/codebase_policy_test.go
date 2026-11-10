@@ -33,7 +33,6 @@ func (server *policyCommandServer) StartIndex(
 	request *pb.StartIndexRequest,
 ) (*pb.StartIndexResponse, error) {
 	server.startRequests <- proto.Clone(request).(*pb.StartIndexRequest)
-
 	return &pb.StartIndexResponse{
 		JobId:       "job-index",
 		CodebaseId:  "codebase-index",
@@ -47,7 +46,6 @@ func (server *policyCommandServer) SyncIndex(
 	request *pb.SyncIndexRequest,
 ) (*pb.SyncIndexResponse, error) {
 	server.syncRequests <- proto.Clone(request).(*pb.SyncIndexRequest)
-
 	return &pb.SyncIndexResponse{
 		JobId:       "job-sync",
 		CodebaseId:  "codebase-sync",
@@ -100,28 +98,25 @@ func TestIndexSchedulingPolicyArguments(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				server := newPolicyCommandServer()
-				socketPath := startPolicyCommandGRPCServer(t, server)
-				arguments := []string{"codebase", "index", "/tmp/project"}
-				arguments = append(arguments, testCase.arguments...)
+		t.Run(testCase.name, func(t *testing.T) {
+			server := newPolicyCommandServer()
+			socketPath := startPolicyCommandGRPCServer(t, server)
+			arguments := []string{"codebase", "index", "/tmp/project"}
+			arguments = append(arguments, testCase.arguments...)
 
-				if err := executePolicyCommand(socketPath, arguments); err != nil {
-					t.Fatalf("execute codebase index: %v", err)
-				}
+			if err := executePolicyCommand(socketPath, arguments); err != nil {
+				t.Fatalf("execute codebase index: %v", err)
+			}
 
-				request := <-server.startRequests
-				if !proto.Equal(request.GetSchedulingPolicy(), testCase.want) {
-					t.Fatalf(
-						"scheduling policy = %v, want %v",
-						request.GetSchedulingPolicy(),
-						testCase.want,
-					)
-				}
-			},
-		)
+			request := <-server.startRequests
+			if !proto.Equal(request.GetSchedulingPolicy(), testCase.want) {
+				t.Fatalf(
+					"scheduling policy = %v, want %v",
+					request.GetSchedulingPolicy(),
+					testCase.want,
+				)
+			}
+		})
 	}
 }
 
@@ -171,26 +166,22 @@ func TestIndexSchedulingPolicyRejectsInvalidIdleAfter(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				server := newPolicyCommandServer()
-				socketPath := startPolicyCommandGRPCServer(t, server)
-				err := executePolicyCommand(
-					socketPath,
-					[]string{"codebase", "index", "/tmp/project", testCase.argument},
-				)
-				if err == nil || !strings.Contains(err.Error(), testCase.wantError) {
-					t.Fatalf("error = %v, want %q", err, testCase.wantError)
-				}
-
-				select {
-				case request := <-server.startRequests:
-					t.Fatalf("invalid request reached daemon: %v", request)
-				default:
-				}
-			},
-		)
+		t.Run(testCase.name, func(t *testing.T) {
+			server := newPolicyCommandServer()
+			socketPath := startPolicyCommandGRPCServer(t, server)
+			err := executePolicyCommand(
+				socketPath,
+				[]string{"codebase", "index", "/tmp/project", testCase.argument},
+			)
+			if err == nil || !strings.Contains(err.Error(), testCase.wantError) {
+				t.Fatalf("error = %v, want %q", err, testCase.wantError)
+			}
+			select {
+			case request := <-server.startRequests:
+				t.Fatalf("invalid request reached daemon: %v", request)
+			default:
+			}
+		})
 	}
 }
 
@@ -223,7 +214,6 @@ func TestCodebasePriorityRejectsInvalidValue(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "priority must be high, normal, or low") {
 		t.Fatalf("error = %v, want priority choices", err)
 	}
-
 	select {
 	case request := <-server.updateRequests:
 		t.Fatalf("invalid request reached daemon: %v", request)
@@ -259,26 +249,18 @@ func TestCodebaseQuietCommand(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				server := newPolicyCommandServer()
-				socketPath := startPolicyCommandGRPCServer(t, server)
-				if err := executePolicyCommand(socketPath, testCase.arguments); err != nil {
-					t.Fatalf("execute codebase quiet: %v", err)
-				}
+		t.Run(testCase.name, func(t *testing.T) {
+			server := newPolicyCommandServer()
+			socketPath := startPolicyCommandGRPCServer(t, server)
+			if err := executePolicyCommand(socketPath, testCase.arguments); err != nil {
+				t.Fatalf("execute codebase quiet: %v", err)
+			}
 
-				request := <-server.updateRequests
-				if request.GetPath() != "/tmp/project" ||
-					!proto.Equal(request.GetPatch(), testCase.want) {
-					t.Fatalf(
-						"update request = %v, want path and quiet patch %v",
-						request,
-						testCase.want,
-					)
-				}
-			},
-		)
+			request := <-server.updateRequests
+			if request.GetPath() != "/tmp/project" || !proto.Equal(request.GetPatch(), testCase.want) {
+				t.Fatalf("update request = %v, want path and quiet patch %v", request, testCase.want)
+			}
+		})
 	}
 }
 
@@ -292,7 +274,6 @@ func TestCodebaseQuietRejectsInvalidValue(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "quiet must be on or off") {
 		t.Fatalf("error = %v, want quiet choices", err)
 	}
-
 	select {
 	case request := <-server.updateRequests:
 		t.Fatalf("invalid request reached daemon: %v", request)
@@ -309,13 +290,11 @@ func startPolicyCommandGRPCServer(
 	if err != nil {
 		t.Fatalf("create daemon socket directory: %v", err)
 	}
-
 	socketPath := filepath.Join(socketDirectory, "daemon.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("listen on daemon socket: %v", err)
 	}
-
 	grpcServer := grpc.NewServer()
 	pb.RegisterSemanticSearchDaemonServiceServer(grpcServer, policyServer)
 	go func() {
@@ -326,14 +305,12 @@ func startPolicyCommandGRPCServer(
 		_ = listener.Close()
 		_ = os.RemoveAll(socketDirectory)
 	})
-
 	return socketPath
 }
 
 func executePolicyCommand(socketPath string, arguments []string) error {
 	root := newRoot(socketPath)
 	root.SetArgs(arguments)
-
 	return root.Execute()
 }
 

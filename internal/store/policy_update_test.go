@@ -28,12 +28,10 @@ func TestPolicyUpdateTransactionRoundTripsAndRemovesDurably(t *testing.T) {
 	if err := WritePolicyUpdate(markerPath, want); err != nil {
 		t.Fatalf("WritePolicyUpdate: %v", err)
 	}
-
 	got, err := ReadPolicyUpdate(markerPath)
 	if err != nil {
 		t.Fatalf("ReadPolicyUpdate: %v", err)
 	}
-
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ReadPolicyUpdate = %+v, want %+v", got, want)
 	}
@@ -48,11 +46,9 @@ func TestPolicyUpdateTransactionRoundTripsAndRemovesDurably(t *testing.T) {
 	if err := RemovePolicyUpdate(markerPath); err != nil {
 		t.Fatalf("RemovePolicyUpdate: %v", err)
 	}
-
 	if len(syncPaths) != 1 || syncPaths[0] != filepath.Dir(markerPath) {
 		t.Fatalf("remove sync paths = %v, want [%s]", syncPaths, filepath.Dir(markerPath))
 	}
-
 	_, err = ReadPolicyUpdate(markerPath)
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("ReadPolicyUpdate after remove = %v, want file not found", err)
@@ -78,7 +74,6 @@ func TestWritePolicyUpdateReportsMarkerAfterDirectorySyncFailure(t *testing.T) {
 		if syncCount == 2 {
 			return syncErr
 		}
-
 		return originalSync(file)
 	}
 	t.Cleanup(func() { syncFile = originalSync })
@@ -86,14 +81,15 @@ func TestWritePolicyUpdateReportsMarkerAfterDirectorySyncFailure(t *testing.T) {
 	err := WritePolicyUpdate(markerPath, transaction)
 	if !errors.Is(err, syncErr) ||
 		!errors.Is(err, ErrPolicyUpdateMarkerMayExist) {
-		t.Fatalf("WritePolicyUpdate error = %v, want sync failure and committed marker", err)
+		t.Fatalf(
+			"WritePolicyUpdate error = %v, want sync failure and committed marker",
+			err,
+		)
 	}
-
 	got, readErr := ReadPolicyUpdate(markerPath)
 	if readErr != nil {
 		t.Fatalf("ReadPolicyUpdate after sync failure: %v", readErr)
 	}
-
 	if !reflect.DeepEqual(got, transaction) {
 		t.Fatalf("marker after sync failure = %+v, want %+v", got, transaction)
 	}

@@ -18,38 +18,13 @@ import (
 // covering every Milvus embed path, including the conversation tool payloads that
 // split by syntax rather than by the byte budget. Unlike the varchar guardrail, a
 // token split is expected for large content, so it logs at info level.
-func (service *Service) expandOverTokenBudget(
-	ctx context.Context,
-	codebasePath string,
-	chunks []model.StoredChunk,
-	operation string,
-) []model.StoredChunk {
-	byteBudget := config.EmbedChunkByteBudgetForLimit(
-		service.cfg.EmbeddingMaxTokens,
-		config.ActiveEmbedTokenLimit(service.cfg),
-	)
+func (service *Service) expandOverTokenBudget(ctx context.Context, codebasePath string, chunks []model.StoredChunk, operation string) []model.StoredChunk {
+	byteBudget := config.EmbedChunkByteBudgetForLimit(service.cfg.EmbeddingMaxTokens, config.ActiveEmbedTokenLimit(service.cfg))
 	out, splitCount := SplitChunksToByteBudget(chunks, byteBudget)
 	if splitCount == 0 {
 		return chunks
 	}
-
-	slog.InfoContext(
-		ctx,
-		"semantic.split_over_token_budget",
-		"codebase_path",
-		codebasePath,
-		"operation",
-		operation,
-		"byte_budget",
-		byteBudget,
-		"chunks_split",
-		splitCount,
-		"expanded_from",
-		len(chunks),
-		"expanded_to",
-		len(out),
-	)
-
+	slog.InfoContext(ctx, "semantic.split_over_token_budget", "codebase_path", codebasePath, "operation", operation, "byte_budget", byteBudget, "chunks_split", splitCount, "expanded_from", len(chunks), "expanded_to", len(out))
 	return out
 }
 
@@ -61,40 +36,30 @@ func (service *Service) expandOverTokenBudget(
 // the caller's byte budget: the OpenAI-compatible model limit for Milvus and the
 // offline preset limit for the local ONNX backend. A non-positive budget returns
 // chunks unchanged. The returned count reports how many input chunks were split.
-func SplitChunksToByteBudget(
-	chunks []model.StoredChunk,
-	byteBudget int,
-) ([]model.StoredChunk, int) {
+func SplitChunksToByteBudget(chunks []model.StoredChunk, byteBudget int) ([]model.StoredChunk, int) {
 	if byteBudget <= 0 {
 		return chunks, 0
 	}
-
 	overBudget := false
-
 	for index := range chunks {
 		if len(chunks[index].Content) > byteBudget {
 			overBudget = true
 			break
 		}
 	}
-
 	if !overBudget {
 		return chunks, 0
 	}
-
 	out := make([]model.StoredChunk, 0, len(chunks))
 	splitCount := 0
-
 	for index := range chunks {
 		if len(chunks[index].Content) <= byteBudget {
 			out = append(out, chunks[index])
 			continue
 		}
-
 		splitCount++
 		out = append(out, splitChunkAtBudget(chunks[index], byteBudget)...)
 	}
-
 	return out, splitCount
 }
 
@@ -112,9 +77,7 @@ func splitChunkAtBudget(chunk model.StoredChunk, budget int) []model.StoredChunk
 	if chunk.SplitPart > 0 {
 		baseOffset = int(chunk.SplitPart) - 1
 	}
-
 	pieces, offsets := splitBytesWithOffsets(chunk.Content, budget)
-
 	out := make([]model.StoredChunk, 0, len(pieces))
 	for index := range pieces {
 		child := chunk
@@ -123,7 +86,6 @@ func splitChunkAtBudget(chunk model.StoredChunk, budget int) []model.StoredChunk
 		child.SplitPartRecorded = true
 		out = append(out, child)
 	}
-
 	return out
 }
 
@@ -152,11 +114,9 @@ func splitBytesWithOffsets(value string, maxBytes int) ([]string, []int) {
 	if maxBytes <= 0 {
 		return []string{value}, []int{0}
 	}
-
 	pieceCount := (len(value) + maxBytes - 1) / maxBytes
 	pieces := make([]string, 0, pieceCount)
 	offsets := make([]int, 0, pieceCount)
-
 	start := 0
 	for start < len(value) {
 		end := start + maxBytes
@@ -165,20 +125,16 @@ func splitBytesWithOffsets(value string, maxBytes int) ([]string, []int) {
 			offsets = append(offsets, start)
 			break
 		}
-
 		for end > start && !utf8.RuneStart(value[end]) {
 			end--
 		}
-
 		if end == start {
 			_, size := utf8.DecodeRuneInString(value[start:])
 			end = start + size
 		}
-
 		pieces = append(pieces, value[start:end])
 		offsets = append(offsets, start)
 		start = end
 	}
-
 	return pieces, offsets
 }

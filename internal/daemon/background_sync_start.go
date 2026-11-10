@@ -13,7 +13,6 @@ func (syncer *BackgroundSync) runPeriodicMaintenanceOnce(ctx context.Context) {
 	if syncer.manager != nil && syncer.manager.skipForMaintenance(ctx, "store-maintenance-sweep") {
 		return
 	}
-
 	syncer.ensureMmapEnabled(ctx)
 }
 
@@ -33,7 +32,6 @@ func (syncer *BackgroundSync) convergeAdmitted(codebaseID string) bool {
 	syncer.convergeMu.Lock()
 	defer syncer.convergeMu.Unlock()
 	_, admitted := syncer.converging[codebaseID]
-
 	return admitted
 }
 
@@ -47,19 +45,10 @@ func (syncer *BackgroundSync) convergeAdmitted(codebaseID string) bool {
 // worktree that waits for a sibling's first build is held rather than
 // requeued: the sync the release starts walks the whole tree, so it covers
 // this batch's paths without the watcher retrying them on every debounce.
-func (syncer *BackgroundSync) startBuildAfterEmptyRun(
-	ctx context.Context,
-	codebase model.Codebase,
-) bool {
+func (syncer *BackgroundSync) startBuildAfterEmptyRun(ctx context.Context, codebase model.Codebase) bool {
 	if !ranWithoutCreatingACollection(codebase.LastSuccessfulRun) {
 		return false
 	}
-
-	syncer.manager.startAutomaticSync(
-		ctx,
-		codebase,
-		model.ClientInfo{Name: "daemon-watcher", PID: 0},
-	)
-
+	syncer.manager.startAutomaticSync(ctx, codebase, model.ClientInfo{Name: "daemon-watcher", PID: 0})
 	return true
 }

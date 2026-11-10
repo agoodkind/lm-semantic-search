@@ -34,12 +34,10 @@ func Compile(filter *Filter) (CompiledFilter, error) {
 	if filter == nil {
 		return CompiledFilter{Expression: "", Params: nil}, nil
 	}
-
 	expression, err := compiler.node(*filter)
 	if err != nil {
 		return CompiledFilter{Expression: "", Params: nil}, err
 	}
-
 	return CompiledFilter{Expression: expression, Params: compiler.params}, nil
 }
 
@@ -52,7 +50,6 @@ func CompileInline(filter *Filter) (string, error) {
 	if filter == nil {
 		return "", nil
 	}
-
 	return compiler.node(*filter)
 }
 
@@ -73,22 +70,15 @@ func (compiler *filterCompiler) node(filter Filter) (string, error) {
 		if len(filter.Children) != 1 {
 			return "", fmt.Errorf("not filter has %d children, want 1", len(filter.Children))
 		}
-
 		child, err := compiler.node(filter.Children[0])
 		if err != nil {
 			return "", err
 		}
-
 		return "not (" + child + ")", nil
 	case FilterEquals:
 		if len(filter.Values) != 1 {
-			return "", fmt.Errorf(
-				"equals filter on %s has %d values, want 1",
-				filter.Column,
-				len(filter.Values),
-			)
+			return "", fmt.Errorf("equals filter on %s has %d values, want 1", filter.Column, len(filter.Values))
 		}
-
 		return filter.Column + " == " + literal(filter.Values[0]), nil
 	case FilterIn:
 		return compiler.membership(filter)
@@ -103,32 +93,21 @@ func (compiler *filterCompiler) node(filter Filter) (string, error) {
 	}
 }
 
-func (compiler *filterCompiler) group(
-	children []Filter,
-	separator string,
-	needsParentheses func(Filter) bool,
-) (string, error) {
+func (compiler *filterCompiler) group(children []Filter, separator string, needsParentheses func(Filter) bool) (string, error) {
 	if len(children) == 0 {
-		return "", fmt.Errorf(
-			"filter group joined by %q has no children",
-			strings.TrimSpace(separator),
-		)
+		return "", fmt.Errorf("filter group joined by %q has no children", strings.TrimSpace(separator))
 	}
-
 	clauses := make([]string, 0, len(children))
 	for _, child := range children {
 		clause, err := compiler.node(child)
 		if err != nil {
 			return "", err
 		}
-
 		if needsParentheses(child) {
 			clause = "(" + clause + ")"
 		}
-
 		clauses = append(clauses, clause)
 	}
-
 	return strings.Join(clauses, separator), nil
 }
 
@@ -139,16 +118,13 @@ func (compiler *filterCompiler) membership(filter Filter) (string, error) {
 	if len(filter.Values) == 0 {
 		return "", fmt.Errorf("membership filter on %s has no values", filter.Column)
 	}
-
 	if compiler.inline {
 		literals := make([]string, 0, len(filter.Values))
 		for _, value := range filter.Values {
 			literals = append(literals, literal(value))
 		}
-
 		return filter.Column + " in [" + strings.Join(literals, ", ") + "]", nil
 	}
-
 	param := TemplateParam{
 		Name:    "p" + strconv.Itoa(len(compiler.params)),
 		Type:    filter.Values[0].Type,
@@ -165,16 +141,10 @@ func (compiler *filterCompiler) membership(filter Filter) (string, error) {
 		case ScalarTypeString:
 			param.Strings = append(param.Strings, value.String)
 		default:
-			return "", fmt.Errorf(
-				"membership filter on %s has unsupported type %q",
-				filter.Column,
-				param.Type,
-			)
+			return "", fmt.Errorf("membership filter on %s has unsupported type %q", filter.Column, param.Type)
 		}
 	}
-
 	compiler.params = append(compiler.params, param)
-
 	return filter.Column + " in {" + param.Name + "}", nil
 }
 
@@ -206,15 +176,12 @@ func compileRange(filter Filter) (string, error) {
 	if filter.Lower != nil {
 		clauses = append(clauses, filter.Column+" >= "+strconv.FormatInt(*filter.Lower, 10))
 	}
-
 	if filter.Upper != nil {
 		clauses = append(clauses, filter.Column+" < "+strconv.FormatInt(*filter.Upper, 10))
 	}
-
 	if len(clauses) == 0 {
 		return "", fmt.Errorf("range filter on %s has no bound", filter.Column)
 	}
-
 	return strings.Join(clauses, " and "), nil
 }
 
@@ -239,7 +206,6 @@ func EscapeString(value string) string {
 
 	var builder strings.Builder
 	builder.Grow(len(value))
-
 	for index := range len(value) {
 		byteValue := value[index]
 		switch byteValue {
@@ -254,10 +220,8 @@ func EscapeString(value string) string {
 				fmt.Fprintf(&builder, `\%03o`, byteValue)
 				continue
 			}
-
 			builder.WriteByte(byteValue)
 		}
 	}
-
 	return builder.String()
 }

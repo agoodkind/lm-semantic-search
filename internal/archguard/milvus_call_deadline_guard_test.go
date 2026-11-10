@@ -67,14 +67,12 @@ func TestMilvusCallDeadlineSelectionReadsNoClock(t *testing.T) {
 		if !strings.HasPrefix(filepath.ToSlash(rel), milvusTransportPackage) {
 			continue
 		}
-
 		guardedFiles++
 
 		parsed, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
-
 		violations = append(violations, clockAndDeadlineReads(rel, parsed)...)
 
 		for _, decl := range parsed.Decls {
@@ -82,7 +80,6 @@ func TestMilvusCallDeadlineSelectionReadsNoClock(t *testing.T) {
 			if !ok || functionDecl.Name.Name != milvusDeadlineSelector {
 				continue
 			}
-
 			selectorFound = true
 			if !callsContextWithTimeout(functionDecl) {
 				violations = append(
@@ -94,19 +91,11 @@ func TestMilvusCallDeadlineSelectionReadsNoClock(t *testing.T) {
 	}
 
 	if guardedFiles == 0 {
-		t.Fatalf(
-			"no production files found under %s; the guard would pass vacuously",
-			milvusTransportPackage,
-		)
+		t.Fatalf("no production files found under %s; the guard would pass vacuously", milvusTransportPackage)
 	}
-
 	if !selectorFound {
-		violations = append(
-			violations,
-			milvusTransportPackage+": "+milvusDeadlineSelector+" was not found",
-		)
+		violations = append(violations, milvusTransportPackage+": "+milvusDeadlineSelector+" was not found")
 	}
-
 	if len(violations) > 0 {
 		t.Fatalf(
 			"the Milvus per-call bound must be chosen by context.WithTimeout alone:\n%s",
@@ -122,42 +111,32 @@ func TestMilvusCallDeadlineSelectionReadsNoClock(t *testing.T) {
 // regression rather than a style question.
 func clockAndDeadlineReads(rel string, file *ast.File) []string {
 	var violations []string
-	ast.Inspect(
-		file,
-		func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-
-			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-
-			if selector.Sel.Name == "Deadline" {
-				violations = append(
-					violations,
-					rel+": calls Deadline(); the bound must not branch on the caller's deadline, because context.WithTimeout already keeps whichever deadline is earlier",
-				)
-
-				return true
-			}
-
-			qualifier, ok := selector.X.(*ast.Ident)
-			if !ok || !clockPackageNames[qualifier.Name] || !clockReadNames[selector.Sel.Name] {
-				return true
-			}
-
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if selector.Sel.Name == "Deadline" {
 			violations = append(
 				violations,
-				rel+": reads the clock through "+qualifier.Name+"."+selector.Sel.Name+"(); comparing a deadline against a fresh reading drops the comparison onto wall time, where a forward correction hides a live deadline",
+				rel+": calls Deadline(); the bound must not branch on the caller's deadline, because context.WithTimeout already keeps whichever deadline is earlier",
 			)
-
 			return true
-		},
-	)
-
+		}
+		qualifier, ok := selector.X.(*ast.Ident)
+		if !ok || !clockPackageNames[qualifier.Name] || !clockReadNames[selector.Sel.Name] {
+			return true
+		}
+		violations = append(
+			violations,
+			rel+": reads the clock through "+qualifier.Name+"."+selector.Sel.Name+"(); comparing a deadline against a fresh reading drops the comparison onto wall time, where a forward correction hides a live deadline",
+		)
+		return true
+	})
 	return violations
 }
 
@@ -167,29 +146,21 @@ func callsContextWithTimeout(functionDecl *ast.FuncDecl) bool {
 	if functionDecl.Body == nil {
 		return false
 	}
-
 	found := false
-	ast.Inspect(
-		functionDecl.Body,
-		func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-
-			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || selector.Sel.Name != "WithTimeout" {
-				return true
-			}
-
-			if qualifier, ok := selector.X.(*ast.Ident); ok && qualifier.Name == "context" {
-				found = true
-				return false
-			}
-
+	ast.Inspect(functionDecl.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
 			return true
-		},
-	)
-
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "WithTimeout" {
+			return true
+		}
+		if qualifier, ok := selector.X.(*ast.Ident); ok && qualifier.Name == "context" {
+			found = true
+			return false
+		}
+		return true
+	})
 	return found
 }

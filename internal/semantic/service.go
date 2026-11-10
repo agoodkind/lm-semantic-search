@@ -92,7 +92,6 @@ func (service *Service) EmbeddingProviderName() model.EmbeddingProvider {
 	if service.embedder == nil {
 		return model.EmbeddingProviderNone
 	}
-
 	return service.embedder.ProviderName()
 }
 
@@ -140,61 +139,95 @@ type Service struct {
 // NewService constructs the semantic search runtime.
 func NewService(ctx context.Context, cfg config.Config) (*Service, error) {
 	if strings.TrimSpace(cfg.MilvusAddress) == "" {
-		service := newServiceState(cfg, nil)
+		service := &Service{
+			cfg:                            cfg,
+			embedder:                       nil,
+			milvus:                         nil,
+			insertRows:                     nil,
+			available:                      atomic.Bool{},
+			reconnectCancel:                nil,
+			reconnectDone:                  nil,
+			reconciliationMutex:            sync.Mutex{},
+			reconciliationCancel:           nil,
+			reconciliationWork:             sync.WaitGroup{},
+			closeOnce:                      sync.Once{},
+			reuseCatalogReady:              sync.Map{},
+			reuseCatalogMutex:              sync.Mutex{},
+			reuseCatalogAppendMutex:        sync.Mutex{},
+			reuseVectorDimensions:          sync.Map{},
+			reuseVectorDimensionMutex:      sync.Mutex{},
+			reuseVectorDimensionGeneration: make(map[string]uint64),
+			collectionLoads: collectionLoadCoordinator{
+				mutex:   sync.Mutex{},
+				flights: nil,
+			},
+			loadGates:                   newCollectionLoadGates(),
+			residency:                   nil,
+			ensuredSplitPartColumns:     sync.Map{},
+			ensuredReuseIdentityColumns: sync.Map{},
+			mmapPolicyVersions:          make(map[string]int),
+			mmapPolicyMutex:             sync.Mutex{},
+			mmapPolicyGeneration:        make(map[string]uint64),
+			mmapPolicyFailures:          make(map[string]mmapPolicyFailure),
+		}
 		service.initializeResidencyController()
-
 		return service, nil
 	}
 
 	embedder, err := embeddingprovider.New(ctx, cfg)
 	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"create embedding provider failed",
-			"provider",
-			cfg.EmbeddingProvider,
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "create embedding provider failed", "provider", cfg.EmbeddingProvider, "err", err)
 		return nil, fmt.Errorf("create embedding provider: %w", err)
 	}
 
-	service := newServiceState(cfg, embedder)
+	service := &Service{
+		cfg:                            cfg,
+		embedder:                       embedder,
+		milvus:                         nil,
+		insertRows:                     nil,
+		available:                      atomic.Bool{},
+		reconnectCancel:                nil,
+		reconnectDone:                  nil,
+		reconciliationMutex:            sync.Mutex{},
+		reconciliationCancel:           nil,
+		reconciliationWork:             sync.WaitGroup{},
+		closeOnce:                      sync.Once{},
+		reuseCatalogReady:              sync.Map{},
+		reuseCatalogMutex:              sync.Mutex{},
+		reuseCatalogAppendMutex:        sync.Mutex{},
+		reuseVectorDimensions:          sync.Map{},
+		reuseVectorDimensionMutex:      sync.Mutex{},
+		reuseVectorDimensionGeneration: make(map[string]uint64),
+		collectionLoads: collectionLoadCoordinator{
+			mutex:   sync.Mutex{},
+			flights: nil,
+		},
+		loadGates:                   newCollectionLoadGates(),
+		residency:                   nil,
+		ensuredSplitPartColumns:     sync.Map{},
+		ensuredReuseIdentityColumns: sync.Map{},
+		mmapPolicyVersions:          make(map[string]int),
+		mmapPolicyMutex:             sync.Mutex{},
+		mmapPolicyGeneration:        make(map[string]uint64),
+		mmapPolicyFailures:          make(map[string]mmapPolicyFailure),
+	}
 	service.initializeResidencyController()
 
 	client, err := service.dialMilvus(ctx)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"connect to Milvus failed; starting degraded semantic service",
-			"address",
-			cfg.MilvusAddress,
-			"err",
-			err,
-		)
+		slog.WarnContext(ctx, "connect to Milvus failed; starting degraded semantic service", "address", cfg.MilvusAddress, "err", err)
 		service.startReconnector(context.WithoutCancel(ctx))
-
 		return service, nil
 	}
 
 	if err := service.publishClient(ctx, client); err != nil {
-		slog.WarnContext(
-			ctx,
-			"recover Milvus collections failed; starting degraded semantic service",
-			"address",
-			cfg.MilvusAddress,
-			"err",
-			err,
-		)
+		slog.WarnContext(ctx, "recover Milvus collections failed; starting degraded semantic service", "address", cfg.MilvusAddress, "err", err)
 		if closeErr := client.Close(ctx); closeErr != nil {
 			slog.WarnContext(ctx, "close Milvus client after recovery failure", "err", closeErr)
 		}
-
 		service.milvus = nil
 		service.startReconnector(context.WithoutCancel(ctx))
 	}
-
 	return service, nil
 }
 
@@ -209,7 +242,6 @@ func (service *Service) Close(ctx context.Context) error {
 		if service.reconnectCancel != nil {
 			service.reconnectCancel()
 		}
-
 		if service.reconnectDone != nil {
 			select {
 			case <-service.reconnectDone:
@@ -217,11 +249,9 @@ func (service *Service) Close(ctx context.Context) error {
 				closeErr = fmt.Errorf("wait for Milvus reconnect shutdown: %w", ctx.Err())
 			}
 		}
-
 		if err := service.stopResidencyReconciliation(ctx); err != nil {
 			closeErr = errors.Join(closeErr, err)
 		}
-
 		if service.residency != nil {
 			if err := service.residency.Close(ctx); err != nil {
 				slog.ErrorContext(ctx, "close collection residency controller failed", "err", err)
@@ -231,21 +261,16 @@ func (service *Service) Close(ctx context.Context) error {
 				)
 			}
 		}
-
 		if !service.Available() || service.milvus == nil {
 			return
 		}
-
 		if err := service.milvus.Close(ctx); err != nil {
 			slog.ErrorContext(ctx, "close Milvus client failed", "err", err)
 			closeErr = errors.Join(closeErr, fmt.Errorf("close Milvus client: %w", err))
-
 			return
 		}
-
 		service.available.Store(false)
 	})
-
 	return closeErr
 }
 
@@ -256,8 +281,7 @@ func (service *Service) Available() bool {
 
 // Degraded reports that Milvus is configured but not yet connected.
 func (service *Service) Degraded() bool {
-	return service != nil && strings.TrimSpace(service.cfg.MilvusAddress) != "" &&
-		!service.Available()
+	return service != nil && strings.TrimSpace(service.cfg.MilvusAddress) != "" && !service.Available()
 }
 
 // documentPathPrefix marks the canonical path of a document collection record.
@@ -271,7 +295,6 @@ func documentCollectionIDFromPath(codebasePath string) (string, bool) {
 	if !strings.HasPrefix(codebasePath, documentPathPrefix) {
 		return "", false
 	}
-
 	return strings.TrimPrefix(codebasePath, documentPathPrefix), true
 }
 
@@ -294,7 +317,6 @@ func (service *Service) CollectionName(codebasePath string) string {
 	if err != nil {
 		normalizedPath = codebasePath
 	}
-
 	pathHash := tshash.PathPrefix(normalizedPath)
 
 	override := strings.TrimSpace(service.cfg.CollectionNameOverride)
@@ -308,11 +330,9 @@ func (service *Service) CollectionName(codebasePath string) string {
 	if len(sanitized) > maxReadableLength {
 		sanitized = sanitized[:maxReadableLength]
 	}
-
 	if sanitized == "" {
 		sanitized = "custom"
 	}
-
 	return prefix + "_" + sanitized + hashSuffix
 }
 
@@ -323,22 +343,13 @@ func (service *Service) DocumentCollectionName(collectionID string) string {
 	return collection.DocumentName(collectionID)
 }
 
-func (service *Service) renameCollection(
-	ctx context.Context,
-	oldName string,
-	newName string,
-) error {
-	if err := service.milvus.RenameCollection(
-		ctx,
-		milvusclient.NewRenameCollectionOption(oldName, newName),
-	); err != nil {
+func (service *Service) renameCollection(ctx context.Context, oldName string, newName string) error {
+	if err := service.milvus.RenameCollection(ctx, milvusclient.NewRenameCollectionOption(oldName, newName)); err != nil {
 		return wrapStoreError(ctx, err, "rename Milvus collection "+oldName+" to "+newName)
 	}
-
 	service.residency.Rename(oldName, newName)
 	service.invalidateCollectionCaches(oldName)
 	service.invalidateCollectionCaches(newName)
-
 	return nil
 }
 
@@ -349,7 +360,6 @@ func (service *Service) invalidateCollectionCaches(collectionName string) {
 	if service.reuseVectorDimensionGeneration == nil {
 		service.reuseVectorDimensionGeneration = make(map[string]uint64)
 	}
-
 	service.reuseVectorDimensionGeneration[collectionName]++
 	service.reuseVectorDimensions.Delete(collectionName)
 	service.reuseVectorDimensionMutex.Unlock()
@@ -362,7 +372,6 @@ func (service *Service) invalidateMmapPolicy(collectionName string) {
 	if service.mmapPolicyGeneration == nil {
 		service.mmapPolicyGeneration = make(map[string]uint64)
 	}
-
 	service.mmapPolicyGeneration[collectionName]++
 	delete(service.mmapPolicyVersions, collectionName)
 	delete(service.mmapPolicyFailures, collectionName)
@@ -384,11 +393,9 @@ func (service *Service) hasCollection(
 	if err != nil {
 		return false, wrapStoreError(ctx, err, operation)
 	}
-
 	if !hasCollection {
 		service.invalidateCollectionCaches(collectionName)
 	}
-
 	return hasCollection, nil
 }
 
@@ -399,15 +406,7 @@ func (service *Service) hasCollection(
 // batch is then embedded and inserted through the batched flow of the staging
 // build. Reindex returns ErrCollectionMissing when the live collection no
 // longer exists, and the caller runs a full staging build.
-func (service *Service) Reindex(
-	ctx context.Context,
-	codebasePath string,
-	addedOrModifiedChunks []model.StoredChunk,
-	removal Removal,
-	progress func(Progress),
-	reuse map[string]model.ReuseVector,
-	columnSet StoreColumnSet,
-) (err error) {
+func (service *Service) Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string]model.ReuseVector, columnSet StoreColumnSet) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.reindex")
 	defer done(&err)
 
@@ -416,19 +415,13 @@ func (service *Service) Reindex(
 	}
 
 	collectionName := service.CollectionName(codebasePath)
-	hasCollection, err := service.hasCollection(
-		ctx,
-		collectionName,
-		"check Milvus collection "+collectionName,
-	)
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
 		return err
 	}
-
 	if !hasCollection {
 		return ErrCollectionMissing
 	}
-
 	// An item removal filters on a scalar column. The collection is prepared
 	// before the delete.
 	if len(addedOrModifiedChunks) > 0 || len(removal.ItemIDs) > 0 {
@@ -436,7 +429,6 @@ func (service *Service) Reindex(
 			return err
 		}
 	}
-
 	lease, err := service.AcquireCollection(ctx, collectionName)
 	if err != nil {
 		return err
@@ -452,56 +444,28 @@ func (service *Service) Reindex(
 	if len(addedOrModifiedChunks) == 0 {
 		return nil
 	}
-
-	addedOrModifiedChunks = service.guardrailExpand(
-		ctx,
-		codebasePath,
-		addedOrModifiedChunks,
-		"reindex",
-	)
-
-	return service.insertChunksBatched(
-		ctx,
-		collectionName,
-		addedOrModifiedChunks,
-		true,
-		"Reindexing changed files...",
-		progress,
-		reuse,
-		columnSet,
-	)
+	addedOrModifiedChunks = service.guardrailExpand(ctx, codebasePath, addedOrModifiedChunks, "reindex")
+	return service.insertChunksBatched(ctx, collectionName, addedOrModifiedChunks, true, "Reindexing changed files...", progress, reuse, columnSet)
 }
 
 // PruneToCurrent removes rows whose relativePath is outside the provided
 // set of current files. Use it after a streaming reindex to drop chunks
 // left over from files that no longer exist on disk.
-func (service *Service) PruneToCurrent(
-	ctx context.Context,
-	codebasePath string,
-	currentRelativePaths []string,
-) error {
+func (service *Service) PruneToCurrent(ctx context.Context, codebasePath string, currentRelativePaths []string) error {
 	if !service.Available() {
 		return nil
 	}
-
 	if len(currentRelativePaths) == 0 {
 		return nil
 	}
-
 	collectionName := service.CollectionName(codebasePath)
-	hasCollection, err := service.hasCollection(
-		ctx,
-		collectionName,
-		"check Milvus collection "+collectionName,
-	)
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
 		return err
 	}
-
 	if !hasCollection {
 		return ErrCollectionMissing
 	}
-
 	lease, err := service.AcquireCollection(ctx, collectionName)
 	if err != nil {
 		return err
@@ -512,16 +476,11 @@ func (service *Service) PruneToCurrent(
 	for _, path := range currentRelativePaths {
 		quoted = append(quoted, `"`+collection.EscapeString(path)+`"`)
 	}
-
 	expression := fmt.Sprintf(`%s not in [%s]`, relativePathFieldName, strings.Join(quoted, ","))
 
-	if _, err := service.milvus.Delete(
-		ctx,
-		milvusclient.NewDeleteOption(collectionName).WithExpr(expression),
-	); err != nil {
+	if _, err := service.milvus.Delete(ctx, milvusclient.NewDeleteOption(collectionName).WithExpr(expression)); err != nil {
 		return wrapStoreError(ctx, err, "prune orphans from "+collectionName)
 	}
-
 	return nil
 }
 
@@ -540,7 +499,6 @@ func (service *Service) deleteByRelativePaths(
 	for _, path := range relativePaths {
 		quoted = append(quoted, `"`+collection.EscapeString(path)+`"`)
 	}
-
 	expression := fmt.Sprintf(`%s in [%s]`, relativePathFieldName, strings.Join(quoted, ","))
 
 	result, err := service.milvus.Delete(
@@ -548,9 +506,12 @@ func (service *Service) deleteByRelativePaths(
 		milvusclient.NewDeleteOption(collectionName).WithExpr(expression),
 	)
 	if err != nil {
-		return 0, wrapStoreError(ctx, err, "delete from "+collectionName+" by relative path")
+		return 0, wrapStoreError(
+			ctx,
+			err,
+			"delete from "+collectionName+" by relative path",
+		)
 	}
-
 	return result.DeleteCount, nil
 }
 
@@ -561,27 +522,13 @@ func (service *Service) deleteByRelativePaths(
 // or descends from it are returned. The covering-codebase resolution uses this
 // so a query aimed at a nested directory of a larger index returns only that
 // directory's chunks.
-func (service *Service) Search(
-	ctx context.Context,
-	codebasePath string,
-	query string,
-	limit int32,
-	extensionFilter []string,
-	relativePathPrefix string,
-) ([]model.StoredChunk, error) {
+func (service *Service) Search(ctx context.Context, codebasePath string, query string, limit int32, extensionFilter []string, relativePathPrefix string) ([]model.StoredChunk, error) {
 	if !service.Available() {
 		return nil, ErrUnavailable
 	}
 
 	collectionName := service.CollectionName(codebasePath)
-
-	return service.searchCollection(
-		ctx,
-		collectionName,
-		query,
-		limit,
-		buildSearchFilter(extensionFilter, []string{relativePathPrefix}),
-	)
+	return service.searchCollection(ctx, collectionName, query, limit, buildSearchFilter(extensionFilter, []string{relativePathPrefix}))
 }
 
 // queryTextForEmbedding applies the configured query instruction prefix to
@@ -592,27 +539,15 @@ func (service *Service) queryTextForEmbedding(query string) string {
 	if prefix == "" {
 		return query
 	}
-
 	return prefix + query
 }
 
-func (service *Service) searchCollection(
-	ctx context.Context,
-	collectionName string,
-	query string,
-	limit int32,
-	filterExpr string,
-) ([]model.StoredChunk, error) {
+func (service *Service) searchCollection(ctx context.Context, collectionName string, query string, limit int32, filterExpr string) ([]model.StoredChunk, error) {
 	peerInfo, _ := peer.FromContext(ctx)
-	hasCollection, err := service.hasCollection(
-		ctx,
-		collectionName,
-		"check Milvus collection "+collectionName,
-	)
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
 		return nil, err
 	}
-
 	if !hasCollection {
 		return nil, ErrCollectionMissing
 	}
@@ -623,57 +558,28 @@ func (service *Service) searchCollection(
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
 
-	return service.searchCollectionWithVector(
-		ctx,
-		collectionName,
-		queryVector,
-		query,
-		int(limit),
-		filterExpr,
-	)
+	return service.searchCollectionWithVector(ctx, collectionName, queryVector, query, int(limit), filterExpr)
 }
 
 // searchCollectionWithVector runs one code search with a precomputed dense
 // query vector. rawQuery feeds the BM25 sparse leg, which is lexical and never
 // embeds. The caller confirms the collection exists.
-func (service *Service) searchCollectionWithVector(
-	ctx context.Context,
-	collectionName string,
-	queryVector []float32,
-	rawQuery string,
-	limit int,
-	filterExpr string,
-) ([]model.StoredChunk, error) {
+func (service *Service) searchCollectionWithVector(ctx context.Context, collectionName string, queryVector []float32, rawQuery string, limit int, filterExpr string) ([]model.StoredChunk, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
 		return nil, err
 	}
-
-	hits, err := service.collectionStore().SearchExpression(
-		ctx,
-		milvusstore.ExpressionSearch{
-			Collection: collectionName,
-			Vector:     queryVector,
-			Query:      rawQuery,
-			Limit:      limit,
-			Expression: filterExpr,
-		},
-	)
+	hits, err := service.collectionStore().SearchExpression(ctx, milvusstore.ExpressionSearch{
+		Collection: collectionName,
+		Vector:     queryVector,
+		Query:      rawQuery,
+		Limit:      limit,
+		Expression: filterExpr,
+	})
 	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"search collection rows failed",
-			"collection",
-			collectionName,
-			"peer",
-			peerInfo.String(),
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "search collection rows failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return nil, fmt.Errorf("search %s: %w", collectionName, err)
 	}
-
 	return chunksFromHits(hits), nil
 }
 
@@ -682,14 +588,12 @@ func (service *Service) Drop(ctx context.Context, codebasePath string) error {
 	if !service.Available() {
 		return nil
 	}
-
 	collectionName := service.CollectionName(codebasePath)
 	maintenance, err := service.residency.Maintain(ctx, collectionName)
 	if err != nil {
 		return err
 	}
 	defer maintenance.ReleaseContext(ctx)
-
 	return service.dropIfExists(ctx, collectionName)
 }
 
@@ -709,79 +613,36 @@ func (service *Service) Count(ctx context.Context, codebasePath string) (int32, 
 		return 0, err
 	}
 	defer lease.Release()
-
 	return service.collectionRowCount(ctx, collectionName)
 }
 
-func (service *Service) collectionRowCount(
-	ctx context.Context,
-	collectionName string,
-) (int32, error) {
+func (service *Service) collectionRowCount(ctx context.Context, collectionName string) (int32, error) {
 	peerInfo, _ := peer.FromContext(ctx)
-	resultSet, err := service.milvus.Query(
-		ctx,
-		milvusclient.NewQueryOption(collectionName).WithOutputFields(countOutputField).
-			WithConsistencyLevel(
-				entity.ClStrong,
-			),
-	)
+	resultSet, err := service.milvus.Query(ctx, milvusclient.NewQueryOption(collectionName).
+		WithOutputFields(countOutputField).
+		WithConsistencyLevel(entity.ClStrong))
 	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"count collection rows failed",
-			"collection",
-			collectionName,
-			"peer",
-			peerInfo.String(),
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "count collection rows failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return 0, fmt.Errorf("count collection %s: %w", collectionName, err)
 	}
 
 	countColumn := resultSet.GetColumn(countOutputField)
 	if countColumn == nil {
-		slog.ErrorContext(
-			ctx,
-			"count query missing count column",
-			"collection",
-			collectionName,
-			"peer",
-			peerInfo.String(),
-			"err",
-			errors.New("missing count(*) column"),
-		)
-
+		slog.ErrorContext(ctx, "count query missing count column", "collection", collectionName, "peer", peerInfo.String(), "err", errors.New("missing count(*) column"))
 		return 0, errors.New("milvus count query missing count(*) column")
 	}
-
 	total, err := countColumn.GetAsInt64(0)
 	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"read count column failed",
-			"collection",
-			collectionName,
-			"peer",
-			peerInfo.String(),
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "read count column failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
 		return 0, fmt.Errorf("read count(*) column for %s: %w", collectionName, err)
 	}
-
 	return milvusstore.SafeInt32(total), nil
 }
 
 // InspectCollection reports whether one collection exists and counts rows only
 // when the collection is already ready. Inspection never loads a cold collection
 // or postpones its idle deadline.
-func (service *Service) InspectCollection(
-	ctx context.Context,
-	collectionName string,
-) (CollectionFacts, error) {
+func (service *Service) InspectCollection(ctx context.Context, collectionName string) (CollectionFacts, error) {
 	if !service.Available() {
 		return CollectionFacts{}, ErrUnavailable
 	}
@@ -790,15 +651,12 @@ func (service *Service) InspectCollection(
 	if err != nil {
 		return CollectionFacts{}, err
 	}
-
 	if observation.State == CollectionStateAbsent {
 		return CollectionFacts{Exists: false, Rows: 0, RowsKnown: false}, nil
 	}
-
 	if !observation.RowsKnown {
 		return collectionExistsWithUnknownRows(), nil
 	}
-
 	return CollectionFacts{
 		Exists:    true,
 		Rows:      observation.Rows,
@@ -818,103 +676,63 @@ func (service *Service) ListCollections(ctx context.Context) ([]string, error) {
 	if !service.Available() {
 		return nil, ErrUnavailable
 	}
-
 	collections, err := service.milvus.ListCollections(ctx, milvusclient.NewListCollectionOption())
 	if err != nil {
 		slog.ErrorContext(ctx, "list Milvus collections failed", "err", err)
 		return nil, fmt.Errorf("list Milvus collections: %w", err)
 	}
-
 	visible := make([]string, 0, len(collections))
 	for _, collectionName := range collections {
 		if isStagingCollection(collectionName) || isRecoveryCollection(collectionName) {
 			continue
 		}
-
 		visible = append(visible, collectionName)
 	}
-
 	return visible, nil
 }
 
 // HasCollectionForPath reports whether Milvus has the collection for the
 // given codebase path.
-func (service *Service) HasCollectionForPath(
-	ctx context.Context,
-	codebasePath string,
-) (bool, error) {
+func (service *Service) HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error) {
 	if !service.Available() {
 		return false, ErrUnavailable
 	}
-
 	collectionName := service.CollectionName(codebasePath)
-	hasCollection, err := service.hasCollection(
-		ctx,
-		collectionName,
-		"check Milvus collection "+collectionName,
-	)
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
 		return false, err
 	}
-
 	return hasCollection, nil
 }
 
 func (service *Service) dropIfExists(ctx context.Context, collectionName string) error {
-	hasCollection, err := service.hasCollection(
-		ctx,
-		collectionName,
-		"check Milvus collection "+collectionName,
-	)
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
 		return err
 	}
-
 	if !hasCollection {
 		service.residency.Forget(collectionName)
 		return nil
 	}
-
-	if err := service.milvus.DropCollection(
-		ctx,
-		milvusclient.NewDropCollectionOption(collectionName),
-	); err != nil {
+	if err := service.milvus.DropCollection(ctx, milvusclient.NewDropCollectionOption(collectionName)); err != nil {
 		return wrapStoreError(ctx, err, "drop Milvus collection "+collectionName)
 	}
-
 	service.invalidateCollectionCaches(collectionName)
 	service.residency.Forget(collectionName)
-
 	return nil
 }
 
 func generateID(chunk model.StoredChunk, _ int) string {
-	hashInput := fmt.Sprintf(
-		"%s:%d:%d:%s",
-		chunk.RelativePath,
-		chunk.StartLine,
-		chunk.EndLine,
-		chunk.Content,
-	)
+	hashInput := fmt.Sprintf("%s:%d:%d:%s", chunk.RelativePath, chunk.StartLine, chunk.EndLine, chunk.Content)
 	if chunk.SplitPart > 0 {
-		hashInput = fmt.Sprintf(
-			"%s:%d:%d:%d:%s",
-			chunk.RelativePath,
-			chunk.StartLine,
-			chunk.EndLine,
-			chunk.SplitPart,
-			chunk.Content,
-		)
+		hashInput = fmt.Sprintf("%s:%d:%d:%d:%s", chunk.RelativePath, chunk.StartLine, chunk.EndLine, chunk.SplitPart, chunk.Content)
 	}
-
 	sum := sha256.Sum256([]byte(hashInput))
-
 	return "chunk_" + hex.EncodeToString(sum[:])[:16]
 }
 
 func sanitizeCollectionSuffix(value string) string {
 	var builder strings.Builder
-
 	for _, runeValue := range value {
 		switch {
 		case runeValue >= 'A' && runeValue <= 'Z':
@@ -927,7 +745,6 @@ func sanitizeCollectionSuffix(value string) string {
 			builder.WriteByte('_')
 		}
 	}
-
 	return builder.String()
 }
 
@@ -935,23 +752,16 @@ func sanitizeCollectionSuffix(value string) string {
 func ValidateExtensionFilter(extensionFilter []string) ([]string, error) {
 	cleanedExtensions := normalizeExtensionFilter(extensionFilter)
 	invalidExtensions := make([]string, 0)
-
 	for _, extension := range cleanedExtensions {
 		if !isValidExtension(extension) {
 			invalidExtensions = append(invalidExtensions, extension)
 		}
 	}
-
 	if len(invalidExtensions) > 0 {
-		err := fmt.Errorf(
-			"invalid file extensions in extensionFilter: %v. Use proper extensions like '.ts', '.py'",
-			invalidExtensions,
-		)
+		err := fmt.Errorf("invalid file extensions in extensionFilter: %v. Use proper extensions like '.ts', '.py'", invalidExtensions)
 		slog.Error("validate extension filter failed", "err", err)
-
 		return nil, err
 	}
-
 	return cleanedExtensions, nil
 }
 
@@ -961,18 +771,15 @@ func DeduplicateChunks(chunks []model.StoredChunk) []model.StoredChunk {
 
 	for _, chunk := range chunks {
 		hasOverlap := false
-
 		for _, existingChunk := range keptChunks {
 			if existingChunk.RelativePath != chunk.RelativePath {
 				continue
 			}
-
 			overlapStart := maxInt32(existingChunk.StartLine, chunk.StartLine)
 			overlapEnd := minInt32(existingChunk.EndLine, chunk.EndLine)
 			if overlapStart > overlapEnd {
 				continue
 			}
-
 			overlapSize := overlapEnd - overlapStart + 1
 			chunkSize := chunk.EndLine - chunk.StartLine + 1
 			if chunkSize > 0 && float64(overlapSize)/float64(chunkSize) > 0.5 {
@@ -980,7 +787,6 @@ func DeduplicateChunks(chunks []model.StoredChunk) []model.StoredChunk {
 				break
 			}
 		}
-
 		if !hasOverlap {
 			keptChunks = append(keptChunks, chunk)
 		}
@@ -999,14 +805,11 @@ func normalizeExtensionFilter(extensionFilter []string) []string {
 		if trimmedExtension == "" {
 			continue
 		}
-
 		if !strings.HasPrefix(trimmedExtension, ".") {
 			trimmedExtension = "." + trimmedExtension
 		}
-
 		cleanedExtensions = append(cleanedExtensions, trimmedExtension)
 	}
-
 	return cleanedExtensions
 }
 
@@ -1014,13 +817,11 @@ func isValidExtension(extension string) bool {
 	if !strings.HasPrefix(extension, ".") || len(extension) <= 1 {
 		return false
 	}
-
 	for _, runeValue := range extension {
 		if unicode.IsSpace(runeValue) {
 			return false
 		}
 	}
-
 	return true
 }
 
@@ -1028,7 +829,6 @@ func maxInt32(left int32, right int32) int32 {
 	if left > right {
 		return left
 	}
-
 	return right
 }
 
@@ -1036,7 +836,6 @@ func minInt32(left int32, right int32) int32 {
 	if left < right {
 		return left
 	}
-
 	return right
 }
 
@@ -1044,10 +843,8 @@ func safeInt32FromInt(value int) int32 {
 	if value > math.MaxInt32 {
 		return math.MaxInt32
 	}
-
 	if value < math.MinInt32 {
 		return math.MinInt32
 	}
-
 	return int32(value)
 }

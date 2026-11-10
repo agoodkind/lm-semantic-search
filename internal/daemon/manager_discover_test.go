@@ -38,19 +38,10 @@ func indexedSiblingScene(t *testing.T) (*Manager, string) {
 
 	// Register the main worktree as an already-indexed sibling so the discovery
 	// trigger's "has an indexed sibling" condition holds without driving a build.
-	registerSiblingCodebase(
-		t,
-		manager,
-		mainRoot,
-		func(c *model.Codebase) {
-			c.Status = model.CodebaseStatusIndexed
-			c.LastSuccessfulRun = &model.IndexRunSummary{
-				IndexedFiles: 1,
-				TotalChunks:  1,
-				Status:       "completed",
-			}
-		},
-	)
+	registerSiblingCodebase(t, manager, mainRoot, func(c *model.Codebase) {
+		c.Status = model.CodebaseStatusIndexed
+		c.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 1, Status: "completed"}
+	})
 
 	return manager, evalSym(t, worktreeDir)
 }
@@ -70,44 +61,24 @@ func TestGetIndexDiscoversWorktreeWithoutJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIndex(worktree) returned error: %v", err)
 	}
-
 	if !found {
 		t.Fatal("GetIndex(worktree) did not resolve to a codebase")
 	}
-
 	if codebase.Status != model.CodebaseStatusDiscovered {
-		t.Fatalf(
-			"discovered codebase Status = %q, want %q",
-			codebase.Status,
-			model.CodebaseStatusDiscovered,
-		)
+		t.Fatalf("discovered codebase Status = %q, want %q", codebase.Status, model.CodebaseStatusDiscovered)
 	}
-
 	if !codebase.PolicyPendingInitialization {
-		t.Fatal(
-			"discovered codebase PolicyPendingInitialization = false, want true before its first build",
-		)
+		t.Fatal("discovered codebase PolicyPendingInitialization = false, want true before its first build")
 	}
-
 	if codebase.CanonicalPath != worktreeRoot {
-		t.Fatalf(
-			"discovered codebase CanonicalPath = %q, want %q",
-			codebase.CanonicalPath,
-			worktreeRoot,
-		)
+		t.Fatalf("discovered codebase CanonicalPath = %q, want %q", codebase.CanonicalPath, worktreeRoot)
 	}
-
 	if codebase.ActiveJobID != "" {
 		t.Fatalf("discovered codebase ActiveJobID = %q, want empty", codebase.ActiveJobID)
 	}
-
 	if activeJob != nil {
-		t.Fatalf(
-			"GetIndex returned active job %s, want nil for a discovered codebase",
-			activeJob.ID,
-		)
+		t.Fatalf("GetIndex returned active job %s, want nil for a discovered codebase", activeJob.ID)
 	}
-
 	if got := jobsForCodebase(manager, codebase.ID); got != 0 {
 		t.Fatalf("discovered codebase has %d jobs, want 0 (the read must not start an embed)", got)
 	}
@@ -123,11 +94,8 @@ func TestGetIndexDiscoversWorktreeWithExistingCollectionInitialized(t *testing.T
 	if err != nil || !found {
 		t.Fatalf("GetIndex(worktree) returned err=%v found=%v", err, found)
 	}
-
 	if codebase.PolicyPendingInitialization {
-		t.Fatal(
-			"discovered worktree with an existing collection PolicyPendingInitialization = true, want false",
-		)
+		t.Fatal("discovered worktree with an existing collection PolicyPendingInitialization = true, want false")
 	}
 }
 
@@ -139,11 +107,8 @@ func TestGetIndexDiscoversWorktreeWithoutCollectionEvidencePendingInitialization
 	if err != nil || !found {
 		t.Fatalf("GetIndex(worktree) returned err=%v found=%v", err, found)
 	}
-
 	if !codebase.PolicyPendingInitialization {
-		t.Fatal(
-			"worktree without collection evidence PolicyPendingInitialization = false, want true",
-		)
+		t.Fatal("worktree without collection evidence PolicyPendingInitialization = false, want true")
 	}
 }
 
@@ -157,26 +122,15 @@ func TestSearchCodeDiscoversWorktreeReturnsForecastNote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SearchCode(worktree) returned error: %v", err)
 	}
-
 	if len(outcome.Results) != 0 {
-		t.Fatalf(
-			"SearchCode returned %d results, want 0 for a just-discovered worktree",
-			len(outcome.Results),
-		)
+		t.Fatalf("SearchCode returned %d results, want 0 for a just-discovered worktree", len(outcome.Results))
 	}
-
 	if outcome.StateNote == "" {
 		t.Fatal("SearchCode returned an empty StateNote, want a discovery note")
 	}
-
 	if outcome.Codebase.Status != model.CodebaseStatusDiscovered {
-		t.Fatalf(
-			"SearchCode outcome codebase Status = %q, want %q",
-			outcome.Codebase.Status,
-			model.CodebaseStatusDiscovered,
-		)
+		t.Fatalf("SearchCode outcome codebase Status = %q, want %q", outcome.Codebase.Status, model.CodebaseStatusDiscovered)
 	}
-
 	if got := jobsForCodebase(manager, outcome.Codebase.ID); got != 0 {
 		t.Fatalf("discovered codebase has %d jobs after search, want 0", got)
 	}
@@ -192,29 +146,18 @@ func TestStartDeferredBuildStartsOneBootstrap(t *testing.T) {
 	// long enough to observe, then release it for a clean teardown.
 	release := make(chan struct{})
 	manager.runner = fakeRunner{
-		indexOne: func(
-			ctx context.Context,
-			root string,
-			relativePath string,
-			indexConfig model.IndexConfig,
-		) (
-			indexer.OneFileResult,
-			error,
-		) {
+		indexOne: func(ctx context.Context, root string, relativePath string, indexConfig model.IndexConfig) (indexer.OneFileResult, error) {
 			<-release
 			content := "package feature\n"
-
 			return indexer.OneFileResult{
-				Chunks: []model.StoredChunk{
-					{
-						Content:       content,
-						RelativePath:  relativePath,
-						StartLine:     1,
-						EndLine:       1,
-						Language:      "go",
-						FileExtension: ".go",
-					},
-				},
+				Chunks: []model.StoredChunk{{
+					Content:       content,
+					RelativePath:  relativePath,
+					StartLine:     1,
+					EndLine:       1,
+					Language:      "go",
+					FileExtension: ".go",
+				}},
 				FileHash: hashText(content),
 				Skipped:  false,
 				Removed:  false,
@@ -227,7 +170,6 @@ func TestStartDeferredBuildStartsOneBootstrap(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("GetIndex(worktree) returned err=%v found=%v", err, found)
 	}
-
 	if got := jobsForCodebase(manager, discovered.ID); got != 0 {
 		t.Fatalf("pre-build: discovered codebase has %d jobs, want 0", got)
 	}
@@ -239,13 +181,9 @@ func TestStartDeferredBuildStartsOneBootstrap(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("GetIndex(worktree) after build start returned err=%v found=%v", err, found)
 	}
-
 	if !codebase.PolicyPendingInitialization {
-		t.Fatal(
-			"building worktree PolicyPendingInitialization = false, want true until an explicit index initializes policy",
-		)
+		t.Fatal("building worktree PolicyPendingInitialization = false, want true until an explicit index initializes policy")
 	}
-
 	if got := jobsForCodebase(manager, discovered.ID); got != 1 {
 		t.Fatalf("deferred build started %d jobs, want exactly 1", got)
 	}
@@ -272,20 +210,11 @@ func TestAdoptUnregisteredCodebaseMarksIndexedAndDefersRefresh(t *testing.T) {
 	if !adopted {
 		t.Fatal("adoptUnregisteredCodebase returned adopted=false")
 	}
-
 	if codebase.Status != model.CodebaseStatusIndexed {
-		t.Fatalf(
-			"adopted codebase Status = %q, want %q",
-			codebase.Status,
-			model.CodebaseStatusIndexed,
-		)
+		t.Fatalf("adopted codebase Status = %q, want %q", codebase.Status, model.CodebaseStatusIndexed)
 	}
-
 	if got := jobsForCodebase(manager, codebase.ID); got != 0 {
-		t.Fatalf(
-			"adoption started %d jobs synchronously, want 0 (the refresh sync is deferred)",
-			got,
-		)
+		t.Fatalf("adoption started %d jobs synchronously, want 0 (the refresh sync is deferred)", got)
 	}
 }
 
@@ -294,7 +223,6 @@ func writeWorktreeFile(t *testing.T, path string, content string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir for %s: %v", path, err)
 	}
-
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
@@ -306,7 +234,6 @@ func evalSym(t *testing.T, path string) string {
 	if err != nil {
 		t.Fatalf("eval symlinks %s: %v", path, err)
 	}
-
 	return out
 }
 
@@ -319,21 +246,11 @@ func makeMainRepo(t *testing.T, root string) {
 
 // makeLinkedWorktree registers a linked worktree of the repo rooted at mainRoot,
 // rooting the worktree at worktreeDir on the given branch with one Go file.
-func makeLinkedWorktree(
-	t *testing.T,
-	mainRoot string,
-	name string,
-	worktreeDir string,
-	branch string,
-) {
+func makeLinkedWorktree(t *testing.T, mainRoot string, name string, worktreeDir string, branch string) {
 	t.Helper()
 	perWorktree := filepath.Join(mainRoot, ".git", "worktrees", name)
 	writeWorktreeFile(t, filepath.Join(perWorktree, "commondir"), "../..\n")
-	writeWorktreeFile(
-		t,
-		filepath.Join(perWorktree, "gitdir"),
-		filepath.Join(worktreeDir, ".git")+"\n",
-	)
+	writeWorktreeFile(t, filepath.Join(perWorktree, "gitdir"), filepath.Join(worktreeDir, ".git")+"\n")
 	writeWorktreeFile(t, filepath.Join(perWorktree, "HEAD"), "ref: refs/heads/"+branch+"\n")
 	writeWorktreeFile(t, filepath.Join(worktreeDir, ".git"), "gitdir: "+perWorktree+"\n")
 	writeWorktreeFile(t, filepath.Join(worktreeDir, "feature.go"), "package feature\n")
@@ -342,20 +259,14 @@ func makeLinkedWorktree(
 func waitForCodebaseSettled(t *testing.T, manager *Manager, path string) model.Codebase {
 	t.Helper()
 	var settled model.Codebase
-	waitForCondition(
-		t,
-		func() bool {
-			codebase, _, ok, _, err := manager.GetIndex(context.Background(), path)
-			if err != nil || !ok || codebase.LastSuccessfulRun == nil {
-				return false
-			}
-
-			settled = codebase
-
-			return true
-		},
-	)
-
+	waitForCondition(t, func() bool {
+		codebase, _, ok, _, err := manager.GetIndex(context.Background(), path)
+		if err != nil || !ok || codebase.LastSuccessfulRun == nil {
+			return false
+		}
+		settled = codebase
+		return true
+	})
 	return settled
 }
 
@@ -371,38 +282,23 @@ func TestGetIndexResolvesNestedWorktreeToOwnCodebase(t *testing.T) {
 	worktreeDir := filepath.Join(mainRoot, ".claude", "worktrees", "foo")
 	makeLinkedWorktree(t, mainRoot, "foo", worktreeDir, "feature")
 
-	if _, _, _, _, err := manager.StartIndex(
-		context.Background(),
-		mainRoot,
-		testClientInfo(),
-		defaultIndexConfig(),
-		false,
-		emptyAdmissionBudget,
-	); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), mainRoot, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex(main) returned error: %v", err)
 	}
-
 	mainCodebase := waitForCodebaseSettled(t, manager, mainRoot)
 
 	codebase, _, found, _, err := manager.GetIndex(context.Background(), worktreeDir)
 	if err != nil {
 		t.Fatalf("GetIndex(worktree) returned error: %v", err)
 	}
-
 	if !found {
 		t.Fatal("GetIndex(worktree) did not resolve to a codebase")
 	}
-
 	if codebase.ID == mainCodebase.ID {
 		t.Fatalf("worktree resolved to the parent codebase %q; it must be its own", mainCodebase.ID)
 	}
-
 	if codebase.CanonicalPath != evalSym(t, worktreeDir) {
-		t.Fatalf(
-			"worktree codebase CanonicalPath = %q, want %q",
-			codebase.CanonicalPath,
-			evalSym(t, worktreeDir),
-		)
+		t.Fatalf("worktree codebase CanonicalPath = %q, want %q", codebase.CanonicalPath, evalSym(t, worktreeDir))
 	}
 
 	// let the auto-created build settle before cleanup removes the temp dirs.
@@ -422,38 +318,23 @@ func TestGetIndexResolvesExternalWorktreeToOwnCodebase(t *testing.T) {
 	worktreeDir := filepath.Join(base, "feature")
 	makeLinkedWorktree(t, mainRoot, "feature", worktreeDir, "feature")
 
-	if _, _, _, _, err := manager.StartIndex(
-		context.Background(),
-		mainRoot,
-		testClientInfo(),
-		defaultIndexConfig(),
-		false,
-		emptyAdmissionBudget,
-	); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), mainRoot, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex(main) returned error: %v", err)
 	}
-
 	mainCodebase := waitForCodebaseSettled(t, manager, mainRoot)
 
 	codebase, _, found, _, err := manager.GetIndex(context.Background(), worktreeDir)
 	if err != nil {
 		t.Fatalf("GetIndex(external worktree) returned error: %v", err)
 	}
-
 	if !found {
 		t.Fatal("GetIndex(external worktree) did not resolve to a codebase")
 	}
-
 	if codebase.ID == mainCodebase.ID {
 		t.Fatalf("external worktree resolved to the parent codebase; it must be its own")
 	}
-
 	if codebase.CanonicalPath != evalSym(t, worktreeDir) {
-		t.Fatalf(
-			"external worktree CanonicalPath = %q, want %q",
-			codebase.CanonicalPath,
-			evalSym(t, worktreeDir),
-		)
+		t.Fatalf("external worktree CanonicalPath = %q, want %q", codebase.CanonicalPath, evalSym(t, worktreeDir))
 	}
 
 	waitForCodebaseSettled(t, manager, worktreeDir)
@@ -475,52 +356,25 @@ func TestStartIndexParentDoesNotAbsorbNestedWorktree(t *testing.T) {
 	worktreeDir := filepath.Join(mainRoot, ".claude", "worktrees", "foo")
 	makeLinkedWorktree(t, mainRoot, "foo", worktreeDir, "feature")
 
-	if _, _, _, _, err := manager.StartIndex(
-		context.Background(),
-		worktreeDir,
-		testClientInfo(),
-		defaultIndexConfig(),
-		false,
-		emptyAdmissionBudget,
-	); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), worktreeDir, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex(worktree) returned error: %v", err)
 	}
-
 	worktreeCodebase := waitForCodebaseSettled(t, manager, worktreeDir)
 
-	if _, _, _, _, err := manager.StartIndex(
-		context.Background(),
-		mainRoot,
-		testClientInfo(),
-		defaultIndexConfig(),
-		true,
-		emptyAdmissionBudget,
-	); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), mainRoot, testClientInfo(), defaultIndexConfig(), true, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex(main, force) returned error: %v", err)
 	}
-
 	waitForCodebaseSettled(t, manager, mainRoot)
 
 	resolved, _, found, _, err := manager.GetIndex(context.Background(), worktreeDir)
 	if err != nil {
 		t.Fatalf("GetIndex(worktree) after parent index returned error: %v", err)
 	}
-
 	if !found || resolved.ID != worktreeCodebase.ID {
-		t.Fatalf(
-			"worktree codebase was absorbed by the parent: got found=%v id=%q want id=%q",
-			found,
-			resolved.ID,
-			worktreeCodebase.ID,
-		)
+		t.Fatalf("worktree codebase was absorbed by the parent: got found=%v id=%q want id=%q", found, resolved.ID, worktreeCodebase.ID)
 	}
-
 	if resolved.CanonicalPath != evalSym(t, worktreeDir) {
-		t.Fatalf(
-			"after parent index, worktree CanonicalPath = %q, want %q",
-			resolved.CanonicalPath,
-			evalSym(t, worktreeDir),
-		)
+		t.Fatalf("after parent index, worktree CanonicalPath = %q, want %q", resolved.CanonicalPath, evalSym(t, worktreeDir))
 	}
 }
 
@@ -541,17 +395,9 @@ func startWorktreeReuseBuild(t *testing.T, declareSource bool) *fakeSemantic {
 	worktreeDir := filepath.Join(base, "feature")
 	makeLinkedWorktree(t, mainRoot, "feature", worktreeDir, "feature")
 
-	if _, _, _, _, err := manager.StartIndex(
-		context.Background(),
-		mainRoot,
-		testClientInfo(),
-		defaultIndexConfig(),
-		false,
-		emptyAdmissionBudget,
-	); err != nil {
+	if _, _, _, _, err := manager.StartIndex(context.Background(), mainRoot, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 		t.Fatalf("StartIndex(main) returned error: %v", err)
 	}
-
 	waitForCodebaseSettled(t, manager, mainRoot)
 	fake.mu.Lock()
 	fake.reuseContentCollections = nil
@@ -561,23 +407,11 @@ func startWorktreeReuseBuild(t *testing.T, declareSource bool) *fakeSemantic {
 	if declareSource {
 		source.SourcePath = mainRoot
 	}
-
 	noPolicy := model.SchedulingPolicyPatch{Priority: nil, Quiet: nil, IdleAfterSeconds: nil}
-	if _, _, _, _, err := manager.StartIndexWithSource(
-		context.Background(),
-		worktreeDir,
-		testClientInfo(),
-		defaultIndexConfig(),
-		false,
-		emptyAdmissionBudget,
-		noPolicy,
-		source,
-	); err != nil {
+	if _, _, _, _, err := manager.StartIndexWithSource(context.Background(), worktreeDir, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget, noPolicy, source); err != nil {
 		t.Fatalf("StartIndexWithSource(worktree) returned error: %v", err)
 	}
-
 	waitForCodebaseSettled(t, manager, worktreeDir)
-
 	return fake
 }
 
@@ -588,21 +422,12 @@ func requireWorktreeReuseReads(t *testing.T, fake *fakeSemantic, wantCollections
 	if len(readCollections) == 0 {
 		t.Fatal("The build recorded no content lookup.")
 	}
-
 	if !slices.Equal(readCollections, wantCollections) {
-		t.Fatalf(
-			"The content lookups read collections %v instead of the expected collections %v.",
-			readCollections,
-			wantCollections,
-		)
+		t.Fatalf("The content lookups read collections %v instead of the expected collections %v.", readCollections, wantCollections)
 	}
-
 	for _, call := range fake.reuseCollectionsSnapshot() {
 		if slices.Contains(call, "cc_repo") {
-			t.Fatalf(
-				"The build must not read the whole collection cc_repo in recorded call %v.",
-				call,
-			)
+			t.Fatalf("The build must not read the whole collection cc_repo in recorded call %v.", call)
 		}
 	}
 }
@@ -617,12 +442,7 @@ func TestWorktreeBuildWithoutDeclaredSourceReadsOnlyTarget(t *testing.T) {
 	requireWorktreeReuseReads(t, fake, []string{"cc_feature"})
 }
 
-func registerSiblingCodebase(
-	t *testing.T,
-	manager *Manager,
-	mainRoot string,
-	mutate func(*model.Codebase),
-) {
+func registerSiblingCodebase(t *testing.T, manager *Manager, mainRoot string, mutate func(*model.Codebase)) {
 	t.Helper()
 	codebase := newCodebaseRecord(evalSym(t, mainRoot))
 	codebase.CollectionName = "cc_repo"
@@ -635,7 +455,6 @@ func registerSiblingCodebase(
 
 func TestWorktreeStatusReportsDeclaredSourceSelection(t *testing.T) {
 	completedRun := &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 1, Status: "completed"}
-
 	cases := []struct {
 		name           string
 		declareSource  bool
@@ -697,96 +516,50 @@ func TestWorktreeStatusReportsDeclaredSourceSelection(t *testing.T) {
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				manager, _, _ := newTestManager(t)
-				manager.runner = fakeRunner{}
-				base := t.TempDir()
-				mainRoot := filepath.Join(base, "repo")
-				makeMainRepo(t, mainRoot)
-				worktreeDir := filepath.Join(base, "feature")
-				makeLinkedWorktree(t, mainRoot, "feature", worktreeDir, "feature")
+		t.Run(testCase.name, func(t *testing.T) {
+			manager, _, _ := newTestManager(t)
+			manager.runner = fakeRunner{}
+			base := t.TempDir()
+			mainRoot := filepath.Join(base, "repo")
+			makeMainRepo(t, mainRoot)
+			worktreeDir := filepath.Join(base, "feature")
+			makeLinkedWorktree(t, mainRoot, "feature", worktreeDir, "feature")
 
-				source := model.WorktreeSourceRequest{SourcePath: "", StartingCommit: ""}
-				if testCase.declareSource {
-					source.SourcePath = mainRoot
-				}
+			source := model.WorktreeSourceRequest{SourcePath: "", StartingCommit: ""}
+			if testCase.declareSource {
+				source.SourcePath = mainRoot
+			}
+			noPolicy := model.SchedulingPolicyPatch{Priority: nil, Quiet: nil, IdleAfterSeconds: nil}
+			if _, _, _, _, err := manager.StartIndexWithSource(context.Background(), worktreeDir, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget, noPolicy, source); err != nil {
+				t.Fatalf("StartIndexWithSource(worktree) returned error: %v", err)
+			}
+			target := waitForCodebaseSettled(t, manager, worktreeDir)
+			if testCase.registerSource != nil {
+				registerSiblingCodebase(t, manager, mainRoot, func(sourceCodebase *model.Codebase) {
+					sourceCodebase.EffectiveConfig = target.EffectiveConfig
+					testCase.registerSource(sourceCodebase)
+				})
+			}
 
-				noPolicy := model.SchedulingPolicyPatch{
-					Priority:         nil,
-					Quiet:            nil,
-					IdleAfterSeconds: nil,
-				}
-				if _, _, _, _, err := manager.StartIndexWithSource(
-					context.Background(),
-					worktreeDir,
-					testClientInfo(),
-					defaultIndexConfig(),
-					false,
-					emptyAdmissionBudget,
-					noPolicy,
-					source,
-				); err != nil {
-					t.Fatalf("StartIndexWithSource(worktree) returned error: %v", err)
-				}
-
-				target := waitForCodebaseSettled(t, manager, worktreeDir)
-				if testCase.registerSource != nil {
-					registerSiblingCodebase(
-						t,
-						manager,
-						mainRoot,
-						func(sourceCodebase *model.Codebase) {
-							sourceCodebase.EffectiveConfig = target.EffectiveConfig
-							testCase.registerSource(sourceCodebase)
-						},
-					)
-				}
-
-				response, err := NewGRPCServer(manager, nil).GetIndex(
-					context.Background(),
-					&pb.GetIndexRequest{
-						Path:   target.CanonicalPath,
-						Client: &pb.ClientInfo{Name: "worktree-reuse-test"},
-					},
-				)
-				if err != nil {
-					t.Fatalf("GetIndex returned error: %v", err)
-				}
-
-				gotReason := view.WorktreeReuseReason(
-					response.GetCodebase().GetWorktreeReuseUnavailableReason(),
-				)
-				if gotReason != testCase.wantReason {
-					t.Fatalf(
-						"GetIndex returned reuse reason %q instead of the expected reason %q.",
-						gotReason,
-						testCase.wantReason,
-					)
-				}
-
-				reasonField := "worktree_reuse_unavailable_reason=" + string(testCase.wantReason)
-				hasReasonField := strings.Contains(
-					response.GetDisplayText(),
-					"worktree_reuse_unavailable_reason=",
-				)
-				if testCase.wantReason == view.WorktreeReuseAvailable && hasReasonField {
-					t.Fatalf(
-						"The status text %s must omit the reuse reason field.",
-						response.GetDisplayText(),
-					)
-				}
-
-				if testCase.wantReason != view.WorktreeReuseAvailable &&
-					!strings.Contains(response.GetDisplayText(), reasonField) {
-					t.Fatalf(
-						"The field %q does not appear in the status text %s.",
-						reasonField,
-						response.GetDisplayText(),
-					)
-				}
-			},
-		)
+			response, err := NewGRPCServer(manager, nil).GetIndex(context.Background(), &pb.GetIndexRequest{
+				Path:   target.CanonicalPath,
+				Client: &pb.ClientInfo{Name: "worktree-reuse-test"},
+			})
+			if err != nil {
+				t.Fatalf("GetIndex returned error: %v", err)
+			}
+			gotReason := view.WorktreeReuseReason(response.GetCodebase().GetWorktreeReuseUnavailableReason())
+			if gotReason != testCase.wantReason {
+				t.Fatalf("GetIndex returned reuse reason %q instead of the expected reason %q.", gotReason, testCase.wantReason)
+			}
+			reasonField := "worktree_reuse_unavailable_reason=" + string(testCase.wantReason)
+			hasReasonField := strings.Contains(response.GetDisplayText(), "worktree_reuse_unavailable_reason=")
+			if testCase.wantReason == view.WorktreeReuseAvailable && hasReasonField {
+				t.Fatalf("The status text %s must omit the reuse reason field.", response.GetDisplayText())
+			}
+			if testCase.wantReason != view.WorktreeReuseAvailable && !strings.Contains(response.GetDisplayText(), reasonField) {
+				t.Fatalf("The field %q does not appear in the status text %s.", reasonField, response.GetDisplayText())
+			}
+		})
 	}
 }

@@ -44,7 +44,6 @@ func TestApplySchedulingPolicyPatchPreservesOmittedFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplySchedulingPolicyPatch: %v", err)
 	}
-
 	want := SchedulingPolicy{
 		Priority:         JobPriorityLow,
 		Quiet:            true,
@@ -79,15 +78,12 @@ func TestApplySchedulingPolicyPatchRejectsInvalidExplicitValues(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				_, err := ApplySchedulingPolicyPatch(DefaultSchedulingPolicy(), testCase.patch)
-				if err == nil || err.Error() != testCase.want {
-					t.Fatalf("ApplySchedulingPolicyPatch error = %v, want %q", err, testCase.want)
-				}
-			},
-		)
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := ApplySchedulingPolicyPatch(DefaultSchedulingPolicy(), testCase.patch)
+			if err == nil || err.Error() != testCase.want {
+				t.Fatalf("ApplySchedulingPolicyPatch error = %v, want %q", err, testCase.want)
+			}
+		})
 	}
 }
 

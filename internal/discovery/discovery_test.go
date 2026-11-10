@@ -15,7 +15,6 @@ func writeFile(t *testing.T, path string, content string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir parent for %s: %v", path, err)
 	}
-
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
@@ -41,19 +40,15 @@ func isolateHome(t *testing.T) {
 
 func relativeFiles(t *testing.T, root string, files []string) []string {
 	t.Helper()
-
 	out := make([]string, 0, len(files))
 	for _, file := range files {
 		rel, err := filepath.Rel(root, file)
 		if err != nil {
 			t.Fatalf("rel for %s: %v", file, err)
 		}
-
 		out = append(out, filepath.ToSlash(rel))
 	}
-
 	slices.Sort(out)
-
 	return out
 }
 
@@ -97,15 +92,9 @@ func TestDiscoverDoesNotDescendIntoIgnoredDirectories(t *testing.T) {
 	if err := os.Chmod(filepath.Join(tempDir, "sealed"), 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(tempDir, "sealed"), 0o755) })
 
-	if _, err := Discover(
-		context.Background(),
-		indexability.NewResolver(nil, nil),
-		"cb",
-		tempDir,
-	); err != nil {
+	if _, err := Discover(context.Background(), indexability.NewResolver(nil, nil), "cb", tempDir); err != nil {
 		t.Fatalf("Discover failed on a pruned unreadable directory: %v", err)
 	}
 }
@@ -141,24 +130,20 @@ func TestDiscoverExcludesNestedSameRepoWorktree(t *testing.T) {
 	}
 
 	got := make(map[string]bool)
-
 	for _, file := range result.Files {
 		rel, relErr := filepath.Rel(repo, file)
 		if relErr != nil {
 			t.Fatalf("rel for %s: %v", file, relErr)
 		}
-
 		got[filepath.ToSlash(rel)] = true
 	}
 
 	if !got["main.go"] {
 		t.Errorf("main.go missing from discovery; got %v", got)
 	}
-
 	if got["wt/feature.go"] {
 		t.Errorf("nested worktree file wt/feature.go must be excluded; got %v", got)
 	}
-
 	if got["wt/.git"] {
 		t.Errorf("nested worktree .git pointer must never be indexed; got %v", got)
 	}
@@ -168,11 +153,7 @@ func TestDiscoverPrunesSubmoduleByDefault(t *testing.T) {
 	isolateHome(t)
 	repo := filepath.Join(t.TempDir(), "repo")
 	writeFile(t, filepath.Join(repo, ".git", "HEAD"), "ref: refs/heads/main\n")
-	writeFile(
-		t,
-		filepath.Join(repo, ".gitmodules"),
-		"[submodule \"lib\"]\n\tpath = extern/lib\n\turl = ../lib.git\n",
-	)
+	writeFile(t, filepath.Join(repo, ".gitmodules"), "[submodule \"lib\"]\n\tpath = extern/lib\n\turl = ../lib.git\n")
 	writeFile(t, filepath.Join(repo, "main.go"), "package main\n")
 
 	moduleGitDir := filepath.Join(repo, ".git", "modules", "extern", "lib")

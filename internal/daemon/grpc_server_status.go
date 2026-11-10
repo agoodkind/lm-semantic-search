@@ -24,19 +24,14 @@ import (
 // It reports only non-terminal work, so the reply stays a few kilobytes rather
 // than growing with job history the way ListJobs does. File-change waits appear
 // as watcher activity until their converge job is registered.
-func (server *GRPCServer) GetStatus(
-	ctx context.Context,
-	request *pb.GetStatusRequest,
-) (resp *pb.GetStatusResponse, err error) {
+func (server *GRPCServer) GetStatus(ctx context.Context, request *pb.GetStatusRequest) (resp *pb.GetStatusResponse, err error) {
 	ctx, done := beginRPC(ctx, "GetStatus")
 	defer done(&err)
 	_ = request
 
 	pid, pidErr := currentProcessID()
 	if pidErr != nil {
-		return nil, status.Error(
-			adapterr.Respond(ctx, adapterr.NewInternal("resolve process id", pidErr)),
-		)
+		return nil, status.Error(adapterr.Respond(ctx, adapterr.NewInternal("resolve process id", pidErr)))
 	}
 
 	now := clock.Now()
@@ -65,18 +60,12 @@ func (server *GRPCServer) GetStatus(
 			ThermalAvailable: daemon.Scheduler.Activity.ThermalAvailable,
 			ThermalUnsafe:    daemon.Scheduler.Activity.ThermalUnsafe,
 			InputReason:      pbconv.SchedulingReasonToProto(daemon.Scheduler.Activity.InputReason),
-			ThermalReason: pbconv.SchedulingReasonToProto(
-				daemon.Scheduler.Activity.ThermalReason,
-			),
+			ThermalReason:    pbconv.SchedulingReasonToProto(daemon.Scheduler.Activity.ThermalReason),
 		},
 		Maintenance: toMaintenanceStatus(daemon.Maintenance),
 		DisplayText: "",
 	}
-	response.DisplayText = server.envelopeText(
-		daemon.Health,
-		statusdisplay.Dump(render.StatusSnapshot(response)),
-	)
-
+	response.DisplayText = server.envelopeText(daemon.Health, statusdisplay.Dump(render.StatusSnapshot(response)))
 	return response, nil
 }
 
@@ -87,6 +76,5 @@ func currentProcessID() (int32, error) {
 	if pid < 0 || pid > math.MaxInt32 {
 		return 0, fmt.Errorf("process id %d does not fit in int32", pid)
 	}
-
 	return int32(pid), nil
 }

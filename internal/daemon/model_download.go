@@ -72,15 +72,11 @@ func newModelDownloadSupervisor(
 		slog.ErrorContext(
 			ctx,
 			"resolve offline embedding model failed",
-			"model",
-			cfg.OfflineEmbeddingModel,
-			"err",
-			err,
+			"model", cfg.OfflineEmbeddingModel,
+			"err", err,
 		)
-
 		return nil, fmt.Errorf("resolve offline embedding model: %w", err)
 	}
-
 	return &modelDownloadSupervisor{
 		cfg:          cfg,
 		preset:       preset,
@@ -114,13 +110,10 @@ func (supervisor *modelDownloadSupervisor) observe() (modelDownloadSnapshot, <-c
 	if supervisor == nil {
 		snapshot := pendingModelDownloadSnapshot()
 		snapshot.State = modelDownloadNotNeeded
-
 		return snapshot, nil
 	}
-
 	supervisor.mutex.Lock()
 	defer supervisor.mutex.Unlock()
-
 	return supervisor.snapshot, supervisor.changed
 }
 
@@ -136,7 +129,6 @@ func (supervisor *modelDownloadSupervisor) requestRecheck() {
 	if supervisor == nil {
 		return
 	}
-
 	select {
 	case supervisor.wake <- struct{}{}:
 	default:
@@ -147,13 +139,11 @@ func (supervisor *modelDownloadSupervisor) start(ctx context.Context) {
 	if supervisor == nil {
 		return
 	}
-
 	supervisor.mutex.Lock()
 	if supervisor.done != nil {
 		supervisor.mutex.Unlock()
 		return
 	}
-
 	runContext, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	done := make(chan struct{})
 	supervisor.cancel = cancel
@@ -164,14 +154,7 @@ func (supervisor *modelDownloadSupervisor) start(ctx context.Context) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				panicErr := fmt.Errorf("panic: %v", recovered)
-				slog.ErrorContext(
-					runContext,
-					"model_download.panicked",
-					"model",
-					supervisor.preset.Name,
-					"err",
-					panicErr,
-				)
+				slog.ErrorContext(runContext, "model_download.panicked", "model", supervisor.preset.Name, "err", panicErr)
 				supervisor.recordFailure(panicErr)
 			}
 		}()
@@ -183,7 +166,6 @@ func (supervisor *modelDownloadSupervisor) stop() {
 	if supervisor == nil {
 		return
 	}
-
 	supervisor.mutex.Lock()
 	cancel := supervisor.cancel
 	done := supervisor.done
@@ -191,7 +173,6 @@ func (supervisor *modelDownloadSupervisor) stop() {
 	if cancel == nil {
 		return
 	}
-
 	cancel()
 	<-done
 }

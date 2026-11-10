@@ -19,10 +19,7 @@ func TestEngineIncrementalPrunesRemovedFile(t *testing.T) {
 	repositoryPath := t.TempDir()
 	alphaPath := filepath.Join(repositoryPath, "alpha.go")
 	betaPath := filepath.Join(repositoryPath, "beta.go")
-	writeGoSource(
-		t,
-		alphaPath,
-		`package repo
+	writeGoSource(t, alphaPath, `package repo
 
 func AlphaOne() string {
 	return AlphaTwo("x")
@@ -31,18 +28,13 @@ func AlphaOne() string {
 func AlphaTwo(name string) string {
 	return "alpha " + name
 }
-`,
-	)
-	writeGoSource(
-		t,
-		betaPath,
-		`package repo
+`)
+	writeGoSource(t, betaPath, `package repo
 
 func BetaOne() string {
 	return "beta"
 }
-`,
-	)
+`)
 
 	// Open manages CBM_CACHE_DIR itself from the cacheDir argument, so the test
 	// deliberately does not set the env var.
@@ -62,7 +54,6 @@ func BetaOne() string {
 	if !slices.Contains(firstFunctions, "BetaOne") {
 		t.Fatalf("BetaOne missing from first index; functions: %v", firstFunctions)
 	}
-
 	if !slices.Contains(firstFunctions, "AlphaOne") {
 		t.Fatalf("AlphaOne missing from first index; functions: %v", firstFunctions)
 	}
@@ -77,12 +68,8 @@ func BetaOne() string {
 
 	secondFunctions := queryFunctionNames(t, engine, "incremental")
 	if slices.Contains(secondFunctions, "BetaOne") {
-		t.Fatalf(
-			"BetaOne still present after removing beta.go; pruning did not fire. functions: %v",
-			secondFunctions,
-		)
+		t.Fatalf("BetaOne still present after removing beta.go; pruning did not fire. functions: %v", secondFunctions)
 	}
-
 	if !slices.Contains(secondFunctions, "AlphaOne") {
 		t.Fatalf("AlphaOne missing after re-index; functions: %v", secondFunctions)
 	}
@@ -100,7 +87,6 @@ func queryFunctionNames(t *testing.T, engine *Engine, project string) []string {
 	if err != nil {
 		t.Fatalf("marshal query_graph arguments: %v", err)
 	}
-
 	response := callTool(t, engine, "query_graph", string(arguments))
 	if response.IsError {
 		t.Fatalf("query_graph returned error: %s", response.RawJSON)
@@ -112,14 +98,11 @@ func queryFunctionNames(t *testing.T, engine *Engine, project string) []string {
 		if err := json.Unmarshal(row, &columns); err != nil {
 			t.Fatalf("unmarshal query_graph row %s: %v", row, err)
 		}
-
 		if len(columns) == 0 {
 			t.Fatalf("query_graph row %s has no columns", row)
 		}
-
 		functionNames = append(functionNames, columns[0])
 	}
-
 	return functionNames
 }
 

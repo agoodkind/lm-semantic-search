@@ -45,89 +45,32 @@ func publish() {
 	expvar.Publish(expvarPrefix+"embed_vectors_total", counterVar{value: &embedVectorsTotal})
 	expvar.Publish(expvarPrefix+"embed_latency_ms_sum", counterVar{value: &embedLatencyMSSum})
 	expvar.Publish(expvarPrefix+"embed_inflight", counterVar{value: &embedInflight})
-	expvar.Publish(
-		expvarPrefix+"embed_chunks_reused_total",
-		counterVar{value: &embedChunksReusedTotal},
-	)
-	expvar.Publish(
-		expvarPrefix+"embed_inputs_refused_empty",
-		counterVar{value: &embedInputsRefusedEmpty},
-	)
+	expvar.Publish(expvarPrefix+"embed_chunks_reused_total", counterVar{value: &embedChunksReusedTotal})
+	expvar.Publish(expvarPrefix+"embed_inputs_refused_empty", counterVar{value: &embedInputsRefusedEmpty})
 	expvar.Publish(expvarPrefix+"converge_upsert_total", counterVar{value: &convergeUpsertTotal})
 	expvar.Publish(expvarPrefix+"converge_remove_total", counterVar{value: &convergeRemoveTotal})
-	expvar.Publish(
-		expvarPrefix+"converge_copy_chunks_total",
-		counterVar{value: &convergeCopyChunksTotal},
-	)
+	expvar.Publish(expvarPrefix+"converge_copy_chunks_total", counterVar{value: &convergeCopyChunksTotal})
 	expvar.Publish(expvarPrefix+"sweep_runs_total", counterVar{value: &sweepRunsTotal})
 	expvar.Publish(expvarPrefix+"sweep_changed_total", counterVar{value: &sweepChangedTotal})
-	expvar.Publish(
-		expvarPrefix+"sync_skipped_inflight_total",
-		counterVar{value: &syncSkippedInflightTotal},
-	)
+	expvar.Publish(expvarPrefix+"sync_skipped_inflight_total", counterVar{value: &syncSkippedInflightTotal})
 	expvar.Publish(expvarPrefix+"jobs_completed_total", counterVar{value: &jobsCompletedTotal})
 	expvar.Publish(expvarPrefix+"jobs_failed_total", counterVar{value: &jobsFailedTotal})
 	expvar.Publish(expvarPrefix+"jobs_cancelled_total", counterVar{value: &jobsCancelledTotal})
 	expvar.Publish(expvarPrefix+"boot_resumes_total", counterVar{value: &bootResumesTotal})
 	expvar.Publish(expvarPrefix+"jobs_active", counterVar{value: &jobsActive})
-	expvar.Publish(
-		expvarPrefix+"milvus_collection_loads_total",
-		counterVar{value: &milvusCollectionLoadsTotal},
-	)
-	expvar.Publish(
-		expvarPrefix+"milvus_collection_load_failures_total",
-		counterVar{value: &milvusCollectionLoadFailuresTotal},
-	)
-	expvar.Publish(
-		expvarPrefix+"milvus_collection_load_wait_timeouts_total",
-		counterVar{value: &milvusCollectionLoadWaitTimeoutsTotal},
-	)
-	expvar.Publish(
-		expvarPrefix+"milvus_collection_load_inflight",
-		counterVar{value: &milvusCollectionLoadInflight},
-	)
-	expvar.Publish(
-		expvarPrefix+"milvus_collection_load_latency_ms_sum",
-		counterVar{value: &milvusCollectionLoadLatencyMSSum},
-	)
-	expvar.Publish(
-		expvarPrefix+"milvus_collection_unloads_total",
-		counterVar{value: &milvusCollectionUnloadsTotal},
-	)
-	expvar.Publish(
-		expvarPrefix+"milvus_collection_unload_failures_total",
-		counterVar{value: &milvusCollectionUnloadFailuresTotal},
-	)
-	expvar.Publish(
-		expvarPrefix+"milvus_collection_unload_skipped_in_use_total",
-		counterVar{value: &milvusCollectionUnloadSkippedInUseTotal},
-	)
-	expvar.Publish(
-		expvarPrefix+"milvus_collection_unload_latency_ms_sum",
-		counterVar{value: &milvusCollectionUnloadLatencyMSSum},
-	)
-	expvar.Publish(
-		expvarPrefix+"milvus_collection_leases_active",
-		counterVar{value: &milvusCollectionLeasesActive},
-	)
-	expvar.Publish(
-		expvarPrefix+"milvus_collections_idle",
-		counterVar{value: &milvusCollectionsIdle},
-	)
-	expvar.Publish(
-		expvarPrefix+"milvus_collections_loading",
-		counterVar{value: &milvusCollectionsLoading},
-	)
-	expvar.Publish(
-		expvarPrefix+"milvus_collections_ready",
-		counterVar{value: &milvusCollectionsReady},
-	)
-	expvar.Publish(
-		expvarPrefix+"milvus_mmap_migrations_total",
-		counterVar{value: &milvusMmapMigrationsTotal},
-	)
-	expvar.Publish(
-		expvarPrefix+"milvus_mmap_migration_failures_total",
-		counterVar{value: &milvusMmapMigrationFailuresTotal},
-	)
+	expvar.Publish(expvarPrefix+"milvus_collection_loads_total", counterVar{value: &milvusCollectionLoadsTotal})
+	expvar.Publish(expvarPrefix+"milvus_collection_load_failures_total", counterVar{value: &milvusCollectionLoadFailuresTotal})
+	expvar.Publish(expvarPrefix+"milvus_collection_load_wait_timeouts_total", counterVar{value: &milvusCollectionLoadWaitTimeoutsTotal})
+	expvar.Publish(expvarPrefix+"milvus_collection_load_inflight", counterVar{value: &milvusCollectionLoadInflight})
+	expvar.Publish(expvarPrefix+"milvus_collection_load_latency_ms_sum", counterVar{value: &milvusCollectionLoadLatencyMSSum})
+	expvar.Publish(expvarPrefix+"milvus_collection_unloads_total", counterVar{value: &milvusCollectionUnloadsTotal})
+	expvar.Publish(expvarPrefix+"milvus_collection_unload_failures_total", counterVar{value: &milvusCollectionUnloadFailuresTotal})
+	expvar.Publish(expvarPrefix+"milvus_collection_unload_skipped_in_use_total", counterVar{value: &milvusCollectionUnloadSkippedInUseTotal})
+	expvar.Publish(expvarPrefix+"milvus_collection_unload_latency_ms_sum", counterVar{value: &milvusCollectionUnloadLatencyMSSum})
+	expvar.Publish(expvarPrefix+"milvus_collection_leases_active", counterVar{value: &milvusCollectionLeasesActive})
+	expvar.Publish(expvarPrefix+"milvus_collections_idle", counterVar{value: &milvusCollectionsIdle})
+	expvar.Publish(expvarPrefix+"milvus_collections_loading", counterVar{value: &milvusCollectionsLoading})
+	expvar.Publish(expvarPrefix+"milvus_collections_ready", counterVar{value: &milvusCollectionsReady})
+	expvar.Publish(expvarPrefix+"milvus_mmap_migrations_total", counterVar{value: &milvusMmapMigrationsTotal})
+	expvar.Publish(expvarPrefix+"milvus_mmap_migration_failures_total", counterVar{value: &milvusMmapMigrationFailuresTotal})
 }

@@ -22,13 +22,11 @@ func (service *Service) insertBatch(
 	columnSet StoreColumnSet,
 ) error {
 	ids := make([]string, 0, len(chunks))
-
 	splitPartsRecorded := make([]bool, 0, len(chunks))
 	for index, chunk := range chunks {
 		ids = append(ids, generateID(chunk, index))
 		splitPartsRecorded = append(splitPartsRecorded, true)
 	}
-
 	return service.insertBatchWithIDs(
 		ctx,
 		collectionName,
@@ -63,7 +61,6 @@ func (service *Service) insertBatchWithIDs(
 	); err != nil {
 		return err
 	}
-
 	if err := service.ensureInsertColumns(ctx, collectionName); err != nil {
 		return err
 	}
@@ -84,7 +81,6 @@ func (service *Service) insertBatchWithIDs(
 	if err != nil {
 		return err
 	}
-
 	if insertResult.InsertCount != int64(len(chunks)) {
 		countErr := fmt.Errorf(
 			"milvus acknowledged %d of %d rows",
@@ -103,10 +99,8 @@ func (service *Service) insertBatchWithIDs(
 			"err",
 			countErr,
 		)
-
 		return fmt.Errorf("insert Milvus batch into %s: %w", collectionName, countErr)
 	}
-
 	return nil
 }
 
@@ -121,24 +115,20 @@ func insertRowsFromChunks(
 ) []collection.Row {
 	rows := make([]collection.Row, 0, len(chunks))
 	for index, chunk := range chunks {
-		rows = append(
-			rows,
-			collection.Row{
-				ID:                ids[index],
-				Content:           chunk.Content,
-				RelativePath:      chunk.RelativePath,
-				StartLine:         chunk.StartLine,
-				EndLine:           chunk.EndLine,
-				FileExtension:     chunk.FileExtension,
-				Metadata:          encodeMetadata(chunk),
-				SplitPart:         chunk.SplitPart,
-				SplitPartRecorded: splitPartsRecorded[index],
-				Vector:            vectors[index],
-				Scalars:           columnSet.rowScalars(chunk),
-			},
-		)
+		rows = append(rows, collection.Row{
+			ID:                ids[index],
+			Content:           chunk.Content,
+			RelativePath:      chunk.RelativePath,
+			StartLine:         chunk.StartLine,
+			EndLine:           chunk.EndLine,
+			FileExtension:     chunk.FileExtension,
+			Metadata:          encodeMetadata(chunk),
+			SplitPart:         chunk.SplitPart,
+			SplitPartRecorded: splitPartsRecorded[index],
+			Vector:            vectors[index],
+			Scalars:           columnSet.rowScalars(chunk),
+		})
 	}
-
 	return rows
 }
 
@@ -149,7 +139,6 @@ func (service *Service) ensureInsertColumns(
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
 		return err
 	}
-
 	return service.ensureReuseIdentityColumnsOnce(ctx, collectionName)
 }
 
@@ -164,11 +153,13 @@ func (service *Service) executeInsert(
 	} else {
 		result, err = service.milvus.Insert(ctx, option)
 	}
-
 	if err != nil {
-		return result, wrapStoreError(ctx, err, "insert Milvus batch into "+option.CollectionName())
+		return result, wrapStoreError(
+			ctx,
+			err,
+			"insert Milvus batch into "+option.CollectionName(),
+		)
 	}
-
 	return result, nil
 }
 
@@ -182,7 +173,6 @@ func validateInsertBatchCounts(
 	if idCount == chunkCount && splitPartCount == chunkCount {
 		return nil
 	}
-
 	countErr := errors.New("insert batch column count mismatch")
 	slog.ErrorContext(
 		ctx,
@@ -198,6 +188,5 @@ func validateInsertBatchCounts(
 		"err",
 		countErr,
 	)
-
 	return fmt.Errorf("insert Milvus batch into %s: %w", collectionName, countErr)
 }

@@ -22,7 +22,6 @@ func newBackoffTestClock() *backoffTestClock {
 func (clock *backoffTestClock) Now() time.Time {
 	clock.mutex.Lock()
 	defer clock.mutex.Unlock()
-
 	return clock.now
 }
 
@@ -42,39 +41,23 @@ func TestCollectionLoadBackoffGrowsAndClears(t *testing.T) {
 	clock := newBackoffTestClock()
 	backoff := newCollectionLoadBackoff()
 	backoff.now = clock.Now
-	memoryErr := errors.New(
-		"load Milvus collection x: service resource insufficient[resourceType=Memory]",
-	)
+	memoryErr := errors.New("load Milvus collection x: service resource insufficient[resourceType=Memory]")
 
 	if err := backoff.admit(context.Background(), "x"); err != nil {
 		t.Fatalf("admit before any signal returned error: %v", err)
 	}
 
-	wantIntervals := []time.Duration{
-		30 * time.Second,
-		time.Minute,
-		2 * time.Minute,
-		4 * time.Minute,
-		5 * time.Minute,
-		5 * time.Minute,
-	}
+	wantIntervals := []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 5 * time.Minute, 5 * time.Minute}
 	for i, want := range wantIntervals {
 		backoff.noteLoadOutcome(context.Background(), "x", memoryErr)
 		err := backoff.admit(context.Background(), "y")
 		if !errors.Is(err, ErrCollectionLoadDeferred) || !errors.Is(err, ErrCollectionNotReady) {
 			t.Fatalf("signal %d: admit error = %v, want the deferred not-ready sentinel", i, err)
 		}
-
 		clock.Advance(want - time.Second)
 		if err := backoff.admit(context.Background(), "y"); err == nil {
-			t.Fatalf(
-				"signal %d: admitted a load %s before the %s pause elapsed",
-				i,
-				want-time.Second,
-				want,
-			)
+			t.Fatalf("signal %d: admitted a load %s before the %s pause elapsed", i, want-time.Second, want)
 		}
-
 		clock.Advance(time.Second)
 		if err := backoff.admit(context.Background(), "y"); err != nil {
 			t.Fatalf("signal %d: admit after the %s pause elapsed returned error: %v", i, want, err)
@@ -96,17 +79,12 @@ func TestCollectionLoadBackoffIgnoresOtherFailures(t *testing.T) {
 	t.Parallel()
 
 	backoff := newCollectionLoadBackoff()
-
 	others := []error{
 		context.Canceled,
 		context.DeadlineExceeded,
-		errors.New(
-			"load Milvus collection x: rpc error: code = Unavailable desc = connection refused",
-		),
+		errors.New("load Milvus collection x: rpc error: code = Unavailable desc = connection refused"),
 		errors.New("wait for collection x: " + ErrCollectionLoadWaitTimeout.Error()),
-		errors.New(
-			"collection x did not become queryable within 90s (load progress 40%): collection_not_ready: semantic collection is not ready",
-		),
+		errors.New("collection x did not become queryable within 90s (load progress 40%): collection_not_ready: semantic collection is not ready"),
 		ErrCollectionNotReady,
 	}
 	for _, other := range others {
@@ -118,8 +96,6 @@ func TestCollectionLoadBackoffIgnoresOtherFailures(t *testing.T) {
 
 	unrecovered := errors.New("collection x: " + errCollectionLoadUnrecovered.Error())
 	if collectionLoadMemorySignal(unrecovered) {
-		t.Fatal(
-			"a message that merely mentions the unrecovered text is not the unrecovered outcome",
-		)
+		t.Fatal("a message that merely mentions the unrecovered text is not the unrecovered outcome")
 	}
 }

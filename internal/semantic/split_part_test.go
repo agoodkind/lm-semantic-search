@@ -69,26 +69,21 @@ func TestInsertBatchRoundTripRestoresSplitPartAndIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insertBatch returned error: %v", err)
 	}
-
 	if capturedOption == nil {
 		t.Fatal("insertBatch did not send an insert option")
 	}
-
 	request, err := capturedOption.InsertRequest(testInsertCollection(collectionName, 1))
 	if err != nil {
 		t.Fatalf("captured insert option returned error: %v", err)
 	}
-
 	fields := make(milvusclient.DataSet, 0, len(request.GetFieldsData()))
 	for _, fieldData := range request.GetFieldsData() {
 		fieldColumn, columnErr := column.FieldDataColumn(fieldData, 0, -1)
 		if columnErr != nil {
 			t.Fatalf("convert inserted field %q: %v", fieldData.GetFieldName(), columnErr)
 		}
-
 		fields = append(fields, fieldColumn)
 	}
-
 	resultSet := milvusclient.ResultSet{
 		ResultCount: int(request.GetNumRows()),
 		Fields:      fields,
@@ -97,28 +92,23 @@ func TestInsertBatchRoundTripRestoresSplitPartAndIdentity(t *testing.T) {
 	if contentHashes == nil {
 		t.Fatal("inserted row has no content hash column")
 	}
-
 	embeddingModels := resultSet.GetColumn(embeddingModelFieldName)
 	if embeddingModels == nil {
 		t.Fatal("inserted row has no embedding model column")
 	}
-
 	for index, chunk := range input {
 		got, keyErr := contentHashes.GetAsString(index)
 		if keyErr != nil {
 			t.Fatalf("read content hash %d: %v", index, keyErr)
 		}
-
 		want := contentHash(chunk.Content)
 		if got != want {
 			t.Fatalf("content hash %d = %q, want %q", index, got, want)
 		}
-
 		modelName, modelErr := embeddingModels.GetAsString(index)
 		if modelErr != nil {
 			t.Fatalf("read embedding model %d: %v", index, modelErr)
 		}
-
 		if modelName != "model-a" {
 			t.Fatalf("embedding model %d = %q, want model-a", index, modelName)
 		}
@@ -128,28 +118,13 @@ func TestInsertBatchRoundTripRestoresSplitPartAndIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HitsFromResultSet returned error: %v", err)
 	}
-
 	chunks := chunksFromHits(hits)
-	if got := []int32{
-		chunks[0].SplitPart,
-		chunks[1].SplitPart,
-	}; !slices.Equal(
-		got,
-		[]int32{1, 513},
-	) {
+	if got := []int32{chunks[0].SplitPart, chunks[1].SplitPart}; !slices.Equal(got, []int32{1, 513}) {
 		t.Fatalf("restored split parts = %v, want [1 513]", got)
 	}
-
-	if got := []bool{
-		chunks[0].SplitPartRecorded,
-		chunks[1].SplitPartRecorded,
-	}; !slices.Equal(
-		got,
-		[]bool{true, true},
-	) {
+	if got := []bool{chunks[0].SplitPartRecorded, chunks[1].SplitPartRecorded}; !slices.Equal(got, []bool{true, true}) {
 		t.Fatalf("restored recorded flags = %v, want [true true]", got)
 	}
-
 	if generateID(chunks[0], 0) == generateID(chunks[1], 1) {
 		t.Fatal("round-tripped split pieces share a primary key")
 	}
@@ -162,11 +137,9 @@ func TestContentHashContainsOnlyNormalizedExactContent(t *testing.T) {
 	if got := contentHash("same content"); got != want {
 		t.Fatalf("content hash is unstable: got %q, want %q", got, want)
 	}
-
 	if want == contentHash("different content") {
 		t.Fatal("different exact content shared a content storage key")
 	}
-
 	invalidUTF8 := string([]byte{'x', 0xff})
 	if contentHash(invalidUTF8) != contentHash("x\uFFFD") {
 		t.Fatal("invalid UTF-8 and its normalized exact content have different keys")
@@ -189,89 +162,51 @@ func TestEmbeddingModelCompatibilityRejectsOnlyKnownUnequalNames(t *testing.T) {
 		{name: "unequal known", stored: "model-a", current: "model-b", want: false},
 	}
 	for _, testCase := range testCases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				if got := embeddingModelsCompatible(
-					testCase.stored,
-					testCase.current,
-				); got != testCase.want {
-					t.Fatalf(
-						"embeddingModelsCompatible(%q, %q) = %t, want %t",
-						testCase.stored,
-						testCase.current,
-						got,
-						testCase.want,
-					)
-				}
-			},
-		)
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := embeddingModelsCompatible(testCase.stored, testCase.current); got != testCase.want {
+				t.Fatalf("embeddingModelsCompatible(%q, %q) = %t, want %t", testCase.stored, testCase.current, got, testCase.want)
+			}
+		})
 	}
 }
 
 func testInsertCollection(collectionName string, dimension int64) *entity.Collection {
-	schema := entity.NewSchema().WithName(collectionName).
-		WithField(
-			entity.NewField().WithName(idFieldName).WithDataType(entity.FieldTypeVarChar).
-				WithMaxLength(
-					512,
-				).
-				WithIsPrimaryKey(
-					true,
-				),
-		).
-		WithField(
-			entity.NewField().WithName(contentFieldName).WithDataType(entity.FieldTypeVarChar).
-				WithMaxLength(
-					65535,
-				),
-		).
-		WithField(
-			entity.NewField().WithName(relativePathFieldName).WithDataType(entity.FieldTypeVarChar).
-				WithMaxLength(
-					1024,
-				),
-		).
-		WithField(
-			entity.NewField().WithName(startLineFieldName).WithDataType(entity.FieldTypeInt64),
-		).
-		WithField(
-			entity.NewField().WithName(endLineFieldName).WithDataType(entity.FieldTypeInt64),
-		).
-		WithField(
-			entity.NewField().WithName(fileExtensionFieldName).
-				WithDataType(
-					entity.FieldTypeVarChar,
-				).
-				WithMaxLength(
-					32,
-				),
-		).
-		WithField(
-			entity.NewField().WithName(metadataFieldName).WithDataType(entity.FieldTypeVarChar).
-				WithMaxLength(
-					65535,
-				),
-		).
-		WithField(
-			milvusstore.ContentHashFieldSchema(),
-		).
-		WithField(
-			milvusstore.EmbeddingModelFieldSchema(),
-		).
-		WithField(
-			milvusstore.SplitPartFieldSchema(),
-		).
-		WithField(
-			entity.NewField().WithName(denseVectorFieldName).
-				WithDataType(
-					entity.FieldTypeFloatVector,
-				).
-				WithDim(
-					dimension,
-				),
-		)
-
+	schema := entity.NewSchema().
+		WithName(collectionName).
+		WithField(entity.NewField().
+			WithName(idFieldName).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(512).
+			WithIsPrimaryKey(true)).
+		WithField(entity.NewField().
+			WithName(contentFieldName).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(65535)).
+		WithField(entity.NewField().
+			WithName(relativePathFieldName).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(1024)).
+		WithField(entity.NewField().
+			WithName(startLineFieldName).
+			WithDataType(entity.FieldTypeInt64)).
+		WithField(entity.NewField().
+			WithName(endLineFieldName).
+			WithDataType(entity.FieldTypeInt64)).
+		WithField(entity.NewField().
+			WithName(fileExtensionFieldName).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(32)).
+		WithField(entity.NewField().
+			WithName(metadataFieldName).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(65535)).
+		WithField(milvusstore.ContentHashFieldSchema()).
+		WithField(milvusstore.EmbeddingModelFieldSchema()).
+		WithField(milvusstore.SplitPartFieldSchema()).
+		WithField(entity.NewField().
+			WithName(denseVectorFieldName).
+			WithDataType(entity.FieldTypeFloatVector).
+			WithDim(dimension))
 	return &entity.Collection{Name: collectionName, Schema: schema}
 }
 
@@ -322,7 +257,6 @@ func TestResultSetsToChunksDistinguishesLegacyNullFromRecordedZero(t *testing.T)
 	if err != nil {
 		t.Fatalf("newSplitPartColumn returned error: %v", err)
 	}
-
 	resultSet := milvusclient.ResultSet{
 		ResultCount: 2,
 		Fields: milvusclient.DataSet{
@@ -340,12 +274,10 @@ func TestResultSetsToChunksDistinguishesLegacyNullFromRecordedZero(t *testing.T)
 	if err != nil {
 		t.Fatalf("HitsFromResultSet returned error: %v", err)
 	}
-
 	chunks := chunksFromHits(hits)
 	if chunks[0].SplitPartRecorded {
 		t.Fatal("legacy null split part was treated as recorded zero")
 	}
-
 	if !chunks[1].SplitPartRecorded {
 		t.Fatal("recorded unsplit row was treated as legacy null")
 	}
@@ -372,24 +304,15 @@ func TestRewriteCopiedRowsPreservesSplitPartsAndDistinctDestinationIDs(t *testin
 
 	rewritten, destinationIDs, recorded := rewriteCopiedRows(source, "src/renamed.go")
 
-	if got := []int32{
-		rewritten[0].SplitPart,
-		rewritten[1].SplitPart,
-	}; !slices.Equal(
-		got,
-		[]int32{1, 513},
-	) {
+	if got := []int32{rewritten[0].SplitPart, rewritten[1].SplitPart}; !slices.Equal(got, []int32{1, 513}) {
 		t.Fatalf("copied split parts = %v, want [1 513]", got)
 	}
-
 	if destinationIDs[0] == destinationIDs[1] {
 		t.Fatalf("copied rows share destination primary key %q", destinationIDs[0])
 	}
-
 	if !rewritten[0].SplitPartRecorded || !rewritten[1].SplitPartRecorded {
 		t.Fatal("copied split rows lost their recorded flags")
 	}
-
 	if !slices.Equal(recorded, []bool{true, true}) {
 		t.Fatalf("copied recorded flags = %v, want [true true]", recorded)
 	}
@@ -416,11 +339,9 @@ func TestRewriteCopiedRowsKeepsLegacyNullPartsDistinct(t *testing.T) {
 	if destinationIDs[0] == destinationIDs[1] {
 		t.Fatalf("legacy rows share destination primary key %q", destinationIDs[0])
 	}
-
 	if rewritten[0].SplitPartRecorded || rewritten[1].SplitPartRecorded {
 		t.Fatal("legacy null rows were treated as recorded zero")
 	}
-
 	if !slices.Equal(recorded, []bool{false, false}) {
 		t.Fatalf("legacy recorded flags = %v, want [false false]", recorded)
 	}
@@ -455,14 +376,11 @@ func TestSplitPartMigrationDecisionIsIdempotent(t *testing.T) {
 	t.Parallel()
 
 	schema := entity.NewSchema().
-		WithField(
-			entity.NewField().WithName(idFieldName).WithDataType(entity.FieldTypeVarChar),
-		)
+		WithField(entity.NewField().WithName(idFieldName).WithDataType(entity.FieldTypeVarChar))
 	first := splitPartFieldsToAdd(schema)
 	if len(first) != 1 || first[0].Name != splitPartFieldName {
 		t.Fatalf("first splitPartFieldsToAdd = %#v, want splitPart", first)
 	}
-
 	if first[0].DataType != entity.FieldTypeInt64 || !first[0].Nullable {
 		t.Fatalf("splitPart field = %#v, want nullable int64", first[0])
 	}
@@ -494,7 +412,6 @@ func TestInvalidateCollectionCachesClearsSchemaState(t *testing.T) {
 			t.Fatalf("cache %d retained collection state", index)
 		}
 	}
-
 	if _, found := service.mmapPolicyVersions[collectionName]; found {
 		t.Fatal("mmap policy cache retained collection state")
 	}

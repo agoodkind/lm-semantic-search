@@ -55,18 +55,12 @@ func Watch(ctx context.Context, cancel context.CancelFunc) {
 		// The guard never fires in this case; let the caller manage lifetime.
 		return
 	}
-
 	signal := parentDeathSignalFunc(ctx, startingParent)
 	select {
 	case <-ctx.Done():
 		return
 	case <-signal:
-		slog.WarnContext(
-			ctx,
-			"parent process exited; shutting down to avoid orphan accumulation",
-			"starting_parent_pid",
-			startingParent,
-		)
+		slog.WarnContext(ctx, "parent process exited; shutting down to avoid orphan accumulation", "starting_parent_pid", startingParent)
 		cancel()
 	}
 }
@@ -78,12 +72,7 @@ func goSafeOrphan(ctx context.Context, run func()) {
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(
-					ctx,
-					"orphan guard goroutine panic",
-					"err",
-					fmt.Errorf("panic: %v", recovered),
-				)
+				slog.ErrorContext(ctx, "orphan guard goroutine panic", "err", fmt.Errorf("panic: %v", recovered))
 			}
 		}()
 		run()
@@ -98,7 +87,6 @@ func pollParentDeath(ctx context.Context, ch chan struct{}) {
 	defer close(ch)
 	ticker := time.NewTicker(fallbackPollInterval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():

@@ -16,16 +16,12 @@ import (
 func TestStoreSearchSentinel(t *testing.T) {
 	t.Parallel()
 
-	if got := storeSearchSentinel(
-		errors.New("hybrid search collection foo: collection not loaded"),
-	); !errors.Is(got, ErrCollectionNotReady) {
+	if got := storeSearchSentinel(errors.New("hybrid search collection foo: collection not loaded")); !errors.Is(got, ErrCollectionNotReady) {
 		t.Fatalf("collection-not-loaded: storeSearchSentinel = %v, want ErrCollectionNotReady", got)
 	}
-
 	if got := storeSearchSentinel(errors.New("invalid filter expression")); got != nil {
 		t.Fatalf("ordinary: storeSearchSentinel = %v, want nil", got)
 	}
-
 	if got := storeSearchSentinel(nil); got != nil {
 		t.Fatalf("nil: storeSearchSentinel = %v, want nil", got)
 	}
@@ -40,7 +36,6 @@ func TestStoreUnavailableIgnoresPlainErrors(t *testing.T) {
 	if storeUnavailable(errors.New("collection not loaded")) {
 		t.Fatal("a plain non-gRPC error must not read as store-unavailable")
 	}
-
 	if storeUnavailable(nil) {
 		t.Fatal("nil must not read as store-unavailable")
 	}
@@ -60,15 +55,12 @@ func TestWrapStoreErrorPlainError(t *testing.T) {
 	if adapterr.IsInfraFailure(wrapped) {
 		t.Fatalf("a non-transport error must not be classified as an infra outage: %v", wrapped)
 	}
-
 	if !errors.Is(wrapped, cause) {
 		t.Fatal("wrapStoreError must preserve the cause chain")
 	}
-
 	if !strings.Contains(wrapped.Error(), "conv_chunks_x") {
 		t.Fatalf("wrapStoreError must include the operation context, got %q", wrapped.Error())
 	}
-
 	if wrapStoreError(context.Background(), nil, "insert into x") != nil {
 		t.Fatal("nil error must wrap to nil")
 	}

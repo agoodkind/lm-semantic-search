@@ -18,35 +18,16 @@ func TestResumeOrphanedConvergePreservesPolicyAndDoesNotDuplicate(t *testing.T) 
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath: %v", err)
 	}
-
 	priority := model.JobPriorityHigh
 	quiet := true
 	idleAfterSeconds := int32(900)
-	policy := model.SchedulingPolicy{
-		Priority:         priority,
-		Quiet:            quiet,
-		IdleAfterSeconds: idleAfterSeconds,
-	}
-	override := model.SchedulingPolicyPatch{
-		Priority:         &priority,
-		Quiet:            &quiet,
-		IdleAfterSeconds: &idleAfterSeconds,
-	}
+	policy := model.SchedulingPolicy{Priority: priority, Quiet: quiet, IdleAfterSeconds: idleAfterSeconds}
+	override := model.SchedulingPolicyPatch{Priority: &priority, Quiet: &quiet, IdleAfterSeconds: &idleAfterSeconds}
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	codebase.EffectiveConfig = defaultIndexConfig()
 	codebase.SchedulingPolicy = policy
-	job := newQueuedJob(
-		codebase.ID,
-		repoPath,
-		canonicalPath,
-		testClientInfo(),
-		"converge",
-		false,
-		codebase.EffectiveConfig,
-		emptyAdmissionBudget,
-		clock.Now(),
-	)
+	job := newQueuedJob(codebase.ID, repoPath, canonicalPath, testClientInfo(), "converge", false, codebase.EffectiveConfig, emptyAdmissionBudget, clock.Now())
 	job.State = model.JobStateRunning
 	job.EffectiveSchedulingPolicy = policy
 	job.SchedulingOverride = override
@@ -57,12 +38,10 @@ func TestResumeOrphanedConvergePreservesPolicyAndDoesNotDuplicate(t *testing.T) 
 		manager.mu.Unlock()
 		t.Fatalf("save: %v", err)
 	}
-
 	if err := manager.appendJobLocked("job_running", job); err != nil {
 		manager.mu.Unlock()
 		t.Fatalf("append: %v", err)
 	}
-
 	manager.mu.Unlock()
 	manager.closeJobJournal()
 
@@ -70,7 +49,6 @@ func TestResumeOrphanedConvergePreservesPolicyAndDoesNotDuplicate(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-
 	t.Cleanup(func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -93,7 +71,6 @@ func TestBootRecoveryPreservesPausedPolicyAndQueueSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath: %v", err)
 	}
-
 	priority := model.JobPriorityHigh
 	quiet := true
 	idleAfterSeconds := int32(900)
@@ -131,30 +108,23 @@ func TestBootRecoveryPreservesPausedPolicyAndQueueSequence(t *testing.T) {
 		manager.mu.Unlock()
 		t.Fatalf("save paused codebase: %v", err)
 	}
-
 	if err := manager.appendJobLocked("job_paused", job); err != nil {
 		manager.mu.Unlock()
 		t.Fatalf("append paused job: %v", err)
 	}
-
 	manager.mu.Unlock()
-	if err := merkle.WriteSnapshot(
-		manager.merklePath(codebase.ID),
-		merkle.Snapshot{
-			ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
-			Files:        map[string]string{"main.go": hashText("package main\n")},
-		},
-	); err != nil {
+	if err := merkle.WriteSnapshot(manager.merklePath(codebase.ID), merkle.Snapshot{
+		ConfigDigest: codebase.EffectiveConfig.IgnoreDigest,
+		Files:        map[string]string{"main.go": hashText("package main\n")},
+	}); err != nil {
 		t.Fatalf("WriteSnapshot: %v", err)
 	}
-
 	manager.closeJobJournal()
 
 	restarted, err := NewManager(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-
 	t.Cleanup(func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -165,73 +135,50 @@ func TestBootRecoveryPreservesPausedPolicyAndQueueSequence(t *testing.T) {
 	restarted.ResumeOrphanedJobs(context.Background())
 
 	var successor model.Job
-	waitForCondition(
-		t,
-		func() bool {
-			for _, candidate := range restarted.ListJobs(codebase.ID) {
-				if candidate.ID != job.ID {
-					successor = candidate
-					return true
-				}
+	waitForCondition(t, func() bool {
+		for _, candidate := range restarted.ListJobs(codebase.ID) {
+			if candidate.ID != job.ID {
+				successor = candidate
+				return true
 			}
-
-			return false
-		},
-	)
+		}
+		return false
+	})
 	if successor.EffectiveSchedulingPolicy != policy {
 		t.Fatalf("successor policy = %+v, want %+v", successor.EffectiveSchedulingPolicy, policy)
 	}
-
 	if !sameSchedulingOverride(successor.SchedulingOverride, override) {
 		t.Fatalf("successor override = %+v, want %+v", successor.SchedulingOverride, override)
 	}
-
 	if successor.QueueSequence != 23 {
 		t.Fatalf("successor queue sequence = %d, want 23", successor.QueueSequence)
 	}
 }
 
-func assertRecoveredConverge(
-	t *testing.T,
-	manager *Manager,
-	codebaseID string,
-	policy model.SchedulingPolicy,
-	override model.SchedulingPolicyPatch,
-	sequence uint64,
-	wantCount int,
-) {
+func assertRecoveredConverge(t *testing.T, manager *Manager, codebaseID string, policy model.SchedulingPolicy, override model.SchedulingPolicyPatch, sequence uint64, wantCount int) {
 	t.Helper()
 	count := 0
-
 	for _, job := range manager.ListJobs(codebaseID) {
 		if job.Operation != string(jobOperationSync) {
 			continue
 		}
-
 		count++
-		if job.EffectiveSchedulingPolicy != policy || job.QueueSequence != sequence ||
-			!sameSchedulingOverride(job.SchedulingOverride, override) {
+		if job.EffectiveSchedulingPolicy != policy || job.QueueSequence != sequence || !sameSchedulingOverride(job.SchedulingOverride, override) {
 			t.Fatalf("successor = %+v", job)
 		}
 	}
-
 	if count != wantCount {
 		t.Fatalf("sync successors = %d, want %d", count, wantCount)
 	}
 }
 
-func sameSchedulingOverride(
-	actual model.SchedulingPolicyPatch,
-	expected model.SchedulingPolicyPatch,
-) bool {
+func sameSchedulingOverride(actual model.SchedulingPolicyPatch, expected model.SchedulingPolicyPatch) bool {
 	if !samePriorityPointer(actual.Priority, expected.Priority) {
 		return false
 	}
-
 	if !sameBoolPointer(actual.Quiet, expected.Quiet) {
 		return false
 	}
-
 	return sameInt32Pointer(actual.IdleAfterSeconds, expected.IdleAfterSeconds)
 }
 
@@ -239,7 +186,6 @@ func samePriorityPointer(actual *model.JobPriority, expected *model.JobPriority)
 	if expected == nil {
 		return actual == nil
 	}
-
 	return actual != nil && *actual == *expected
 }
 
@@ -247,7 +193,6 @@ func sameBoolPointer(actual *bool, expected *bool) bool {
 	if expected == nil {
 		return actual == nil
 	}
-
 	return actual != nil && *actual == *expected
 }
 
@@ -255,7 +200,6 @@ func sameInt32Pointer(actual *int32, expected *int32) bool {
 	if expected == nil {
 		return actual == nil
 	}
-
 	return actual != nil && *actual == *expected
 }
 
@@ -308,11 +252,7 @@ const resumeProbeReached = "skipping unresumable interrupted index"
 func requireResumeProbeRan(t *testing.T, logs *capturedLogs, codebaseID string) {
 	t.Helper()
 	if len(logs.linesContaining(resumeProbeReached, codebaseID, "reason=no_checkpoint")) == 0 {
-		t.Fatalf(
-			"boot resume never probed %s for a checkpoint, so a quiet log proves nothing:\n%s",
-			codebaseID,
-			logs.text(),
-		)
+		t.Fatalf("boot resume never probed %s for a checkpoint, so a quiet log proves nothing:\n%s", codebaseID, logs.text())
 	}
 }
 
@@ -329,11 +269,7 @@ func TestResumeOrphanedJobsReportsLostCheckpointAfterSuccessfulRun(t *testing.T)
 	codebase.Status = model.CodebaseStatusIndexing
 	codebase.EffectiveConfig = defaultIndexConfig()
 	codebase.EffectiveConfig.IgnoreDigest = "sha256:lost-checkpoint"
-	codebase.LastSuccessfulRun = &model.IndexRunSummary{
-		IndexedFiles: 1,
-		TotalChunks:  1,
-		Status:       "completed",
-	}
+	codebase.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 1, TotalChunks: 1, Status: "completed"}
 	manager.mu.Lock()
 	manager.codebases[codebase.ID] = codebase
 	manager.mu.Unlock()
@@ -341,17 +277,8 @@ func TestResumeOrphanedJobsReportsLostCheckpointAfterSuccessfulRun(t *testing.T)
 	logs := captureLogs(t)
 	manager.ResumeOrphanedJobs(context.Background())
 
-	if len(
-		logs.linesContaining(
-			"level=ERROR",
-			resumeCheckpointReadFailure,
-			manager.merklePath(codebase.ID),
-		),
-	) == 0 {
-		t.Fatalf(
-			"a checkpoint lost after a completed run was not reported as an error:\n%s",
-			logs.text(),
-		)
+	if len(logs.linesContaining("level=ERROR", resumeCheckpointReadFailure, manager.merklePath(codebase.ID))) == 0 {
+		t.Fatalf("a checkpoint lost after a completed run was not reported as an error:\n%s", logs.text())
 	}
 }
 
@@ -374,14 +301,8 @@ func TestResumeOrphanedJobsKeepsFirstBuildCheckpointAbsenceQuiet(t *testing.T) {
 	manager.ResumeOrphanedJobs(context.Background())
 
 	requireResumeProbeRan(t, logs, codebase.ID)
-	if lines := logs.linesContaining(
-		resumeCheckpointReadFailure,
-		manager.merklePath(codebase.ID),
-	); len(lines) > 0 {
-		t.Fatalf(
-			"a first build's absent checkpoint was reported as a read failure:\n%s",
-			strings.Join(lines, "\n"),
-		)
+	if lines := logs.linesContaining(resumeCheckpointReadFailure, manager.merklePath(codebase.ID)); len(lines) > 0 {
+		t.Fatalf("a first build's absent checkpoint was reported as a read failure:\n%s", strings.Join(lines, "\n"))
 	}
 }
 
@@ -397,11 +318,7 @@ func TestResumeOrphanedJobsKeepsZeroFileRunCheckpointAbsenceQuiet(t *testing.T) 
 	codebase.Status = model.CodebaseStatusIndexing
 	codebase.EffectiveConfig = defaultIndexConfig()
 	codebase.EffectiveConfig.IgnoreDigest = "sha256:zero-file-run"
-	codebase.LastSuccessfulRun = &model.IndexRunSummary{
-		IndexedFiles: 0,
-		TotalChunks:  0,
-		Status:       "completed",
-	}
+	codebase.LastSuccessfulRun = &model.IndexRunSummary{IndexedFiles: 0, TotalChunks: 0, Status: "completed"}
 	manager.mu.Lock()
 	manager.codebases[codebase.ID] = codebase
 	manager.mu.Unlock()
@@ -410,13 +327,7 @@ func TestResumeOrphanedJobsKeepsZeroFileRunCheckpointAbsenceQuiet(t *testing.T) 
 	manager.ResumeOrphanedJobs(context.Background())
 
 	requireResumeProbeRan(t, logs, codebase.ID)
-	if lines := logs.linesContaining(
-		resumeCheckpointReadFailure,
-		manager.merklePath(codebase.ID),
-	); len(lines) > 0 {
-		t.Fatalf(
-			"a completed run that indexed no file was reported as having lost its checkpoint:\n%s",
-			strings.Join(lines, "\n"),
-		)
+	if lines := logs.linesContaining(resumeCheckpointReadFailure, manager.merklePath(codebase.ID)); len(lines) > 0 {
+		t.Fatalf("a completed run that indexed no file was reported as having lost its checkpoint:\n%s", strings.Join(lines, "\n"))
 	}
 }

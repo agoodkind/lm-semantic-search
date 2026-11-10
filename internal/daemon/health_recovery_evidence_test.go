@@ -29,7 +29,6 @@ func TestUnprobedSurfaceKeepsStoreOutageDespiteLatchedConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvalSymlinks returned error: %v", err)
 	}
-
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	manager.mu.Lock()
@@ -39,23 +38,17 @@ func TestUnprobedSurfaceKeepsStoreOutageDespiteLatchedConnection(t *testing.T) {
 	// The store is down but the client still reports itself available, which is
 	// the state the latch leaves behind after a store that once dialled dies.
 	manager.semantic = &fakeSemantic{
-		search: func(context.Context, string, string, int32, []string, string) (
-			[]model.StoredChunk,
-			error,
-		) {
+		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
 			return nil, semantic.ErrUnavailable
 		},
 	}
 
 	server := NewGRPCServer(manager, nil)
-	if _, searchErr := server.SearchCode(
-		context.Background(),
-		&pb.SearchCodeRequest{
-			Path:  repoPath,
-			Query: "anything",
-			Limit: 5,
-		},
-	); searchErr == nil {
+	if _, searchErr := server.SearchCode(context.Background(), &pb.SearchCodeRequest{
+		Path:  repoPath,
+		Query: "anything",
+		Limit: 5,
+	}); searchErr == nil {
 		t.Fatal("SearchCode succeeded against an unavailable store, so no outage was recorded")
 	}
 
@@ -67,24 +60,12 @@ func TestUnprobedSurfaceKeepsStoreOutageDespiteLatchedConnection(t *testing.T) {
 	if listErr != nil {
 		t.Fatalf("ListJobs returned error: %v", listErr)
 	}
-
-	if mode := response.GetDependencyHealth().GetMode(); mode != string(
-		dependencyStoreUnavailable,
-	) {
-		t.Fatalf(
-			"dependency mode = %q, want %q; an unprobed read must not clear a recorded outage",
-			mode,
-			dependencyStoreUnavailable,
-		)
+	if mode := response.GetDependencyHealth().GetMode(); mode != string(dependencyStoreUnavailable) {
+		t.Fatalf("dependency mode = %q, want %q; an unprobed read must not clear a recorded outage", mode, dependencyStoreUnavailable)
 	}
-
 	headline := status.BannerHeadlineFor(dependencyStoreUnavailable)
 	if !strings.Contains(response.GetDisplayText(), headline) {
-		t.Fatalf(
-			"job list display text lost the store banner %q, got:\n%s",
-			headline,
-			response.GetDisplayText(),
-		)
+		t.Fatalf("job list display text lost the store banner %q, got:\n%s", headline, response.GetDisplayText())
 	}
 }
 
@@ -97,7 +78,6 @@ func TestGetIndexClearsStoreOutageOnceTheProbeAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EvalSymlinks returned error: %v", err)
 	}
-
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	manager.mu.Lock()
@@ -105,22 +85,16 @@ func TestGetIndexClearsStoreOutageOnceTheProbeAnswers(t *testing.T) {
 	manager.mu.Unlock()
 
 	manager.semantic = &fakeSemantic{
-		search: func(context.Context, string, string, int32, []string, string) (
-			[]model.StoredChunk,
-			error,
-		) {
+		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
 			return nil, semantic.ErrUnavailable
 		},
 	}
 	server := NewGRPCServer(manager, nil)
-	if _, searchErr := server.SearchCode(
-		context.Background(),
-		&pb.SearchCodeRequest{
-			Path:  repoPath,
-			Query: "anything",
-			Limit: 5,
-		},
-	); searchErr == nil {
+	if _, searchErr := server.SearchCode(context.Background(), &pb.SearchCodeRequest{
+		Path:  repoPath,
+		Query: "anything",
+		Limit: 5,
+	}); searchErr == nil {
 		t.Fatal("SearchCode succeeded against an unavailable store, so no outage was recorded")
 	}
 
@@ -132,16 +106,11 @@ func TestGetIndexClearsStoreOutageOnceTheProbeAnswers(t *testing.T) {
 	if getErr != nil {
 		t.Fatalf("GetIndex returned error: %v", getErr)
 	}
-
 	if mode := response.GetDependencyHealth().GetMode(); mode != "" {
 		t.Fatalf("dependency mode = %q after a probe answered, want it cleared", mode)
 	}
-
 	headline := status.BannerHeadlineFor(dependencyStoreUnavailable)
 	if strings.Contains(response.GetDisplayText(), headline) {
-		t.Fatalf(
-			"the store banner outlived a successful probe, got:\n%s",
-			response.GetDisplayText(),
-		)
+		t.Fatalf("the store banner outlived a successful probe, got:\n%s", response.GetDisplayText())
 	}
 }

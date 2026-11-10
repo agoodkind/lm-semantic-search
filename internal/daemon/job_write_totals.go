@@ -18,12 +18,8 @@ func writeTotalsJobID(ctx context.Context) string {
 }
 
 // trackJobWrites counts each increase in one call's cumulative progress once.
-func (manager *Manager) trackJobWrites(
-	jobID string,
-	next func(semantic.Progress),
-) func(semantic.Progress) {
+func (manager *Manager) trackJobWrites(jobID string, next func(semantic.Progress)) func(semantic.Progress) {
 	var reportedRows, reportedBatches int32
-
 	return func(progress semantic.Progress) {
 		rows := max(progress.CollectionRowsWritten-reportedRows, 0)
 		batches := max(progress.EmbeddingCallsCompleted-reportedBatches, 0)
@@ -40,7 +36,6 @@ func (manager *Manager) addJobWriteTotals(jobID string, rows, batches int64) {
 	if jobID == "" || rows == 0 && batches == 0 {
 		return
 	}
-
 	manager.transitionMutex.Lock()
 	defer manager.transitionMutex.Unlock()
 	manager.mu.Lock()
@@ -49,7 +44,6 @@ func (manager *Manager) addJobWriteTotals(jobID string, rows, batches int64) {
 	if !found || isTerminalJobState(job.State) || job.Progress.WriteTotals == nil {
 		return
 	}
-
 	totals := *job.Progress.WriteTotals
 	totals.CollectionRowsWritten += rows
 	totals.EmbeddingBatchesCompleted += batches

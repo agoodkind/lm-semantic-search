@@ -17,19 +17,11 @@ import (
 // callers; tracked callers can ignore it. GetIndex returns Indexed for any
 // path whose Milvus collection exists, synthesizing a record when the
 // registry has no entry for it.
-func (manager *Manager) GetIndex(
-	ctx context.Context,
-	requestedPath string,
-) (model.Codebase, *model.Job, bool, *model.PathClassification, error) {
+func (manager *Manager) GetIndex(ctx context.Context, requestedPath string) (model.Codebase, *model.Job, bool, *model.PathClassification, error) {
 	canonicalPath, err := manager.resolveCanonicalPath(requestedPath)
 	if err != nil {
 		slog.ErrorContext(ctx, "canonicalize path failed", "path", requestedPath, "err", err)
-
-		return model.Codebase{}, nil, false, nil, fmt.Errorf(
-			"canonicalize path %s: %w",
-			requestedPath,
-			err,
-		)
+		return model.Codebase{}, nil, false, nil, fmt.Errorf("canonicalize path %s: %w", requestedPath, err)
 	}
 
 	// Worktree-bounded resolution: a git worktree is its own codebase. When the
@@ -56,12 +48,9 @@ func (manager *Manager) GetIndex(
 			)
 			activeJob = &resolvedJob
 		}
-
 		classification := manager.classifyTrackedPath(ctx, codebase, canonicalPath)
-
 		return codebase, activeJob, true, classification, nil
 	}
-
 	manager.mu.Unlock()
 
 	if manager.semantic != nil && manager.semantic.Available() {
@@ -75,26 +64,16 @@ func (manager *Manager) GetIndex(
 			if !adopted {
 				codebase = manager.synthesizeUnregisteredCodebase(canonicalPath)
 			}
-
 			classification := &model.PathClassification{
 				Kind:                model.PathClassificationInScopeIndexed,
 				ExcludedByPattern:   "",
 				ExcludedByGitignore: "",
 				CoveringCodebaseID:  codebase.ID,
 			}
-
 			return codebase, nil, true, classification, nil
 		}
-
 		if hasErr != nil {
-			slog.WarnContext(
-				ctx,
-				"Milvus HasCollection failed during GetIndex",
-				"path",
-				canonicalPath,
-				"err",
-				hasErr,
-			)
+			slog.WarnContext(ctx, "Milvus HasCollection failed during GetIndex", "path", canonicalPath, "err", hasErr)
 		}
 	}
 
@@ -105,7 +84,6 @@ func (manager *Manager) GetIndex(
 		ExcludedByGitignore: "",
 		CoveringCodebaseID:  "",
 	}
-
 	return emptyCodebase, nil, false, classification, nil
 }
 
@@ -115,11 +93,7 @@ func (manager *Manager) GetIndex(
 // unindexed for any subpath; an excluded subpath is reported with the
 // matched pattern and the gitignore source so callers can name the rule
 // that masked the file.
-func (manager *Manager) classifyTrackedPath(
-	ctx context.Context,
-	codebase model.Codebase,
-	canonicalPath string,
-) *model.PathClassification {
+func (manager *Manager) classifyTrackedPath(ctx context.Context, codebase model.Codebase, canonicalPath string) *model.PathClassification {
 	// A codebase that has not built its first index yet (pending, discovered, or
 	// not-indexed) has no searchable collection, so even its root classifies as
 	// in-scope unindexed. That keeps GetIndex from probing an absent collection and
@@ -134,7 +108,6 @@ func (manager *Manager) classifyTrackedPath(
 			CoveringCodebaseID:  codebase.ID,
 		}
 	}
-
 	classification := &model.PathClassification{
 		Kind:                model.PathClassificationInScopeIndexed,
 		ExcludedByPattern:   "",
@@ -144,31 +117,20 @@ func (manager *Manager) classifyTrackedPath(
 	if canonicalPath == codebase.CanonicalPath {
 		return classification
 	}
-
 	relative, err := filepath.Rel(codebase.CanonicalPath, canonicalPath)
 	if err != nil || relative == "" || relative == "." {
 		return classification
 	}
-
 	isDir := false
 	if info, statErr := os.Stat(canonicalPath); statErr == nil {
 		isDir = info.IsDir()
 	}
-
-	if detail, excluded := manager.indexability.IgnoreDetail(
-		ctx,
-		codebase.ID,
-		codebase.CanonicalPath,
-		filepath.ToSlash(relative),
-		isDir,
-	); excluded {
+	if detail, excluded := manager.indexability.IgnoreDetail(ctx, codebase.ID, codebase.CanonicalPath, filepath.ToSlash(relative), isDir); excluded {
 		classification.Kind = model.PathClassificationInScopeExcluded
 		classification.ExcludedByPattern = detail.Pattern
 		classification.ExcludedByGitignore = detail.Source
-
 		return classification
 	}
-
 	// The merkle files map mirrors the file set that has chunks in the
 	// collection, so it is the authoritative per-file membership source. A path
 	// that is in scope and not excluded is only actually searchable when it, or
@@ -177,9 +139,7 @@ func (manager *Manager) classifyTrackedPath(
 	if manager.pathHasIndexedFiles(ctx, codebase, filepath.ToSlash(relative)) {
 		return classification
 	}
-
 	classification.Kind = model.PathClassificationInScopeUnindexed
-
 	return classification
 }
 
@@ -188,11 +148,7 @@ func (manager *Manager) classifyTrackedPath(
 // directory any indexed file beneath it. Membership means the path is
 // searchable through the index. The per-file decision lives on the snapshot
 // ([merkle.Snapshot.CoversPath]) so every caller shares one source of truth.
-func (manager *Manager) pathHasIndexedFiles(
-	ctx context.Context,
-	codebase model.Codebase,
-	relative string,
-) bool {
+func (manager *Manager) pathHasIndexedFiles(ctx context.Context, codebase model.Codebase, relative string) bool {
 	// A codebase mid-first-build reaches here, because classifyTrackedPath
 	// returns early only for pending, discovered, and not-indexed, and it is the
 	// case that made this probe log an error during every first build. The read
@@ -202,7 +158,6 @@ func (manager *Manager) pathHasIndexedFiles(
 	if !checkpoint.usable() {
 		return false
 	}
-
 	return checkpoint.snapshot.CoversPath(relative)
 }
 
@@ -214,7 +169,6 @@ func (manager *Manager) snapshotPathForCodebase(codebase model.Codebase) string 
 	if path := strings.TrimSpace(codebase.MerkleSnapshotPath); path != "" {
 		return path
 	}
-
 	return manager.merklePath(codebase.ID)
 }
 
@@ -225,12 +179,10 @@ func (manager *Manager) synthesizeUnregisteredCodebase(canonicalPath string) mod
 	if manager.semantic != nil {
 		collectionName = manager.semantic.CollectionName(canonicalPath)
 	}
-
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	codebase.CollectionName = collectionName
 	codebase.EffectiveConfig.Hybrid = manager.config.HybridMode
-
 	return codebase
 }
 
@@ -243,19 +195,13 @@ func (manager *Manager) synthesizeUnregisteredCodebase(canonicalPath string) mod
 // yet, the field stays zero and the renderer falls back to the reuse+embed total
 // or the last recorded total. The activeJob must be a snapshot the caller owns,
 // since this mutates it.
-func (manager *Manager) fillLiveChunkTotal(
-	ctx context.Context,
-	codebase model.Codebase,
-	activeJob *model.Job,
-) {
+func (manager *Manager) fillLiveChunkTotal(ctx context.Context, codebase model.Codebase, activeJob *model.Job) {
 	if activeJob == nil {
 		return
 	}
-
 	if manager.semantic == nil || !manager.semantic.Available() {
 		return
 	}
-
 	// The gate is the same rule the checkpoint read uses, on the collection's
 	// axis: count rows only where a collection exists to count. Keying on the run
 	// record alone let a run that indexed zero files through, and so did any
@@ -267,21 +213,15 @@ func (manager *Manager) fillLiveChunkTotal(
 		slog.DebugContext(
 			ctx,
 			"no live collection to count yet",
-			"codebase_id",
-			codebase.ID,
-			"path",
-			codebase.CanonicalPath,
-			"job_id",
-			activeJob.ID,
+			"codebase_id", codebase.ID,
+			"path", codebase.CanonicalPath,
+			"job_id", activeJob.ID,
 		)
-
 		return
 	}
-
 	count, err := manager.semantic.Count(ctx, codebase.CanonicalPath)
 	if err != nil {
 		return
 	}
-
 	activeJob.Progress.ChunksTotal = count
 }

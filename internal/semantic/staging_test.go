@@ -29,20 +29,15 @@ func (embedder *rejectingAllEmbedder) EmbedBatch(
 ) (embedding.BatchResult, error) {
 	embedder.requestCount++
 	vectors := make([][]float32, len(texts))
-
 	skipped := make([]embedding.SkippedInput, 0, len(texts))
 	for index := range texts {
-		skipped = append(
-			skipped,
-			embedding.SkippedInput{
-				Index:          index,
-				Reason:         contextLengthExceededReason,
-				ReportedTokens: adapterr.ReportedFigure(len(texts[index])),
-				MaxTokens:      embedder.reportedMaxTokens,
-			},
-		)
+		skipped = append(skipped, embedding.SkippedInput{
+			Index:          index,
+			Reason:         contextLengthExceededReason,
+			ReportedTokens: adapterr.ReportedFigure(len(texts[index])),
+			MaxTokens:      embedder.reportedMaxTokens,
+		})
 	}
-
 	return embedding.BatchResult{Vectors: vectors, Skipped: skipped}, nil
 }
 
@@ -64,12 +59,10 @@ func TestInsertChunksBatchedReportsSplitRetryDrops(t *testing.T) {
 		},
 		embedder: embedder,
 	}
-	chunks := []model.StoredChunk{
-		{
-			Content:      strings.Repeat("x", 9215),
-			RelativePath: "conv/x/drop-progress",
-		},
-	}
+	chunks := []model.StoredChunk{{
+		Content:      strings.Repeat("x", 9215),
+		RelativePath: "conv/x/drop-progress",
+	}}
 	var reports []Progress
 
 	err := service.insertChunksBatched(
@@ -87,23 +80,17 @@ func TestInsertChunksBatchedReportsSplitRetryDrops(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insertChunksBatched returned error: %v", err)
 	}
-
 	if len(reports) != 1 {
 		t.Fatalf("progress reports = %d, want 1", len(reports))
 	}
-
 	if reports[0].ChunksDropped != 63 {
 		t.Fatalf("ChunksDropped = %d, want 63", reports[0].ChunksDropped)
 	}
-
 	// Eight bounds Provider.EmbedBatch calls: one initial call and seven packed
 	// split-retry calls. The OpenAI-compatible provider can make 95 endpoint
 	// requests because it removes one rejected input per request.
 	if embedder.requestCount != 8 {
-		t.Fatalf(
-			"embed calls = %d, want 8 including the initial rejected batch",
-			embedder.requestCount,
-		)
+		t.Fatalf("embed calls = %d, want 8 including the initial rejected batch", embedder.requestCount)
 	}
 }
 
@@ -118,12 +105,10 @@ func TestInsertChunksBatchedUsesActiveModelLimitWhenEndpointOmitsIt(t *testing.T
 		},
 		embedder: embedder,
 	}
-	chunks := []model.StoredChunk{
-		{
-			Content:      strings.Repeat("x", 9215),
-			RelativePath: "conv/x/unreported-limit",
-		},
-	}
+	chunks := []model.StoredChunk{{
+		Content:      strings.Repeat("x", 9215),
+		RelativePath: "conv/x/unreported-limit",
+	}}
 	var reports []Progress
 
 	err := service.insertChunksBatched(
@@ -141,22 +126,13 @@ func TestInsertChunksBatchedUsesActiveModelLimitWhenEndpointOmitsIt(t *testing.T
 	if err != nil {
 		t.Fatalf("insertChunksBatched returned error: %v", err)
 	}
-
 	if len(reports) != 1 {
 		t.Fatalf("progress reports = %d, want 1", len(reports))
 	}
-
 	if reports[0].ChunksDropped != 63 {
-		t.Fatalf(
-			"ChunksDropped = %d, want 63 whole pieces at the active model floor",
-			reports[0].ChunksDropped,
-		)
+		t.Fatalf("ChunksDropped = %d, want 63 whole pieces at the active model floor", reports[0].ChunksDropped)
 	}
-
 	if embedder.requestCount != 8 {
-		t.Fatalf(
-			"embed calls = %d, want 8 including the initial rejected batch",
-			embedder.requestCount,
-		)
+		t.Fatalf("embed calls = %d, want 8 including the initial rejected batch", embedder.requestCount)
 	}
 }

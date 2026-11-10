@@ -16,12 +16,8 @@ func (manager *Manager) activeJobSnapshotLocked(codebase model.Codebase) *model.
 	if !found {
 		return nil
 	}
-
 	switch job.State {
-	case model.JobStateQueued,
-		model.JobStateRunning,
-		model.JobStatePaused,
-		model.JobStateCancelling:
+	case model.JobStateQueued, model.JobStateRunning, model.JobStatePaused, model.JobStateCancelling:
 		jobCopy := job
 		return &jobCopy
 	case model.JobStateCompleted, model.JobStateFailed, model.JobStateCancelled:
@@ -39,27 +35,22 @@ func (manager *Manager) cancelActiveJobForPath(ctx context.Context, canonicalPat
 		if !found || codebase.ActiveJobID == "" {
 			return nil
 		}
-
 		jobID := codebase.ActiveJobID
 		jobDone, cancel, err := manager.beginActiveJobCancellation(codebase)
 		if err != nil {
 			return err
 		}
-
 		if !manager.activeJobMatches(codebase.ID, jobID) {
 			continue
 		}
-
 		if cancel == nil {
 			manager.updateJobCancelled(ctx, jobID)
 			return nil
 		}
-
 		cancel()
 		if err := waitForJobDone(ctx, jobDone); err != nil {
 			return err
 		}
-
 		return nil
 	}
 }
@@ -68,7 +59,6 @@ func (manager *Manager) activeJobMatches(codebaseID string, jobID string) bool {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	codebase, found := manager.codebases[codebaseID]
-
 	return found && codebase.ActiveJobID == jobID
 }
 
@@ -78,7 +68,6 @@ func (manager *Manager) beginActiveJobCancellation(
 	if codebase.ActiveJobID == "" {
 		return nil, nil, nil
 	}
-
 	job, transitioned, transitionErr := manager.serializeJobTransition(
 		codebase.ActiveJobID,
 		"job_cancelling",
@@ -86,25 +75,21 @@ func (manager *Manager) beginActiveJobCancellation(
 			if isTerminalJobState(job.State) || job.State == model.JobStateCancelling {
 				return false
 			}
-
 			now := clock.Now()
 			job.State = model.JobStateCancelling
 			job.UpdatedAt = now
 			job.Progress.Phase = "cancelling"
 			job.Progress.LastEventAt = now
 			job.Progress.HeartbeatAt = now
-
 			return true
 		},
 	)
 	if transitionErr != nil {
 		return nil, nil, transitionErr
 	}
-
 	if !transitioned && job.State != model.JobStateCancelling {
 		return nil, nil, nil
 	}
-
 	manager.mu.Lock()
 	cancel := manager.cancels[job.ID]
 	jobDone := manager.done[job.ID]
@@ -112,6 +97,5 @@ func (manager *Manager) beginActiveJobCancellation(
 	if cancel == nil {
 		return jobDone, nil, nil
 	}
-
 	return jobDone, cancel, nil
 }

@@ -31,37 +31,24 @@ func TestInvalidateRulesCalledOnlyInObserver(t *testing.T) {
 		if filepath.ToSlash(rel) == ignoreObserverFile {
 			continue
 		}
-
 		parsed, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
-
-		ast.Inspect(
-			parsed,
-			func(node ast.Node) bool {
-				call, ok := node.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-
-				if calledFunctionName(call.Fun) == "InvalidateRules" {
-					violations = append(
-						violations,
-						rel+": calls InvalidateRules outside the single ignore-source observer; route through observer.Invalidate instead",
-					)
-				}
-
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
 				return true
-			},
-		)
+			}
+			if calledFunctionName(call.Fun) == "InvalidateRules" {
+				violations = append(violations, rel+": calls InvalidateRules outside the single ignore-source observer; route through observer.Invalidate instead")
+			}
+			return true
+		})
 	}
 
 	if len(violations) > 0 {
-		t.Fatalf(
-			"resolver cache invalidation must run only through internal/daemon/ignore_observer.go:\n%s",
-			strings.Join(violations, "\n"),
-		)
+		t.Fatalf("resolver cache invalidation must run only through internal/daemon/ignore_observer.go:\n%s", strings.Join(violations, "\n"))
 	}
 }
 
@@ -80,37 +67,24 @@ func TestScopeCheckedOnlyInIndexability(t *testing.T) {
 		if strings.HasPrefix(filepath.ToSlash(rel), indexabilityPackageDir) {
 			continue
 		}
-
 		parsed, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
-
-		ast.Inspect(
-			parsed,
-			func(node ast.Node) bool {
-				call, ok := node.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-
-				if calledFunctionName(call.Fun) == "PathInsideNestedWorktree" {
-					violations = append(
-						violations,
-						rel+": calls PathInsideNestedWorktree outside internal/indexability; route scope through the resolver",
-					)
-				}
-
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
 				return true
-			},
-		)
+			}
+			if calledFunctionName(call.Fun) == "PathInsideNestedWorktree" {
+				violations = append(violations, rel+": calls PathInsideNestedWorktree outside internal/indexability; route scope through the resolver")
+			}
+			return true
+		})
 	}
 
 	if len(violations) > 0 {
-		t.Fatalf(
-			"nested-worktree scope must be decided only in internal/indexability:\n%s",
-			strings.Join(violations, "\n"),
-		)
+		t.Fatalf("nested-worktree scope must be decided only in internal/indexability:\n%s", strings.Join(violations, "\n"))
 	}
 }
 
@@ -139,41 +113,25 @@ func TestIgnoreSourcePredicateOnlyInIndexability(t *testing.T) {
 		if strings.HasPrefix(filepath.ToSlash(rel), indexabilityPackageDir) {
 			continue
 		}
-
 		parsed, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
-
-		ast.Inspect(
-			parsed,
-			func(node ast.Node) bool {
-				funcType, body := boolFuncTypeAndBody(node)
-				if funcType == nil {
-					return true
-				}
-
-				if !funcTypeReturnsSingleBool(
-					funcType,
-				) || !bodyReferencesIgnoreSourceLiteral(body) {
-					return true
-				}
-
-				violations = append(
-					violations,
-					rel+`: defines an ignore-source predicate (a bool func or closure naming ".gitignore" or "info/exclude") outside internal/indexability; the resolver owns IgnoreSources and IsIgnoreSourcePath`,
-				)
-
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			funcType, body := boolFuncTypeAndBody(node)
+			if funcType == nil {
 				return true
-			},
-		)
+			}
+			if !funcTypeReturnsSingleBool(funcType) || !bodyReferencesIgnoreSourceLiteral(body) {
+				return true
+			}
+			violations = append(violations, rel+`: defines an ignore-source predicate (a bool func or closure naming ".gitignore" or "info/exclude") outside internal/indexability; the resolver owns IgnoreSources and IsIgnoreSourcePath`)
+			return true
+		})
 	}
 
 	if len(violations) > 0 {
-		t.Fatalf(
-			"the definition of an ignore source must live only in internal/indexability:\n%s",
-			strings.Join(violations, "\n"),
-		)
+		t.Fatalf("the definition of an ignore source must live only in internal/indexability:\n%s", strings.Join(violations, "\n"))
 	}
 }
 
@@ -197,14 +155,11 @@ func funcTypeReturnsSingleBool(funcType *ast.FuncType) bool {
 	if funcType.Results == nil || len(funcType.Results.List) != 1 {
 		return false
 	}
-
 	result := funcType.Results.List[0]
 	if len(result.Names) > 1 {
 		return false
 	}
-
 	ident, ok := result.Type.(*ast.Ident)
-
 	return ok && ident.Name == "bool"
 }
 
@@ -214,29 +169,21 @@ func bodyReferencesIgnoreSourceLiteral(body *ast.BlockStmt) bool {
 	if body == nil {
 		return false
 	}
-
 	found := false
-	ast.Inspect(
-		body,
-		func(node ast.Node) bool {
-			basicLit, ok := node.(*ast.BasicLit)
-			if !ok || basicLit.Kind != token.STRING {
-				return true
-			}
-
-			value, err := strconv.Unquote(basicLit.Value)
-			if err != nil {
-				return true
-			}
-
-			if value == ".gitignore" || value == "info/exclude" {
-				found = true
-				return false
-			}
-
+	ast.Inspect(body, func(node ast.Node) bool {
+		basicLit, ok := node.(*ast.BasicLit)
+		if !ok || basicLit.Kind != token.STRING {
 			return true
-		},
-	)
-
+		}
+		value, err := strconv.Unquote(basicLit.Value)
+		if err != nil {
+			return true
+		}
+		if value == ".gitignore" || value == "info/exclude" {
+			found = true
+			return false
+		}
+		return true
+	})
 	return found
 }

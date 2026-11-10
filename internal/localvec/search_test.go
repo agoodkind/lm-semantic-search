@@ -31,7 +31,6 @@ func TestSearchAppliesExtensionAndRelativePathPrefixFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newStoreWithProvider returned error: %v", err)
 	}
-
 	chunks := []model.StoredChunk{
 		{
 			Content:       "best outside",
@@ -62,7 +61,6 @@ func TestSearchAppliesExtensionAndRelativePathPrefixFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search returned error: %v", err)
 	}
-
 	if len(results) != 1 || results[0].Content != "kept" {
 		t.Fatalf("Search results = %+v, want only kept", results)
 	}
@@ -73,7 +71,6 @@ func hitContents(hits []semantic.CollectionHit) []string {
 	for _, hit := range hits {
 		contents = append(contents, hit.Chunk.Content)
 	}
-
 	return contents
 }
 
@@ -88,21 +85,23 @@ func TestSearchAboveExactThresholdReturnsNearestNeighbor(t *testing.T) {
 	chunks, reuse := largeSearchFixture(exactSearchThreshold + 1)
 	stageAndPromoteWithReuse(t, store, codebasePath, chunks, reuse)
 
-	results, err := store.Search(context.Background(), codebasePath, "query", resultLimit, nil, "")
+	results, err := store.Search(
+		context.Background(),
+		codebasePath,
+		"query",
+		resultLimit,
+		nil,
+		"",
+	)
 	if err != nil {
 		t.Fatalf("Search returned error: %v", err)
 	}
-
 	if len(results) != resultLimit {
 		t.Fatalf("Search returned %d results, want %d", len(results), resultLimit)
 	}
-
-	if !slices.ContainsFunc(
-		results,
-		func(chunk model.StoredChunk) bool {
-			return chunk.Content == "nearest"
-		},
-	) {
+	if !slices.ContainsFunc(results, func(chunk model.StoredChunk) bool {
+		return chunk.Content == "nearest"
+	}) {
 		t.Fatalf("Search results = %+v, want nearest in top %d", results, resultLimit)
 	}
 }
@@ -116,7 +115,10 @@ func TestSearchAboveExactThresholdAdaptivelyOverfetchesAfterFiltering(t *testing
 		filteredCount = resultLimit*initialSearchOverfetchFactor + 1
 	)
 	store := newSearchTestStore(t)
-	chunks, reuse := largeFilteredSearchFixture(exactSearchThreshold+1, filteredCount)
+	chunks, reuse := largeFilteredSearchFixture(
+		exactSearchThreshold+1,
+		filteredCount,
+	)
 	stageAndPromoteWithReuse(t, store, codebasePath, chunks, reuse)
 
 	results, err := store.Search(
@@ -130,7 +132,6 @@ func TestSearchAboveExactThresholdAdaptivelyOverfetchesAfterFiltering(t *testing
 	if err != nil {
 		t.Fatalf("Search returned error: %v", err)
 	}
-
 	if len(results) != 1 || results[0].Content != "kept" {
 		t.Fatalf("Search results = %+v, want kept", results)
 	}
@@ -154,7 +155,6 @@ func newSearchTestStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatalf("newStoreWithProvider returned error: %v", err)
 	}
-
 	return store
 }
 
@@ -163,7 +163,6 @@ func largeSearchFixture(count int) ([]model.StoredChunk, map[string]model.ReuseV
 
 	chunks := make([]model.StoredChunk, 0, count)
 	reuse := make(map[string]model.ReuseVector, count)
-
 	farCount := count - 1
 	for index := 0; index < count; index++ {
 		var content string
@@ -177,18 +176,13 @@ func largeSearchFixture(count int) ([]model.StoredChunk, map[string]model.ReuseV
 			angle := firstFarAngle + (math.Pi-firstFarAngle)*fraction
 			vector = vectorAtAngle(angle)
 		}
-
-		chunks = append(
-			chunks,
-			model.StoredChunk{
-				Content:       content,
-				RelativePath:  content + ".go",
-				FileExtension: ".go",
-			},
-		)
+		chunks = append(chunks, model.StoredChunk{
+			Content:       content,
+			RelativePath:  content + ".go",
+			FileExtension: ".go",
+		})
 		reuse[semantic.ContentVectorKey(content)] = model.ReuseVector{Vector: vector}
 	}
-
 	return chunks, reuse
 }
 
@@ -203,7 +197,6 @@ func largeFilteredSearchFixture(
 
 	chunks := make([]model.StoredChunk, 0, count)
 	reuse := make(map[string]model.ReuseVector, count)
-
 	farCount := count - filteredCount - 1
 	for index := 0; index < count; index++ {
 		var content string
@@ -225,18 +218,13 @@ func largeFilteredSearchFixture(
 			angle := firstFarAngle + (math.Pi-firstFarAngle)*fraction
 			vector = vectorAtAngle(angle)
 		}
-
-		chunks = append(
-			chunks,
-			model.StoredChunk{
-				Content:       content,
-				RelativePath:  content + extension,
-				FileExtension: extension,
-			},
-		)
+		chunks = append(chunks, model.StoredChunk{
+			Content:       content,
+			RelativePath:  content + extension,
+			FileExtension: extension,
+		})
 		reuse[semantic.ContentVectorKey(content)] = model.ReuseVector{Vector: vector}
 	}
-
 	return chunks, reuse
 }
 
@@ -263,7 +251,6 @@ func stageAndPromoteWithReuse(
 	); err != nil {
 		t.Fatalf("StageReindex returned error: %v", err)
 	}
-
 	if err := store.PromoteStaging(context.Background(), codebasePath); err != nil {
 		t.Fatalf("PromoteStaging returned error: %v", err)
 	}
@@ -288,7 +275,6 @@ func stageAndPromote(
 	); err != nil {
 		t.Fatalf("StageReindex returned error: %v", err)
 	}
-
 	if err := store.PromoteStaging(context.Background(), codebasePath); err != nil {
 		t.Fatalf("PromoteStaging returned error: %v", err)
 	}

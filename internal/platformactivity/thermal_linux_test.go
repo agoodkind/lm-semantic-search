@@ -66,24 +66,21 @@ func TestThermalZoneMalformedValuesAreUnavailable(t *testing.T) {
 	}
 
 	for name, testCase := range testCases {
-		t.Run(
-			name,
-			func(t *testing.T) {
-				thermalRoot := t.TempDir()
-				writeThermalValue(t, thermalRoot, "thermal_zone0/temp", testCase.current)
-				writeThermalValue(t, thermalRoot, "thermal_zone0/trip_point_0_type", "hot")
-				writeThermalValue(t, thermalRoot, "thermal_zone0/trip_point_0_temp", testCase.trip)
+		t.Run(name, func(t *testing.T) {
+			thermalRoot := t.TempDir()
+			writeThermalValue(t, thermalRoot, "thermal_zone0/temp", testCase.current)
+			writeThermalValue(t, thermalRoot, "thermal_zone0/trip_point_0_type", "hot")
+			writeThermalValue(t, thermalRoot, "thermal_zone0/trip_point_0_temp", testCase.trip)
 
-				reading := readThermalActivity(thermalRoot)
+			reading := readThermalActivity(thermalRoot)
 
-				if reading.available {
-					t.Fatal("available = true, want false")
-				}
-				if reading.unsafe {
-					t.Fatal("unsafe = true, want false")
-				}
-			},
-		)
+			if reading.available {
+				t.Fatal("available = true, want false")
+			}
+			if reading.unsafe {
+				t.Fatal("unsafe = true, want false")
+			}
+		})
 	}
 }
 

@@ -44,10 +44,8 @@ func (provider *recordingEmbeddingProvider) EmbedBatch(
 		if err != nil {
 			return embedding.BatchResult{}, err
 		}
-
 		vectors = append(vectors, vector)
 	}
-
 	return embedding.BatchResult{Vectors: vectors}, nil
 }
 
@@ -72,23 +70,17 @@ func (provider *rejectingEmbeddingProvider) EmbedBatch(
 ) (embedding.BatchResult, error) {
 	provider.batches = append(provider.batches, append([]string(nil), texts...))
 	vectors := make([][]float32, len(texts))
-
 	skipped := make([]embedding.SkippedInput, 0, len(texts))
 	for index, text := range texts {
 		if provider.rejected[text] {
-			skipped = append(
-				skipped,
-				embedding.SkippedInput{
-					Index:  index,
-					Reason: "endpoint_policy_rejection",
-				},
-			)
+			skipped = append(skipped, embedding.SkippedInput{
+				Index:  index,
+				Reason: "endpoint_policy_rejection",
+			})
 			continue
 		}
-
 		vectors[index] = []float32{1, float32(len(text) + 1)}
 	}
-
 	return embedding.BatchResult{Vectors: vectors, Skipped: skipped}, nil
 }
 
@@ -100,39 +92,26 @@ func (provider *rejectingEmbeddingProvider) Health(context.Context) error {
 	return nil
 }
 
-func assertRowsCoverContentWithDistinctIDs(
-	t *testing.T,
-	store *Store,
-	codebasePath string,
-	content string,
-	embedded []string,
-) {
+func assertRowsCoverContentWithDistinctIDs(t *testing.T, store *Store, codebasePath string, content string, embedded []string) {
 	t.Helper()
 	if strings.Join(embedded, "") != content {
 		t.Fatal("embedded pieces did not reproduce the content; a child was truncated or lost")
 	}
-
-	rows, exists, _, err := readRows(
-		filepath.Join(store.root, store.CollectionName(codebasePath), metadataFileName),
-	)
+	rows, exists, _, err := readRows(filepath.Join(store.root, store.CollectionName(codebasePath), metadataFileName))
 	if err != nil {
 		t.Fatalf("readRows returned error: %v", err)
 	}
-
 	if !exists {
 		t.Fatal("collection file is missing after promote")
 	}
-
 	if len(rows) < 3 {
 		t.Fatalf("stored %d rows, want at least 3 split pieces", len(rows))
 	}
-
 	ids := make(map[string]bool, len(rows))
 	for index := range rows {
 		if ids[rows[index].ID] {
 			t.Fatalf("duplicate primary key %q among split rows", rows[index].ID)
 		}
-
 		ids[rows[index].ID] = true
 	}
 }
@@ -151,13 +130,7 @@ func TestStageReindexSplitsOversizedChunkIntoDistinctRows(t *testing.T) {
 	// Repeated content makes the full-budget pieces byte-identical, so the store
 	// must give each a distinct primary key or the rows would collide.
 	content := strings.Repeat("x", byteBudget*2+5)
-	stageAndPromote(
-		t,
-		store,
-		codebasePath,
-		[]model.StoredChunk{{Content: content, RelativePath: "big.go"}},
-		semantic.CodeColumns(),
-	)
+	stageAndPromote(t, store, codebasePath, []model.StoredChunk{{Content: content, RelativePath: "big.go"}}, semantic.CodeColumns())
 
 	assertRowsCoverContentWithDistinctIDs(t, store, codebasePath, content, provider.embedded)
 }
@@ -173,7 +146,6 @@ func TestReindexReportsDroppedChunks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newStoreWithProvider returned error: %v", err)
 	}
-
 	stageAndPromote(
 		t,
 		store,
@@ -201,21 +173,20 @@ func TestReindexReportsDroppedChunks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reindex returned error: %v", err)
 	}
-
 	if len(provider.batches) != 1 || len(provider.batches[0]) != 2 {
 		t.Fatalf("embed batches = %v, want one packed batch with two inputs", provider.batches)
 	}
-
 	if len(reports) != 1 {
 		t.Fatalf("progress reports = %d, want 1", len(reports))
 	}
-
 	if reports[0].ChunksDropped != 1 {
 		t.Fatalf("ChunksDropped = %d, want 1", reports[0].ChunksDropped)
 	}
-
 	if reports[0].CollectionRowsWritten != 1 {
-		t.Fatalf("CollectionRowsWritten = %d, want 1", reports[0].CollectionRowsWritten)
+		t.Fatalf(
+			"CollectionRowsWritten = %d, want 1",
+			reports[0].CollectionRowsWritten,
+		)
 	}
 }
 
@@ -252,21 +223,20 @@ func TestStageReindexReportsProgressWhenEveryChunkDropped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StageReindex returned error: %v", err)
 	}
-
 	if len(provider.batches) != 1 || len(provider.batches[0]) != 2 {
 		t.Fatalf("embed batches = %v, want one packed batch with two inputs", provider.batches)
 	}
-
 	if len(reports) != 1 {
 		t.Fatalf("progress reports = %d, want 1", len(reports))
 	}
-
 	if reports[0].ChunksDropped != 2 {
 		t.Fatalf("ChunksDropped = %d, want 2", reports[0].ChunksDropped)
 	}
-
 	if reports[0].CollectionRowsWritten != 0 {
-		t.Fatalf("CollectionRowsWritten = %d, want 0", reports[0].CollectionRowsWritten)
+		t.Fatalf(
+			"CollectionRowsWritten = %d, want 0",
+			reports[0].CollectionRowsWritten,
+		)
 	}
 }
 
@@ -281,13 +251,7 @@ func TestReindexSplitsOversizedChunkIntoDistinctRows(t *testing.T) {
 	}
 
 	// A first small index creates the live collection Reindex requires.
-	stageAndPromote(
-		t,
-		store,
-		codebasePath,
-		[]model.StoredChunk{{Content: "seed", RelativePath: "seed.go"}},
-		semantic.CodeColumns(),
-	)
+	stageAndPromote(t, store, codebasePath, []model.StoredChunk{{Content: "seed", RelativePath: "seed.go"}}, semantic.CodeColumns())
 	provider.embedded = nil
 
 	byteBudget := config.EmbedChunkByteBudget(0)
@@ -305,38 +269,27 @@ func TestReindexSplitsOversizedChunkIntoDistinctRows(t *testing.T) {
 	}
 
 	if strings.Join(provider.embedded, "") != content {
-		t.Fatal(
-			"Reindex embedded pieces did not reproduce the content; a child was truncated or lost",
-		)
+		t.Fatal("Reindex embedded pieces did not reproduce the content; a child was truncated or lost")
 	}
-
-	rows, exists, _, err := readRows(
-		filepath.Join(store.root, store.CollectionName(codebasePath), metadataFileName),
-	)
+	rows, exists, _, err := readRows(filepath.Join(store.root, store.CollectionName(codebasePath), metadataFileName))
 	if err != nil {
 		t.Fatalf("readRows returned error: %v", err)
 	}
-
 	if !exists {
 		t.Fatal("collection file is missing after reindex")
 	}
-
 	bigRowIDs := make(map[string]bool)
 	bigPieces := 0
-
 	for index := range rows {
 		if rows[index].RelativePath != "big.go" {
 			continue
 		}
-
 		bigPieces++
 		if bigRowIDs[rows[index].ID] {
 			t.Fatalf("duplicate primary key %q among reindexed split rows", rows[index].ID)
 		}
-
 		bigRowIDs[rows[index].ID] = true
 	}
-
 	if bigPieces < 3 {
 		t.Fatalf("reindexed %d big.go pieces, want at least 3", bigPieces)
 	}
@@ -352,7 +305,6 @@ func TestReindexMissingCollectionSkipsEmbedding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newStoreWithProvider returned error: %v", err)
 	}
-
 	err = store.Reindex(
 		context.Background(),
 		"/tmp/localvec-missing-reindex",
@@ -377,16 +329,13 @@ func TestSplitRowsRoundTripAndCopyWithDistinctIdentities(t *testing.T) {
 	)
 	store, err := newStoreWithProvider(
 		config.Config{StateRoot: t.TempDir()},
-		&fakeEmbeddingProvider{
-			vectors: map[string][]float32{
-				"same": {1, 0},
-			},
-		},
+		&fakeEmbeddingProvider{vectors: map[string][]float32{
+			"same": {1, 0},
+		}},
 	)
 	if err != nil {
 		t.Fatalf("newStoreWithProvider returned error: %v", err)
 	}
-
 	chunks := []model.StoredChunk{
 		{
 			Content:      "same",
@@ -413,33 +362,26 @@ func TestSplitRowsRoundTripAndCopyWithDistinctIdentities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CopyChunks returned error: %v", err)
 	}
-
 	if !slices.Equal(copied, []int{2}) {
 		t.Fatalf("CopyChunks copied %v rows, want [2]", copied)
 	}
-
 	stored, err := store.collectionForName(store.CollectionName(codebasePath), false)
 	if err != nil {
 		t.Fatalf("collectionForName returned error: %v", err)
 	}
-
 	rows, exists, err := stored.snapshot()
 	if err != nil {
 		t.Fatalf("snapshot returned error: %v", err)
 	}
-
 	if !exists {
 		t.Fatal("snapshot reported collection missing")
 	}
-
 	if len(rows) != 2 {
 		t.Fatalf("stored rows = %d, want 2", len(rows))
 	}
-
 	if rows[0].ID == rows[1].ID {
 		t.Fatalf("copied rows share destination ID %q", rows[0].ID)
 	}
-
 	parts := []int32{rows[0].chunk(0).SplitPart, rows[1].chunk(0).SplitPart}
 	slices.Sort(parts)
 	if !slices.Equal(parts, []int32{1, 513}) {
@@ -470,7 +412,6 @@ func TestReindexDeletesPathsBeforeAppending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newStoreWithProvider returned error: %v", err)
 	}
-
 	initial := []model.StoredChunk{
 		{Content: "exact old", RelativePath: "exact.go"},
 		{Content: "prefix one", RelativePath: "conv/a/one"},
@@ -499,11 +440,9 @@ func TestReindexDeletesPathsBeforeAppending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Count returned error: %v", err)
 	}
-
 	if count != 4 {
 		t.Fatalf("Count = %d, want 4", count)
 	}
-
 	exactReuse, err := store.LoadReuseVectorsForPath(
 		context.Background(),
 		store.CollectionName(codebasePath),
@@ -512,11 +451,9 @@ func TestReindexDeletesPathsBeforeAppending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadReuseVectorsForPath returned error: %v", err)
 	}
-
 	if _, found := exactReuse[semantic.ContentVectorKey("exact old")]; found {
 		t.Fatal("deleted exact-path row remained in the collection")
 	}
-
 	if _, found := exactReuse[semantic.ContentVectorKey("replacement")]; !found {
 		t.Fatal("replacement row is missing from the collection")
 	}

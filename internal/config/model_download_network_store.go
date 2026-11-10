@@ -20,7 +20,6 @@ func SetModelDownloadNetworkOverride(path string, override bool) error {
 			slog.Error("unmarshal daemon config failed", "path", path, "err", err)
 			return fmt.Errorf("unmarshal daemon config %s: %w", path, err)
 		}
-
 		if document == nil {
 			document = make(map[string]json.RawMessage)
 		}
@@ -31,17 +30,9 @@ func SetModelDownloadNetworkOverride(path string, override bool) error {
 
 	overrideData, err := json.Marshal(override)
 	if err != nil {
-		slog.Error(
-			"config.model_download_network_override.marshal_failed",
-			"override",
-			override,
-			"err",
-			err,
-		)
-
+		slog.Error("config.model_download_network_override.marshal_failed", "override", override, "err", err)
 		return fmt.Errorf("marshal model download network override %t: %w", override, err)
 	}
-
 	document[modelDownloadNetworkOverrideJSONField] = overrideData
 
 	output, err := json.MarshalIndent(document, "", "  ")
@@ -49,13 +40,10 @@ func SetModelDownloadNetworkOverride(path string, override bool) error {
 		slog.Error("marshal daemon config failed", "path", path, "err", err)
 		return fmt.Errorf("marshal daemon config %s: %w", path, err)
 	}
-
 	output = append(output, '\n')
 	if err := writePersistedConfig(path, output); err != nil {
 		return err
 	}
-
 	slog.Info("config.model_download_network_override.set", "path", path, "override", override)
-
 	return nil
 }

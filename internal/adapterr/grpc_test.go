@@ -22,16 +22,8 @@ func TestIsGRPCUnavailable(t *testing.T) {
 	}{
 		{"nil", nil, false},
 		{"unavailable", status.Error(codes.Unavailable, "connection refused"), true},
-		{
-			"deadline exceeded",
-			status.Error(codes.DeadlineExceeded, "context deadline exceeded"),
-			true,
-		},
-		{
-			"wrapped unavailable",
-			fmt.Errorf("dial: %w", status.Error(codes.Unavailable, "down")),
-			true,
-		},
+		{"deadline exceeded", status.Error(codes.DeadlineExceeded, "context deadline exceeded"), true},
+		{"wrapped unavailable", fmt.Errorf("dial: %w", status.Error(codes.Unavailable, "down")), true},
 		{"not found", status.Error(codes.NotFound, "missing"), false},
 		{"internal", status.Error(codes.Internal, "boom"), false},
 		{"plain error", errors.New("not a status"), false},

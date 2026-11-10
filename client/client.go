@@ -13,16 +13,12 @@ import (
 )
 
 // DialDaemon creates a gRPC client connection to the local daemon socket.
-func DialDaemon(
-	ctx context.Context,
-	socketPath string,
-) (*grpc.ClientConn, lmsemanticsearchv1.SemanticSearchDaemonServiceClient, error) {
+func DialDaemon(ctx context.Context, socketPath string) (*grpc.ClientConn, lmsemanticsearchv1.SemanticSearchDaemonServiceClient, error) {
 	connection, daemonClient, err := grpcutil.DialDaemon(ctx, socketPath)
 	if err != nil {
 		slog.ErrorContext(ctx, "dial daemon client failed", "socket_path", socketPath, "err", err)
 		return nil, nil, fmt.Errorf("dial daemon client: %w", err)
 	}
-
 	return connection, daemonClient, nil
 }
 
@@ -33,6 +29,5 @@ func ResolveSocketPath() string {
 		slog.Error("resolve daemon socket path failed", "err", err)
 		return ""
 	}
-
 	return cfg.SocketPath
 }

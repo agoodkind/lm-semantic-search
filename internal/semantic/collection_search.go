@@ -32,7 +32,6 @@ func (hit CollectionHit) Scalar(column string) (collection.ScalarCell, bool) {
 			return cell, true
 		}
 	}
-
 	return collection.AbsentCell(column), false
 }
 
@@ -57,94 +56,56 @@ type CollectionSearch struct {
 // rows in the same order, and a smaller limit returns a prefix of a larger
 // one. The filter restricts one fixed-depth ranking natively, and every
 // membership set binds as one template parameter.
-func (service *Service) SearchCollection(
-	ctx context.Context,
-	search CollectionSearch,
-) ([]CollectionHit, error) {
+func (service *Service) SearchCollection(ctx context.Context, search CollectionSearch) ([]CollectionHit, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	request, err := service.prepareCollectionSearch(ctx, search)
 	if err != nil {
 		return nil, err
 	}
-
 	hits, err := service.collectionStore().Search(ctx, request)
 	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"search collection failed",
-			"collection",
-			request.Collection,
-			"peer",
-			peerInfo.String(),
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "search collection failed", "collection", request.Collection, "peer", peerInfo.String(), "err", err)
 		return nil, fmt.Errorf("search %s: %w", request.Collection, err)
 	}
-
 	return collectionHits(hits, search.Declaration), nil
 }
 
 // prepareCollectionSearch validates a typed search, checks that the collection
 // exists, runs the split part migration, and embeds the query. It returns the
 // store request with the default limit applied.
-func (service *Service) prepareCollectionSearch(
-	ctx context.Context,
-	search CollectionSearch,
-) (collection.SearchRequest, error) {
+func (service *Service) prepareCollectionSearch(ctx context.Context, search CollectionSearch) (collection.SearchRequest, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	var request collection.SearchRequest
 	if !service.Available() {
 		return request, ErrUnavailable
 	}
-
 	collectionName := strings.TrimSpace(search.CollectionName)
 	if collectionName == "" {
 		return request, errors.New("collection name is required")
 	}
-
 	limit := search.Limit
 	if limit <= 0 {
 		limit = defaultCollectionSearchLimit
 	}
-
 	if _, err := collection.Compile(search.Filter); err != nil {
-		slog.ErrorContext(
-			ctx,
-			"compile collection filter failed",
-			"collection",
-			collectionName,
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "compile collection filter failed", "collection", collectionName, "err", err)
 		return request, fmt.Errorf("compile filter for %s: %w", collectionName, err)
 	}
-
-	hasCollection, err := service.hasCollection(
-		ctx,
-		collectionName,
-		"check Milvus collection "+collectionName,
-	)
+	hasCollection, err := service.hasCollection(ctx, collectionName, "check Milvus collection "+collectionName)
 	if err != nil {
 		return request, err
 	}
-
 	if !hasCollection {
 		return request, ErrCollectionMissing
 	}
-
 	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
 		return request, err
 	}
-
 	queryVector, err := service.embedder.Embed(ctx, service.queryTextForEmbedding(search.Query))
 	if err != nil {
 		slog.ErrorContext(ctx, "embed query failed", "peer", peerInfo.String(), "err", err)
 		return request, fmt.Errorf("embed query: %w", err)
 	}
-
 	return collection.SearchRequest{
 		Collection:    collectionName,
 		Query:         search.Query,
@@ -169,12 +130,9 @@ func collectionHits(hits []collection.Hit, declaration collection.Declaration) [
 			if !found {
 				cell = collection.AbsentCell(declared.Name)
 			}
-
 			cells = append(cells, cell)
 		}
-
 		converted = append(converted, CollectionHit{Chunk: chunkFromHit(hit), Scalars: cells})
 	}
-
 	return converted
 }

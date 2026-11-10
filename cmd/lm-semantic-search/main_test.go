@@ -23,12 +23,10 @@ func TestRootNoArgsShowsHelp(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute root help: %v", err)
 	}
-
 	output := stdout.String()
 	if !strings.Contains(output, "Usage:") {
 		t.Fatalf("help output missing Usage: %q", output)
 	}
-
 	if !strings.Contains(output, "codebase") {
 		t.Fatalf("help output missing codebase group: %q", output)
 	}
@@ -42,7 +40,6 @@ func TestRootUnknownCommandErrors(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected unknown command error")
 	}
-
 	if !strings.Contains(err.Error(), "unknown command") {
 		t.Fatalf("error = %q, want unknown command", err.Error())
 	}
@@ -50,7 +47,6 @@ func TestRootUnknownCommandErrors(t *testing.T) {
 
 func TestRootRegistersGroupedCommands(t *testing.T) {
 	root, _, _ := testRoot()
-
 	expected := [][]string{
 		{"codebase", "list"},
 		{"codebase", "status"},
@@ -91,12 +87,14 @@ func TestProfileCommandWritesDaemonConfig(t *testing.T) {
 	}
 
 	root, stdout, _ := testRoot()
-	root.SetArgs([]string{
-		"profile",
-		config.ProfileOffline,
-		"--model",
-		offlinemodel.BGESmall,
-	})
+	root.SetArgs(
+		[]string{
+			"profile",
+			config.ProfileOffline,
+			"--model",
+			offlinemodel.BGESmall,
+		},
+	)
 	if err := root.Execute(); err != nil {
 		t.Fatalf("profile command returned error: %v", err)
 	}
@@ -105,38 +103,34 @@ func TestProfileCommandWritesDaemonConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile returned error: %v", err)
 	}
-
 	var persisted map[string]json.RawMessage
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatalf("Unmarshal returned error: %v", err)
 	}
-
 	var profile string
 	if err := json.Unmarshal(persisted["profile"], &profile); err != nil {
 		t.Fatalf("Unmarshal profile returned error: %v", err)
 	}
-
 	if profile != config.ProfileOffline {
 		t.Fatalf("profile = %q want %q", profile, config.ProfileOffline)
 	}
-
 	var offlineModel string
 	if err := json.Unmarshal(persisted["offlineEmbeddingModel"], &offlineModel); err != nil {
 		t.Fatalf("Unmarshal offlineEmbeddingModel returned error: %v", err)
 	}
-
 	if offlineModel != offlinemodel.BGESmall {
-		t.Fatalf("offlineEmbeddingModel = %q want %q", offlineModel, offlinemodel.BGESmall)
+		t.Fatalf(
+			"offlineEmbeddingModel = %q want %q",
+			offlineModel,
+			offlinemodel.BGESmall,
+		)
 	}
-
 	if string(persisted["embeddingModel"]) != `"existing-model"` {
 		t.Fatalf("embeddingModel was not preserved: %s", persisted["embeddingModel"])
 	}
-
 	if _, found := persisted["futureField"]; !found {
 		t.Fatal("futureField was not preserved")
 	}
-
 	if !strings.Contains(stdout.String(), configPath) {
 		t.Fatalf("profile output does not name config path: %q", stdout.String())
 	}
@@ -145,11 +139,9 @@ func TestProfileCommandWritesDaemonConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Default returned error: %v", err)
 	}
-
 	if resolved.IndexBackend != config.IndexBackendLocal {
 		t.Fatalf("IndexBackend = %q want %q", resolved.IndexBackend, config.IndexBackendLocal)
 	}
-
 	if resolved.EmbeddingProvider != config.EmbeddingProviderONNX {
 		t.Fatalf(
 			"EmbeddingProvider = %q want %q",
@@ -176,7 +168,6 @@ func TestProfileCommandRejectsUnknownModelWithoutWriting(t *testing.T) {
 	if err == nil {
 		t.Fatal("profile command returned no error")
 	}
-
 	wantError := `validate offline model: offline embedding model "unknown" ` +
 		`is not supported; use "embeddinggemma" or "bge-small"`
 	if err.Error() != wantError {
@@ -187,7 +178,6 @@ func TestProfileCommandRejectsUnknownModelWithoutWriting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile returned error: %v", err)
 	}
-
 	if string(data) != string(initialData) {
 		t.Fatalf("config changed after invalid model: %q", data)
 	}
@@ -201,21 +191,21 @@ func TestProfileCommandRejectsModelForStandard(t *testing.T) {
 	configPath := filepath.Join(configRoot, "config.json")
 
 	root, _, _ := testRoot()
-	root.SetArgs([]string{
-		"profile",
-		config.ProfileStandard,
-		"--model",
-		offlinemodel.BGESmall,
-	})
+	root.SetArgs(
+		[]string{
+			"profile",
+			config.ProfileStandard,
+			"--model",
+			offlinemodel.BGESmall,
+		},
+	)
 	err := root.Execute()
 	if err == nil {
 		t.Fatal("profile command returned no error")
 	}
-
 	if err.Error() != "--model only applies to the offline profile" {
 		t.Fatalf("error = %q", err.Error())
 	}
-
 	if _, err := os.Stat(configPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("config exists after rejected model or stat failed: %v", err)
 	}
@@ -232,12 +222,14 @@ func TestProfileCommandWritesModelOverNullConfig(t *testing.T) {
 	}
 
 	root, _, _ := testRoot()
-	root.SetArgs([]string{
-		"profile",
-		config.ProfileOffline,
-		"--model",
-		offlinemodel.BGESmall,
-	})
+	root.SetArgs(
+		[]string{
+			"profile",
+			config.ProfileOffline,
+			"--model",
+			offlinemodel.BGESmall,
+		},
+	)
 	if err := root.Execute(); err != nil {
 		t.Fatalf("profile command returned error: %v", err)
 	}
@@ -246,16 +238,13 @@ func TestProfileCommandWritesModelOverNullConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile returned error: %v", err)
 	}
-
 	var persisted map[string]string
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatalf("Unmarshal returned error: %v", err)
 	}
-
 	if persisted["profile"] != config.ProfileOffline {
 		t.Fatalf("profile = %q want %q", persisted["profile"], config.ProfileOffline)
 	}
-
 	if persisted["offlineEmbeddingModel"] != offlinemodel.BGESmall {
 		t.Fatalf(
 			"offlineEmbeddingModel = %q want %q",
@@ -295,42 +284,38 @@ func TestProfileCommandValidatesArgumentsBeforeWritingConfig(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				configRoot := t.TempDir()
-				t.Setenv("HOME", t.TempDir())
-				t.Setenv("CLAUDE_CONTEXTD_CONFIG_ROOT", configRoot)
-				t.Setenv("CLAUDE_CONTEXT_PROFILE", "")
-				configPath := filepath.Join(configRoot, "config.json")
+		t.Run(testCase.name, func(t *testing.T) {
+			configRoot := t.TempDir()
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("CLAUDE_CONTEXTD_CONFIG_ROOT", configRoot)
+			t.Setenv("CLAUDE_CONTEXT_PROFILE", "")
+			configPath := filepath.Join(configRoot, "config.json")
 
-				root, _, _ := testRoot()
-				root.SetArgs(testCase.arguments)
-				err := root.Execute()
-				if testCase.wantError == "" {
-					if err != nil {
-						t.Fatalf("profile command returned error: %v", err)
-					}
-				} else {
-					if err == nil {
-						t.Fatalf("profile command returned no error, want %q", testCase.wantError)
-					}
-
-					if err.Error() != testCase.wantError {
-						t.Fatalf("error = %q want %q", err.Error(), testCase.wantError)
-					}
+			root, _, _ := testRoot()
+			root.SetArgs(testCase.arguments)
+			err := root.Execute()
+			if testCase.wantError == "" {
+				if err != nil {
+					t.Fatalf("profile command returned error: %v", err)
 				}
-
-				_, statErr := os.Stat(configPath)
-				if testCase.wantConfigFile {
-					if statErr != nil {
-						t.Fatalf("config file was not written: %v", statErr)
-					}
-				} else if !errors.Is(statErr, os.ErrNotExist) {
-					t.Fatalf("config file exists or stat failed: %v", statErr)
+			} else {
+				if err == nil {
+					t.Fatalf("profile command returned no error, want %q", testCase.wantError)
 				}
-			},
-		)
+				if err.Error() != testCase.wantError {
+					t.Fatalf("error = %q want %q", err.Error(), testCase.wantError)
+				}
+			}
+
+			_, statErr := os.Stat(configPath)
+			if testCase.wantConfigFile {
+				if statErr != nil {
+					t.Fatalf("config file was not written: %v", statErr)
+				}
+			} else if !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("config file exists or stat failed: %v", statErr)
+			}
+		})
 	}
 }
 
@@ -342,7 +327,6 @@ func TestCodebaseStatusRequiresPath(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected missing path error")
 	}
-
 	if err.Error() != "codebase status requires PATH" {
 		t.Fatalf("error = %q", err.Error())
 	}
@@ -356,7 +340,6 @@ func TestStatusSinceRejectsZeroDuration(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected --since 0s to fail")
 	}
-
 	if err.Error() != "--since must be positive" {
 		t.Fatalf("error = %q, want --since must be positive", err)
 	}
@@ -367,7 +350,6 @@ func TestHistoricalStatusRejectsMismatchedSocket(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected mismatched socket to fail")
 	}
-
 	if err.Error() != "--socket does not match the configured daemon socket" {
 		t.Fatalf("error = %q", err)
 	}
@@ -378,7 +360,6 @@ func TestMarshalHistoricalStatusSingleLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalHistoricalStatus: %v", err)
 	}
-
 	if output != "Historical status" {
 		t.Fatalf("output = %q, want one status line", output)
 	}
@@ -394,7 +375,6 @@ func TestIndexRejectsWaitOutsideHumanMode(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected --wait with --json to error")
 	}
-
 	if !strings.Contains(err.Error(), "--wait requires human output") {
 		t.Fatalf("error = %q, want --wait requires human output", err.Error())
 	}
@@ -421,7 +401,6 @@ func TestJobGetRequiresID(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected missing job id error")
 	}
-
 	if err.Error() != "job get requires JOB_ID" {
 		t.Fatalf("error = %q", err.Error())
 	}
@@ -434,16 +413,13 @@ func TestVersionCommandPrintsValidatorToken(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("version command returned error: %v", err)
 	}
-
 	output := stdout.String()
 	if !strings.Contains(output, "version:") {
 		t.Fatalf("version output = %q, want version: token", output)
 	}
-
 	if !strings.Contains(output, "commit=") {
 		t.Fatalf("version output = %q, want commit field", output)
 	}
-
 	if !strings.Contains(output, "build_time=") {
 		t.Fatalf("version output = %q, want build_time field", output)
 	}
@@ -457,7 +433,6 @@ func TestDaemonRequiresSubcommand(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected daemon subcommand error")
 	}
-
 	if err.Error() != "daemon requires a subcommand" {
 		t.Fatalf("error = %q", err.Error())
 	}
@@ -477,7 +452,6 @@ func testRoot() (*cobra.Command, *bytes.Buffer, *bytes.Buffer) {
 	root := newRoot("/tmp/lm-semantic-search.sock")
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-
 	return root, stdout, stderr
 }
 

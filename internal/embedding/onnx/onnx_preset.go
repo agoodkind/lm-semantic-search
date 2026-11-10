@@ -27,7 +27,6 @@ func presetArtifacts(
 			preset.Name,
 		)
 	}
-
 	modelDirectory := filepath.Join(cacheRoot, offlineModelCacheDirectory, preset.Name)
 	sources := []struct {
 		rawURL string
@@ -39,17 +38,14 @@ func presetArtifacts(
 	}
 	artifacts := make([]presetArtifact, 0, len(sources))
 	files := cachedModelFiles{modelPath: "", tokenizerPath: ""}
-
 	for _, source := range sources {
 		if source.rawURL == "" {
 			continue
 		}
-
 		filename, err := artifactFilename(source.rawURL)
 		if err != nil {
 			return nil, cachedModelFiles{}, err
 		}
-
 		artifactPath := filepath.Join(modelDirectory, filename)
 		artifacts = append(artifacts, presetArtifact{path: artifactPath, sha256: source.sha256})
 		switch source.rawURL {
@@ -59,7 +55,6 @@ func presetArtifacts(
 			files.tokenizerPath = artifactPath
 		}
 	}
-
 	return artifacts, files, nil
 }
 
@@ -74,31 +69,16 @@ func PresetFilesInstalled(
 	if err != nil {
 		return false, err
 	}
-
 	for _, artifact := range artifacts {
 		installed, installedErr := modeldownload.Installed(ctx, artifact.path, artifact.sha256)
 		if installedErr != nil {
-			slog.ErrorContext(
-				ctx,
-				"onnx.preset_artifact.verify_failed",
-				"path",
-				artifact.path,
-				"err",
-				installedErr,
-			)
-
-			return false, fmt.Errorf(
-				"read or hash preset artifact %s: %w",
-				artifact.path,
-				installedErr,
-			)
+			slog.ErrorContext(ctx, "onnx.preset_artifact.verify_failed", "path", artifact.path, "err", installedErr)
+			return false, fmt.Errorf("read or hash preset artifact %s: %w", artifact.path, installedErr)
 		}
-
 		if !installed {
 			return false, nil
 		}
 	}
-
 	return true, nil
 }
 
@@ -127,6 +107,5 @@ func NewProviderForInstalledPreset(
 	if err != nil {
 		return nil, err
 	}
-
 	return providerForFiles(files, preset)
 }

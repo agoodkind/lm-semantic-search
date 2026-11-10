@@ -16,7 +16,6 @@ func TestRotationConfigPopulatedFromBytes(t *testing.T) {
 	if rot.MaxSizeMB != 5 {
 		t.Fatalf("MaxSizeMB = %d want 5", rot.MaxSizeMB)
 	}
-
 	if (rot == gklog.RotationConfig{}) {
 		t.Fatalf("rotation config is empty; want populated so files rotate")
 	}
@@ -50,11 +49,7 @@ func TestInstallConcernRouterRoutesFilesAndWriteNeverDeletes(t *testing.T) {
 	original := slog.Default()
 	t.Cleanup(func() { slog.SetDefault(original) })
 
-	installConcernRouter(
-		logsDir,
-		logPath,
-		rotationConfig(config.Config{LogRotationMaxBytes: 5 * 1024 * 1024}),
-	)
+	installConcernRouter(logsDir, logPath, rotationConfig(config.Config{LogRotationMaxBytes: 5 * 1024 * 1024}))
 
 	for i := 0; i < 50; i++ {
 		slog.Info("semantic.reindex", "n", i)
@@ -63,15 +58,10 @@ func TestInstallConcernRouterRoutesFilesAndWriteNeverDeletes(t *testing.T) {
 	if _, err := os.Stat(logPath); err != nil {
 		t.Fatalf("combined service log not created at %s: %v", logPath, err)
 	}
-
 	if _, err := os.Stat(filepath.Join(logsDir, "semantic.jsonl")); err != nil {
 		t.Fatalf("per-concern semantic log not created: %v", err)
 	}
-
 	if _, err := os.Stat(unmanagedBackup); err != nil {
-		t.Fatalf(
-			"write path deleted an unrelated backup; retention is not off the hot path: %v",
-			err,
-		)
+		t.Fatalf("write path deleted an unrelated backup; retention is not off the hot path: %v", err)
 	}
 }

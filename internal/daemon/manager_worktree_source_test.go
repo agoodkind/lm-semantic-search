@@ -39,7 +39,6 @@ func newSourceTestConfig(t *testing.T) config.Config {
 	t.Helper()
 
 	stateRoot := t.TempDir()
-
 	cfg := config.Config{
 		StateRoot:         stateRoot,
 		SocketPath:        filepath.Join(stateRoot, "sockets", "lm-semantic-search-daemon.sock"),
@@ -59,25 +58,14 @@ func newSourceTestConfig(t *testing.T) config.Config {
 		HybridMode:        true,
 		SyncIntervalMS:    sourceTestSyncIntervalMS,
 	}
-	for _, path := range []string{
-		cfg.StateRoot,
-		cfg.LogsDir,
-		cfg.MerkleDir,
-		cfg.LocksDir,
-		cfg.SocketsDir,
-		cfg.ChunksDir,
-		cfg.GraphDir,
-		cfg.ContextRoot,
-	} {
+	for _, path := range []string{cfg.StateRoot, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.SocketsDir, cfg.ChunksDir, cfg.GraphDir, cfg.ContextRoot} {
 		if err := store.EnsureDir(path); err != nil {
 			t.Fatalf("State directory creation failed for %s with error %v.", path, err)
 		}
 	}
-
 	if err := store.WriteRegistry(cfg.RegistryPath, model.RegistryFile{}); err != nil {
 		t.Fatalf("The empty registry write to %s failed with error %v.", cfg.RegistryPath, err)
 	}
-
 	return cfg
 }
 
@@ -98,13 +86,7 @@ func runSourceTestGit(t *testing.T, directory string, arguments ...string) {
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf(
-			"The git command with arguments %s failed in directory %s with error %v and command output %s.",
-			strings.Join(arguments, " "),
-			directory,
-			err,
-			output,
-		)
+		t.Fatalf("The git command with arguments %s failed in directory %s with error %v and command output %s.", strings.Join(arguments, " "), directory, err, output)
 	}
 }
 
@@ -115,44 +97,22 @@ func newSourceTestRepository(t *testing.T, worktreeNames ...string) (string, []s
 	if err != nil {
 		t.Fatalf("Temporary directory resolution failed with error %v.", err)
 	}
-
 	repository := filepath.Join(base, "repository")
 	if err := os.MkdirAll(repository, 0o755); err != nil {
 		t.Fatalf("The test could not create directory %s because of error %v.", repository, err)
 	}
-
-	if err := os.WriteFile(
-		filepath.Join(repository, "main.go"),
-		[]byte("package main\n"),
-		0o644,
-	); err != nil {
-		t.Fatalf(
-			"The test could not write the fixture file in directory %s because of error %v.",
-			repository,
-			err,
-		)
+	if err := os.WriteFile(filepath.Join(repository, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("The test could not write the fixture file in directory %s because of error %v.", repository, err)
 	}
-
 	runSourceTestGit(t, repository, "init", "--quiet", "--initial-branch", "main")
 	runSourceTestGit(t, repository, "add", "--all")
-	runSourceTestGit(
-		t,
-		repository,
-		"-c",
-		"commit.gpgsign=false",
-		"commit",
-		"--quiet",
-		"--message",
-		"initial",
-	)
-
+	runSourceTestGit(t, repository, "-c", "commit.gpgsign=false", "commit", "--quiet", "--message", "initial")
 	worktrees := make([]string, 0, len(worktreeNames))
 	for _, name := range worktreeNames {
 		worktree := filepath.Join(base, name)
 		runSourceTestGit(t, repository, "worktree", "add", "--quiet", "-b", name, worktree)
 		worktrees = append(worktrees, worktree)
 	}
-
 	return repository, worktrees
 }
 
@@ -171,7 +131,6 @@ func newWorktreeSourceScene(t *testing.T) *worktreeSourceScene {
 	}
 	scene.start(t)
 	t.Cleanup(func() { scene.stop(t) })
-
 	return scene
 }
 
@@ -182,7 +141,6 @@ func (scene *worktreeSourceScene) start(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager returned error %v.", err)
 	}
-
 	scene.manager = manager
 	scene.server = daemon.NewGRPCServer(manager, nil)
 }
@@ -197,68 +155,39 @@ func (scene *worktreeSourceScene) stop(t *testing.T) {
 	}
 }
 
-func (scene *worktreeSourceScene) startIndex(
-	path string,
-	sourcePath string,
-	startingCommit string,
-) (*pb.StartIndexResponse, error) {
-	return scene.server.StartIndex(
-		context.Background(),
-		&pb.StartIndexRequest{
-			Path:           path,
-			Client:         &pb.ClientInfo{Name: "source-test"},
-			SourcePath:     sourcePath,
-			StartingCommit: startingCommit,
-		},
-	)
+func (scene *worktreeSourceScene) startIndex(path string, sourcePath string, startingCommit string) (*pb.StartIndexResponse, error) {
+	return scene.server.StartIndex(context.Background(), &pb.StartIndexRequest{
+		Path:           path,
+		Client:         &pb.ClientInfo{Name: "source-test"},
+		SourcePath:     sourcePath,
+		StartingCommit: startingCommit,
+	})
 }
 
-func (scene *worktreeSourceScene) mustStartIndex(
-	t *testing.T,
-	path string,
-	sourcePath string,
-	startingCommit string,
-) *pb.StartIndexResponse {
+func (scene *worktreeSourceScene) mustStartIndex(t *testing.T, path string, sourcePath string, startingCommit string) *pb.StartIndexResponse {
 	t.Helper()
 
 	response, err := scene.startIndex(path, sourcePath, startingCommit)
 	if err != nil {
-		t.Fatalf(
-			"StartIndex failed for target %s using source %q and starting commit %q with error %v.",
-			path,
-			sourcePath,
-			startingCommit,
-			err,
-		)
+		t.Fatalf("StartIndex failed for target %s using source %q and starting commit %q with error %v.", path, sourcePath, startingCommit, err)
 	}
-
 	return response
 }
 
 func (scene *worktreeSourceScene) status(t *testing.T, path string) *pb.GetIndexResponse {
 	t.Helper()
 
-	response, err := scene.server.GetIndex(
-		context.Background(),
-		&pb.GetIndexRequest{
-			Path:   path,
-			Client: &pb.ClientInfo{Name: "source-test"},
-		},
-	)
+	response, err := scene.server.GetIndex(context.Background(), &pb.GetIndexRequest{
+		Path:   path,
+		Client: &pb.ClientInfo{Name: "source-test"},
+	})
 	if err != nil {
 		t.Fatalf("GetIndex failed for path %s with error %v.", path, err)
 	}
-
 	return response
 }
 
-func (scene *worktreeSourceScene) requireSource(
-	t *testing.T,
-	path string,
-	wantSourcePath string,
-	wantSourceID string,
-	wantStartingCommit string,
-) {
+func (scene *worktreeSourceScene) requireSource(t *testing.T, path string, wantSourcePath string, wantSourceID string, wantStartingCommit string) {
 	t.Helper()
 
 	codebase := scene.status(t, path).GetCodebase()
@@ -278,34 +207,15 @@ func (scene *worktreeSourceScene) requireSource(
 	}
 }
 
-func (scene *worktreeSourceScene) requireRejected(
-	t *testing.T,
-	path string,
-	sourcePath string,
-	startingCommit string,
-) {
+func (scene *worktreeSourceScene) requireRejected(t *testing.T, path string, sourcePath string, startingCommit string) {
 	t.Helper()
 
 	response, err := scene.startIndex(path, sourcePath, startingCommit)
 	if err == nil {
-		t.Fatalf(
-			"StartIndex accepted an invalid worktree source request for %s with source %q, starting commit %q, and response %v.",
-			path,
-			sourcePath,
-			startingCommit,
-			response,
-		)
+		t.Fatalf("StartIndex accepted an invalid worktree source request for %s with source %q, starting commit %q, and response %v.", path, sourcePath, startingCommit, response)
 	}
-
 	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf(
-			"StartIndex rejected the request for %s with source %q and starting commit %q with unexpected gRPC code %v instead of the expected %v.",
-			path,
-			sourcePath,
-			startingCommit,
-			status.Code(err),
-			codes.InvalidArgument,
-		)
+		t.Fatalf("StartIndex rejected the request for %s with source %q and starting commit %q with unexpected gRPC code %v instead of the expected %v.", path, sourcePath, startingCommit, status.Code(err), codes.InvalidArgument)
 	}
 }
 
@@ -316,7 +226,6 @@ func (scene *worktreeSourceScene) requireUnregistered(t *testing.T, path string)
 	if err != nil {
 		t.Fatalf("ListIndexes returned error %v.", err)
 	}
-
 	for _, codebase := range listed.GetIndexes() {
 		if codebase.GetCanonicalPath() == path {
 			t.Fatalf("A rejected request registered %s as a codebase.", path)
@@ -329,22 +238,14 @@ func (scene *worktreeSourceScene) waitForRedirectingStatus(t *testing.T, path st
 
 	deadline := time.Now().Add(sourceTestStatusTimeout)
 	lastStatus := ""
-
 	for time.Now().Before(deadline) {
 		lastStatus = scene.status(t, path).GetCodebase().GetStatus()
 		if lastStatus == string(model.CodebaseStatusIndexed) {
 			return
 		}
-
 		time.Sleep(sourceTestPollInterval)
 	}
-
-	t.Fatalf(
-		"Codebase %s with last status %q did not have status indexed within %s.",
-		path,
-		lastStatus,
-		sourceTestStatusTimeout,
-	)
+	t.Fatalf("Codebase %s with last status %q did not have status indexed within %s.", path, lastStatus, sourceTestStatusTimeout)
 }
 
 func TestStartIndexRecordsWorktreeSourceAcrossRestart(t *testing.T) {
@@ -357,27 +258,14 @@ func TestStartIndexRecordsWorktreeSourceAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListIndexes returned error %v.", err)
 	}
-
-	if len(listed.GetIndexes()) != 1 ||
-		listed.GetIndexes()[0].GetCanonicalPath() != scene.worktreeA {
-		t.Fatalf(
-			"The registry contains codebases %v instead of only target codebase %s.",
-			listed.GetIndexes(),
-			scene.worktreeA,
-		)
+	if len(listed.GetIndexes()) != 1 || listed.GetIndexes()[0].GetCanonicalPath() != scene.worktreeA {
+		t.Fatalf("The registry contains codebases %v instead of only target codebase %s.", listed.GetIndexes(), scene.worktreeA)
 	}
 
 	wantLine := "worktree_source_path=" + scene.repository +
 		" worktree_source_id= worktree_starting_commit=" + sourceTestStartingCommit
-	if displayText := scene.status(t, scene.worktreeA).GetDisplayText(); !strings.Contains(
-		displayText,
-		wantLine,
-	) {
-		t.Fatalf(
-			"The status text %q does not contain the expected worktree source line %q.",
-			displayText,
-			wantLine,
-		)
+	if displayText := scene.status(t, scene.worktreeA).GetDisplayText(); !strings.Contains(displayText, wantLine) {
+		t.Fatalf("The status text %q does not contain the expected worktree source line %q.", displayText, wantLine)
 	}
 
 	scene.stop(t)
@@ -409,10 +297,7 @@ func TestStartIndexReplacesWorktreeSourceWithRegisteredSource(t *testing.T) {
 	scene.mustStartIndex(t, scene.worktreeA, scene.repository, sourceTestStartingCommit)
 	registeredSource := scene.mustStartIndex(t, scene.worktreeB, "", "")
 	if registeredSource.GetCodebaseId() == "" {
-		t.Fatalf(
-			"StartIndex returned no codebase identifier for source worktree %s.",
-			scene.worktreeB,
-		)
+		t.Fatalf("StartIndex returned no codebase identifier for source worktree %s.", scene.worktreeB)
 	}
 
 	scene.mustStartIndex(t, scene.worktreeA, scene.worktreeB, "")
@@ -449,23 +334,10 @@ func TestStartIndexRejectsWorktreeSourceOnRedirectedPath(t *testing.T) {
 	scene := newWorktreeSourceScene(t)
 	nestedDirectory := filepath.Join(scene.worktreeA, "nested")
 	if err := os.MkdirAll(nestedDirectory, 0o755); err != nil {
-		t.Fatalf(
-			"The test could not create directory %s because of error %v.",
-			nestedDirectory,
-			err,
-		)
+		t.Fatalf("The test could not create directory %s because of error %v.", nestedDirectory, err)
 	}
-
-	if err := os.WriteFile(
-		filepath.Join(nestedDirectory, "nested.go"),
-		[]byte("package nested\n"),
-		0o644,
-	); err != nil {
-		t.Fatalf(
-			"The test could not write the fixture file in directory %s because of error %v.",
-			nestedDirectory,
-			err,
-		)
+	if err := os.WriteFile(filepath.Join(nestedDirectory, "nested.go"), []byte("package nested\n"), 0o644); err != nil {
+		t.Fatalf("The test could not write the fixture file in directory %s because of error %v.", nestedDirectory, err)
 	}
 
 	scene.mustStartIndex(t, scene.worktreeA, "", "")

@@ -14,14 +14,7 @@ type semanticReader interface {
 	Available() bool
 	semanticResidencyReader
 	CollectionName(codebasePath string) string
-	Search(
-		ctx context.Context,
-		codebasePath string,
-		query string,
-		limit int32,
-		extensionFilter []string,
-		relativePathPrefix string,
-	) ([]model.StoredChunk, error)
+	Search(ctx context.Context, codebasePath string, query string, limit int32, extensionFilter []string, relativePathPrefix string) ([]model.StoredChunk, error)
 	Count(ctx context.Context, codebasePath string) (int32, error)
 	semanticCollectionInspector
 	HasCollectionForPath(ctx context.Context, codebasePath string) (bool, error)
@@ -38,10 +31,7 @@ type semanticCollectionInspector interface {
 	InspectCollection(ctx context.Context, collectionName string) (semantic.CollectionFacts, error)
 	// DescribeScalarColumns reports the declared scalar columns of a stored
 	// collection. exists is false when the collection is absent.
-	DescribeScalarColumns(
-		ctx context.Context,
-		collectionName string,
-	) (columns []collection.ScalarColumn, exists bool, err error)
+	DescribeScalarColumns(ctx context.Context, collectionName string) (columns []collection.ScalarColumn, exists bool, err error)
 }
 
 // semanticHealthReader probes whether search can serve a query, both globally
@@ -56,10 +46,7 @@ type semanticHealthReader interface {
 	ProbeHealth(ctx context.Context) error
 	// ObserveCollection returns readiness and, only when ready, the row count
 	// from one protected observation. It never starts a collection load.
-	ObserveCollection(
-		ctx context.Context,
-		codebasePath string,
-	) (semantic.CollectionObservation, error)
+	ObserveCollection(ctx context.Context, codebasePath string) (semantic.CollectionObservation, error)
 	// CollectionState is retained for callers that need only existence and loaded
 	// state. New status surfaces use ObserveCollection.
 	CollectionState(ctx context.Context, codebasePath string) (exists bool, loaded bool, err error)
@@ -69,48 +56,17 @@ type semanticHealthReader interface {
 // out of collections so a build or reindex can skip the embedder for chunks
 // whose content is unchanged.
 type semanticReuseLoader interface {
-	LoadReuseVectors(
-		ctx context.Context,
-		collectionNames []string,
-	) (map[string]model.ReuseVector, error)
-	LoadReuseVectorsForPath(
-		ctx context.Context,
-		collectionName string,
-		relativePath string,
-	) (map[string]model.ReuseVector, error)
-	LoadReuseVectorsForContents(
-		ctx context.Context,
-		collectionName string,
-		chunks []model.StoredChunk,
-	) (map[string]model.ReuseVector, error)
-	LoadReuseVectorsForContentsFrom(
-		ctx context.Context,
-		collectionNames []string,
-		chunks []model.StoredChunk,
-	) (map[string]model.ReuseVector, error)
+	LoadReuseVectors(ctx context.Context, collectionNames []string) (map[string]model.ReuseVector, error)
+	LoadReuseVectorsForPath(ctx context.Context, collectionName string, relativePath string) (map[string]model.ReuseVector, error)
+	LoadReuseVectorsForContents(ctx context.Context, collectionName string, chunks []model.StoredChunk) (map[string]model.ReuseVector, error)
+	LoadReuseVectorsForContentsFrom(ctx context.Context, collectionNames []string, chunks []model.StoredChunk) (map[string]model.ReuseVector, error)
 }
 
 // semanticWriter is the slice that mutates the live or staging collection.
 type semanticWriter interface {
 	PinStaging(ctx context.Context, codebasePath string) (semantic.CollectionPin, error)
-	Reindex(
-		ctx context.Context,
-		codebasePath string,
-		addedOrModifiedChunks []model.StoredChunk,
-		removal semantic.Removal,
-		progress func(semantic.Progress),
-		reuse map[string]model.ReuseVector,
-		columnSet semantic.StoreColumnSet,
-	) error
-	StageReindex(
-		ctx context.Context,
-		codebasePath string,
-		chunks []model.StoredChunk,
-		removal semantic.Removal,
-		progress func(semantic.Progress),
-		reuse map[string]model.ReuseVector,
-		columnSet semantic.StoreColumnSet,
-	) error
+	Reindex(ctx context.Context, codebasePath string, addedOrModifiedChunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string]model.ReuseVector, columnSet semantic.StoreColumnSet) error
+	StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal semantic.Removal, progress func(semantic.Progress), reuse map[string]model.ReuseVector, columnSet semantic.StoreColumnSet) error
 	PromoteStaging(ctx context.Context, codebasePath string) error
 	CopyChunks(ctx context.Context, codebasePath string, copies []semantic.ChunkCopy) ([]int, error)
 	PruneToCurrent(ctx context.Context, codebasePath string, currentRelativePaths []string) error

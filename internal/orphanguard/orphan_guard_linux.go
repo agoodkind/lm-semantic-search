@@ -22,14 +22,7 @@ func parentDeathSignal(ctx context.Context, parentPID int) <-chan struct{} {
 	ch := make(chan struct{})
 	pidfd, err := unix.PidfdOpen(parentPID, 0)
 	if err != nil {
-		slog.WarnContext(
-			ctx,
-			"pidfd_open unavailable; falling back to polling parent pid",
-			"parent_pid",
-			parentPID,
-			"err",
-			err,
-		)
+		slog.WarnContext(ctx, "pidfd_open unavailable; falling back to polling parent pid", "parent_pid", parentPID, "err", err)
 		goSafeOrphan(ctx, func() { pollParentDeath(ctx, ch) })
 		return ch
 	}

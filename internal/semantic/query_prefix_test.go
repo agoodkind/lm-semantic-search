@@ -7,11 +7,9 @@ import (
 )
 
 func TestQueryTextForEmbeddingAppliesConfiguredPrefix(t *testing.T) {
-	service := &Service{
-		cfg: config.Config{
-			QueryInstructionPrefix: "Instruct: task.\nQuery: ",
-		},
-	}
+	service := &Service{cfg: config.Config{
+		QueryInstructionPrefix: "Instruct: task.\nQuery: ",
+	}}
 	got := service.queryTextForEmbedding("find the retry loop")
 	want := "Instruct: task.\nQuery: find the retry loop"
 	if got != want {

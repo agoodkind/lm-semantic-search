@@ -46,7 +46,6 @@ func LoadRuntime() (Runtime, error) {
 		slog.Warn("ONNX Runtime library is unavailable", "pinned_version", RuntimeVersion)
 		return Runtime{Path: "", Version: ""}, fmt.Errorf("load ONNX Runtime: %w", err)
 	}
-
 	return Runtime{Path: library.Path, Version: library.Version}, nil
 }
 
@@ -58,23 +57,16 @@ func ModelInstalled(cacheRoot string, name string) (bool, error) {
 		slog.Warn("check local embedding model failed", "model", name, "err", err)
 		return false, fmt.Errorf("check local embedding model %q: %w", name, err)
 	}
-
 	return present, nil
 }
 
 // InstallModel downloads every missing or checksum-mismatched file of a model
 // into cacheRoot through httpClient.
-func InstallModel(
-	ctx context.Context,
-	httpClient *http.Client,
-	cacheRoot string,
-	name string,
-) error {
+func InstallModel(ctx context.Context, httpClient *http.Client, cacheRoot string, name string) error {
 	if err := onnx.InstallModelFiles(ctx, httpClient, cacheRoot, name); err != nil {
 		slog.ErrorContext(ctx, "install local embedding model failed", "model", name, "err", err)
 		return fmt.Errorf("install local embedding model %q: %w", name, err)
 	}
-
 	return nil
 }
 
@@ -104,7 +96,6 @@ func InstallModelWithProgress(
 		slog.ErrorContext(ctx, "install local embedding model failed", "model", name, "err", err)
 		return fmt.Errorf("install local embedding model %q: %w", name, err)
 	}
-
 	return nil
 }
 
@@ -117,48 +108,33 @@ func InstallRuntime(ctx context.Context, httpClient *http.Client, directory stri
 	if strings.TrimSpace(directory) == "" {
 		return errors.New("install ONNX Runtime: directory is required")
 	}
-
 	archive, err := onnxruntimedist.ArchiveFor(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		slog.ErrorContext(ctx, "resolve ONNX Runtime archive failed", "err", err)
 		return fmt.Errorf("install ONNX Runtime: %w", err)
 	}
-
 	names, err := onnxruntimedist.LibraryNamesFor(runtime.GOOS)
 	if err != nil {
 		slog.ErrorContext(ctx, "resolve ONNX Runtime library names failed", "err", err)
 		return fmt.Errorf("install ONNX Runtime: %w", err)
 	}
-
 	workDirectory, err := os.MkdirTemp("", "lms-onnxruntime-install.")
 	if err != nil {
 		slog.ErrorContext(ctx, "create ONNX Runtime download directory failed", "err", err)
 		return fmt.Errorf("install ONNX Runtime: %w", err)
 	}
-
 	defer func() { _ = os.RemoveAll(workDirectory) }()
 	archiveDirectory, err := onnxruntimedist.FetchArchive(ctx, httpClient, archive, workDirectory)
 	if err != nil {
 		return fmt.Errorf("install ONNX Runtime: %w", err)
 	}
-
 	if err := os.MkdirAll(directory, runtimeDirectoryMode); err != nil {
-		slog.ErrorContext(
-			ctx,
-			"create ONNX Runtime directory failed",
-			"directory",
-			directory,
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "create ONNX Runtime directory failed", "directory", directory, "err", err)
 		return fmt.Errorf("install ONNX Runtime into %s: %w", directory, err)
 	}
-
 	if err := onnxruntimedist.InstallLibrary(archiveDirectory, names, directory); err != nil {
 		return fmt.Errorf("install ONNX Runtime into %s: %w", directory, err)
 	}
-
 	return nil
 }
 
@@ -197,7 +173,6 @@ func Describe(name string) (Model, error) {
 		slog.Error("describe local embedding model failed", "model", name, "err", err)
 		return Model{}, fmt.Errorf("describe local embedding model: %w", err)
 	}
-
 	return Model{
 		Name:          preset.Name,
 		Dimension:     int(preset.Dimension),
@@ -212,31 +187,13 @@ func Describe(name string) (Model, error) {
 func New(ctx context.Context, options Options) (embedding.Provider, error) {
 	if strings.TrimSpace(options.CacheRoot) == "" {
 		err := errors.New("local embedding provider requires a cache root")
-		slog.ErrorContext(
-			ctx,
-			"create local embedding provider failed",
-			"model",
-			options.Model,
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "create local embedding provider failed", "model", options.Model, "err", err)
 		return nil, err
 	}
-
 	provider, err := onnx.NewProviderForModel(ctx, options.Model, options.CacheRoot)
 	if err != nil {
-		slog.ErrorContext(
-			ctx,
-			"create local embedding provider failed",
-			"model",
-			options.Model,
-			"err",
-			err,
-		)
-
+		slog.ErrorContext(ctx, "create local embedding provider failed", "model", options.Model, "err", err)
 		return nil, fmt.Errorf("create local embedding provider: %w", err)
 	}
-
 	return provider, nil
 }

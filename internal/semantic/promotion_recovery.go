@@ -10,24 +10,19 @@ import (
 )
 
 func (service *Service) recoverInterruptedPromotions(ctx context.Context) error {
-	collections, err := service.milvus.ListCollections(ctx, milvusclient.NewListCollectionOption())
+	collections, err := service.milvus.ListCollections(
+		ctx,
+		milvusclient.NewListCollectionOption(),
+	)
 	if err != nil {
 		wrappedErr := fmt.Errorf("list collections for promotion recovery: %w", err)
-		slog.ErrorContext(
-			ctx,
-			"list collections for promotion recovery failed",
-			"error",
-			wrappedErr,
-		)
-
+		slog.ErrorContext(ctx, "list collections for promotion recovery failed", "error", wrappedErr)
 		return wrappedErr
 	}
-
 	for _, recoveryName := range collections {
 		if !isRecoveryCollection(recoveryName) {
 			continue
 		}
-
 		liveName := strings.TrimSuffix(recoveryName, recoveryCollectionSuffix)
 		stagingName := stagingCollectionName(liveName)
 		maintenance, maintainErr := service.residency.Maintain(
@@ -39,14 +34,12 @@ func (service *Service) recoverInterruptedPromotions(ctx context.Context) error 
 		if maintainErr != nil {
 			return maintainErr
 		}
-
 		recoverErr := service.recoverPromotionNames(ctx, liveName, recoveryName)
 		maintenance.ReleaseContext(ctx)
 		if recoverErr != nil {
 			return recoverErr
 		}
 	}
-
 	return nil
 }
 
@@ -59,10 +52,8 @@ func (service *Service) recoverPromotionNames(
 	if err != nil {
 		return err
 	}
-
 	if hasLive {
 		return service.dropIfExists(ctx, recoveryName)
 	}
-
 	return service.renameCollection(ctx, recoveryName, liveName)
 }

@@ -21,20 +21,10 @@ func StatInode(path string) (InodeRef, error) {
 		slog.Error("stat file for inode failed", "path", path, "err", err)
 		return InodeRef{Device: "", Inode: 0}, fmt.Errorf("stat %s for inode: %w", path, err)
 	}
-
 	ref := inodeFromFileInfo(info)
 	if ref.IsZero() {
-		slog.Warn(
-			"inode identity unsupported; inode tracking falls back to path-only identity",
-			"path",
-			path,
-		)
-
-		return InodeRef{
-			Device: "",
-			Inode:  0,
-		}, fmt.Errorf("stat %s for inode: %w", path, errInodeUnsupported)
+		slog.Warn("inode identity unsupported; inode tracking falls back to path-only identity", "path", path)
+		return InodeRef{Device: "", Inode: 0}, fmt.Errorf("stat %s for inode: %w", path, errInodeUnsupported)
 	}
-
 	return ref, nil
 }

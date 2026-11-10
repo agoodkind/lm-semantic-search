@@ -20,11 +20,8 @@ var constantMetrics = map[string]bool{
 // conversion, and the dump and the reply text read the same.
 func StatusSnapshot(response *pb.GetStatusResponse) statusdisplay.Snapshot {
 	daemon := response.GetDaemon()
-	title := fmt.Sprintf(
-		"lm-semantic-search  version=%s  pid=%d",
-		daemon.GetVersion(),
-		daemon.GetPid(),
-	)
+	title := fmt.Sprintf("lm-semantic-search  version=%s  pid=%d",
+		daemon.GetVersion(), daemon.GetPid())
 
 	counters := make([]statusdisplay.Field, 0, len(response.GetMetrics()))
 	for _, metric := range response.GetMetrics() {
@@ -37,7 +34,6 @@ func StatusSnapshot(response *pb.GetStatusResponse) statusdisplay.Snapshot {
 		for _, metric := range row.GetMetrics() {
 			fields = append(fields, statusField(metric))
 		}
-
 		activity = append(activity, fields)
 	}
 
@@ -59,7 +55,6 @@ func statusIdentity(response *pb.GetStatusResponse) []statusdisplay.Field {
 	if daemon == nil {
 		return nil
 	}
-
 	identity := []statusdisplay.Field{
 		identityField("version", daemon.GetVersion()),
 		identityField("commit", daemon.GetCommit()),
@@ -67,12 +62,9 @@ func statusIdentity(response *pb.GetStatusResponse) []statusdisplay.Field {
 		identityField("socket", daemon.GetSocketPath()),
 	}
 	if readAt := response.GetReadAt(); readAt != nil {
-		identity = append(
-			identity,
-			identityField("read_at", readAt.AsTime().UTC().Format(time.RFC3339Nano)),
-		)
+		identity = append(identity,
+			identityField("read_at", readAt.AsTime().UTC().Format(time.RFC3339Nano)))
 	}
-
 	return identity
 }
 
@@ -94,9 +86,7 @@ func statusRunID(response *pb.GetStatusResponse) string {
 	if daemon == nil {
 		return ""
 	}
-
 	startedAt := daemon.GetStartedAt().AsTime().UnixNano()
-
 	return fmt.Sprintf("%d@%d", daemon.GetPid(), startedAt)
 }
 

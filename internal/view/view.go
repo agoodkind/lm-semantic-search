@@ -168,7 +168,6 @@ func ResolveBreakdown(counts ProgressCounts) OutcomeBreakdown {
 	if unit == "" {
 		unit = "file"
 	}
-
 	embedded := counts.FilesEmbedded
 	oversize := counts.FilesSkippedOversize
 	unreadable := counts.FilesSkippedUnreadable
@@ -180,40 +179,22 @@ func ResolveBreakdown(counts ProgressCounts) OutcomeBreakdown {
 	// FilesTotal, so the denominator and the scope gate fold it in. This keeps
 	// the file tree showing "0 of N processed" during the pre-embed window.
 	changedSet := counts.FilesAdded + counts.FilesModified + counts.FilesRemoved
-	hasFileScope := counts.FilesTotal > 0 || counts.FilesProcessed > 0 || removed > 0 ||
-		changedSet > 0
+	hasFileScope := counts.FilesTotal > 0 || counts.FilesProcessed > 0 || removed > 0 || changedSet > 0
 
 	processed := embedded + unchanged + removed + pending + oversize + unreadable
 	scopeTotal := max(counts.FilesTotal+removed, changedSet)
 	chunksEmbedded, chunksProcessed := resolveChunkTotals(counts)
 	chunksTotal := max(counts.ChunksTotal, chunksProcessed)
-	reuse := resolveReusePresentation(
-		counts.RunMode,
-		counts.ChunksReused,
-		counts.ReuseVectorsLoaded,
-	)
+	reuse := resolveReusePresentation(counts.RunMode, counts.ChunksReused, counts.ReuseVectorsLoaded)
 	hasChunks := hasFileScope || chunksTotal > 0 || chunksProcessed > 0 || reuse.hasReuse
 
 	return OutcomeBreakdown{
-		ScopeLabel: scopeLabelForRunMode(counts.RunMode, unit, scopeTotal, reuse.seededFirstBuild),
-		Processed:  processed,
-		ScopeTotal: scopeTotal,
-		FileRows: breakdownFileRows(
-			hasFileScope,
-			embedded,
-			unchanged,
-			removed,
-			pending,
-			oversize,
-			unreadable,
-		),
+		ScopeLabel:  scopeLabelForRunMode(counts.RunMode, unit, scopeTotal, reuse.seededFirstBuild),
+		Processed:   processed,
+		ScopeTotal:  scopeTotal,
+		FileRows:    breakdownFileRows(hasFileScope, embedded, unchanged, removed, pending, oversize, unreadable),
 		ChunksTotal: chunksTotal,
-		ChunkRows: breakdownChunkRows(
-			hasChunks,
-			chunksEmbedded,
-			counts.ChunksReused,
-			reuse.showReuseRow,
-		),
+		ChunkRows:   breakdownChunkRows(hasChunks, chunksEmbedded, counts.ChunksReused, reuse.showReuseRow),
 	}
 }
 
@@ -226,9 +207,7 @@ func resolveChunkTotals(counts ProgressCounts) (embedded int32, processed int32)
 	if embedded == 0 && counts.ChunksGenerated > 0 {
 		embedded = counts.ChunksGenerated
 	}
-
 	processed = max(counts.ChunksProcessed, counts.ChunksReused+embedded)
-
 	return embedded, processed
 }
 
@@ -254,7 +233,6 @@ func ResolveOverallPercent(counts ProgressCounts, runPercent float64) float64 {
 			return corpusPercent
 		}
 	}
-
 	return runPercent
 }
 
@@ -275,13 +253,9 @@ func ResolvePhasePercent(counts ProgressCounts) float64 {
 	if counts.FilesTotal > 0 {
 		return clampPercent(float64(counts.FilesProcessed) / float64(counts.FilesTotal) * 100)
 	}
-
 	if counts.EmbeddingBatchesTotal > 0 {
-		return clampPercent(
-			float64(counts.EmbeddingBatchesCompleted) / float64(counts.EmbeddingBatchesTotal) * 100,
-		)
+		return clampPercent(float64(counts.EmbeddingBatchesCompleted) / float64(counts.EmbeddingBatchesTotal) * 100)
 	}
-
 	return 0
 }
 
@@ -292,50 +266,34 @@ func clampPercent(percent float64) float64 {
 	if percent < 0 {
 		return 0
 	}
-
 	if percent > 100 {
 		return 100
 	}
-
 	return percent
 }
 
 // breakdownFileRows builds the file children in fixed order, omitting a zero
 // bucket except embedded, which always renders.
-func breakdownFileRows(
-	hasScope bool,
-	embedded int32,
-	unchanged int32,
-	removed int32,
-	pending int32,
-	oversize int32,
-	unreadable int32,
-) []OutcomeRow {
+func breakdownFileRows(hasScope bool, embedded, unchanged, removed, pending, oversize, unreadable int32) []OutcomeRow {
 	if !hasScope {
 		return nil
 	}
-
 	rows := []OutcomeRow{NewOutcomeRow(KindEmbedded, embedded)}
 	if unchanged > 0 {
 		rows = append(rows, NewOutcomeRow(KindUnchanged, unchanged))
 	}
-
 	if removed > 0 {
 		rows = append(rows, NewOutcomeRow(KindRemoved, removed))
 	}
-
 	if pending > 0 {
 		rows = append(rows, NewOutcomeRow(KindPending, pending))
 	}
-
 	if oversize > 0 {
 		rows = append(rows, NewOutcomeRow(KindOversize, oversize))
 	}
-
 	if unreadable > 0 {
 		rows = append(rows, NewOutcomeRow(KindUnreadable, unreadable))
 	}
-
 	return rows
 }
 
@@ -345,12 +303,10 @@ func breakdownChunkRows(hasChunks bool, added, reused int32, showReused bool) []
 	if !hasChunks {
 		return nil
 	}
-
 	rows := []OutcomeRow{NewOutcomeRow(KindAdded, added)}
 	if showReused {
 		rows = append(rows, NewOutcomeRow(KindReused, reused))
 	}
-
 	return rows
 }
 
@@ -377,11 +333,7 @@ type reusePresentation struct {
 // resolveReusePresentation reports how reuse should appear in the shared
 // breakdown. A first build can now load sibling vectors, so first-build reuse is
 // driven by the counters instead of the run mode alone.
-func resolveReusePresentation(
-	runMode string,
-	chunksReused int32,
-	reuseVectorsLoaded int32,
-) reusePresentation {
+func resolveReusePresentation(runMode string, chunksReused int32, reuseVectorsLoaded int32) reusePresentation {
 	hasReuse := chunksReused > 0 || reuseVectorsLoaded > 0
 	switch RunMode(runMode) {
 	case RunModeChanged, RunModeResuming, RunModeForcedReindex:
@@ -412,13 +364,11 @@ func scopeLabelForRunMode(runMode string, unit string, total int32, seededFirstB
 	if total != 1 {
 		plural = unit + "s"
 	}
-
 	switch RunMode(runMode) {
 	case RunModeFirstBuild:
 		if seededFirstBuild {
 			return plural + " (first build, reusing prior vectors)"
 		}
-
 		return plural + " (full build)"
 	case RunModeForcedReindex:
 		return plural + " (forced reindex)"

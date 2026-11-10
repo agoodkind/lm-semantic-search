@@ -26,7 +26,6 @@ func buildSubmoduleRules(ctx context.Context, root string, allowlist []string) s
 		allowedSet: normalizeSubmoduleAllowlist(allowlist),
 	}
 	rules.addGitmodules(ctx, root, "")
-
 	return rules
 }
 
@@ -41,11 +40,9 @@ func (rules submoduleRules) add(relPath string, name string) {
 	if normalizedPath == "" {
 		return
 	}
-
 	if existingName := rules.byPath[normalizedPath]; existingName != "" {
 		return
 	}
-
 	rules.byPath[normalizedPath] = strings.TrimSpace(name)
 }
 
@@ -54,13 +51,10 @@ func (rules submoduleRules) allowed(relRoot string) bool {
 	if normalizedRoot == "" {
 		return false
 	}
-
 	if rules.allowedSet[normalizedRoot] {
 		return true
 	}
-
 	name := rules.byPath[normalizedRoot]
-
 	return name != "" && rules.allowedSet[name]
 }
 
@@ -69,15 +63,9 @@ func (rules submoduleRules) isRoot(relPath string) bool {
 	return found
 }
 
-func (rules submoduleRules) containing(
-	root string,
-	commonDir string,
-	relPath string,
-	absPath string,
-) (string, bool) {
+func (rules submoduleRules) containing(root string, commonDir string, relPath string, absPath string) (string, bool) {
 	normalizedPath := normalizeSubmoduleToken(relPath)
 	bestRoot := ""
-
 	for relRoot := range rules.byPath {
 		if normalizedPath == relRoot || strings.HasPrefix(normalizedPath, relRoot+"/") {
 			if len(relRoot) > len(bestRoot) {
@@ -85,18 +73,15 @@ func (rules submoduleRules) containing(
 			}
 		}
 	}
-
 	if fsRoot, ok := gitworktree.PathInsideSubmodule(root, commonDir, absPath); ok {
 		normalizedFSRoot := normalizeSubmoduleToken(fsRoot)
 		if len(normalizedFSRoot) >= len(bestRoot) {
 			bestRoot = normalizedFSRoot
 		}
 	}
-
 	if bestRoot == "" {
 		return "", false
 	}
-
 	return bestRoot, true
 }
 
@@ -107,10 +92,8 @@ func normalizeSubmoduleAllowlist(values []string) map[string]bool {
 		if normalized == "" {
 			continue
 		}
-
 		allowed[normalized] = true
 	}
-
 	return allowed
 }
 
@@ -119,14 +102,11 @@ func normalizeSubmoduleToken(value string) string {
 	if trimmed == "" || trimmed == "." {
 		return ""
 	}
-
 	cleanedNative := filepath.Clean(filepath.FromSlash(trimmed))
 	cleaned := filepath.ToSlash(cleanedNative)
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") ||
-		filepath.IsAbs(cleanedNative) {
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || filepath.IsAbs(cleanedNative) {
 		return ""
 	}
-
 	return cleaned
 }
 
@@ -135,7 +115,6 @@ func parseGitmodules(ctx context.Context, path string, baseRel string) []submodu
 	if err != nil {
 		return nil
 	}
-
 	decls := make([]submoduleDecl, 0)
 	currentName := ""
 	currentPath := ""
@@ -143,52 +122,38 @@ func parseGitmodules(ctx context.Context, path string, baseRel string) []submodu
 		if currentName == "" || currentPath == "" {
 			currentName = ""
 			currentPath = ""
-
 			return
 		}
-
 		fullPath := currentPath
 		if baseRel != "" {
 			fullPath = baseRel + "/" + currentPath
 		}
-
 		decls = append(decls, submoduleDecl{name: currentName, path: fullPath})
 		currentName = ""
 		currentPath = ""
 	}
-
 	for rawLine := range strings.SplitSeq(string(data), "\n") {
 		line := strings.TrimSpace(rawLine)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
 		}
-
 		if strings.HasPrefix(line, "[") {
 			flush()
 			currentName = submoduleSectionName(line)
 			continue
 		}
-
 		key, value, found := strings.Cut(line, "=")
 		if !found {
 			continue
 		}
-
 		if currentName != "" && strings.EqualFold(strings.TrimSpace(key), "path") {
 			currentPath = unquoteConfigValue(strings.TrimSpace(value))
 		}
 	}
-
 	flush()
 	if len(decls) == 0 && len(data) > 0 {
-		slog.DebugContext(
-			ctx,
-			"indexability: .gitmodules declared no submodule paths",
-			"path",
-			path,
-		)
+		slog.DebugContext(ctx, "indexability: .gitmodules declared no submodule paths", "path", path)
 	}
-
 	return decls
 }
 
@@ -197,11 +162,9 @@ func submoduleSectionName(line string) string {
 	if !strings.HasPrefix(trimmed, "submodule") {
 		return ""
 	}
-
 	_, rest, found := strings.Cut(trimmed, " ")
 	if !found {
 		return ""
 	}
-
 	return unquoteConfigValue(strings.TrimSpace(rest))
 }

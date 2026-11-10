@@ -35,7 +35,6 @@ func newIndexSourceDaemonConfig(t *testing.T) config.Config {
 	if err != nil {
 		t.Fatalf("Socket directory creation under /tmp failed with error %v.", err)
 	}
-
 	t.Cleanup(func() { _ = os.RemoveAll(socketDirectory) })
 	daemonConfig := config.Config{
 		StateRoot:         stateRoot,
@@ -56,7 +55,6 @@ func newIndexSourceDaemonConfig(t *testing.T) config.Config {
 		HybridMode:        true,
 		SyncIntervalMS:    indexSourceSyncIntervalMS,
 	}
-
 	stateDirectories := []string{
 		daemonConfig.StateRoot,
 		daemonConfig.LogsDir,
@@ -71,15 +69,9 @@ func newIndexSourceDaemonConfig(t *testing.T) config.Config {
 			t.Fatalf("Daemon state directory creation at %s failed with error %v.", directory, err)
 		}
 	}
-
 	if err := store.WriteRegistry(daemonConfig.RegistryPath, model.RegistryFile{}); err != nil {
-		t.Fatalf(
-			"The empty registry write at %s failed with error %v.",
-			daemonConfig.RegistryPath,
-			err,
-		)
+		t.Fatalf("The empty registry write at %s failed with error %v.", daemonConfig.RegistryPath, err)
 	}
-
 	return daemonConfig
 }
 
@@ -91,20 +83,10 @@ func startIndexSourceDaemon(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("daemon.NewManager returned error %v.", err)
 	}
-
-	listener, err := (&net.ListenConfig{}).Listen(
-		context.Background(),
-		"unix",
-		daemonConfig.SocketPath,
-	)
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", daemonConfig.SocketPath)
 	if err != nil {
-		t.Fatalf(
-			"The daemon socket listener at %s failed to start with error %v.",
-			daemonConfig.SocketPath,
-			err,
-		)
+		t.Fatalf("The daemon socket listener at %s failed to start with error %v.", daemonConfig.SocketPath, err)
 	}
-
 	server := grpc.NewServer(
 		grpc.MaxRecvMsgSize(grpcutil.MaxMessageBytes),
 		grpc.MaxSendMsgSize(grpcutil.MaxMessageBytes),
@@ -121,7 +103,6 @@ func startIndexSourceDaemon(t *testing.T) string {
 			t.Errorf("Manager.Close returned error %v.", err)
 		}
 	})
-
 	return daemonConfig.SocketPath
 }
 
@@ -142,15 +123,8 @@ func runIndexSourceGit(t *testing.T, directory string, arguments ...string) stri
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf(
-			"The git command with arguments %s in directory %s failed with error %v and output %s.",
-			strings.Join(arguments, " "),
-			directory,
-			err,
-			output,
-		)
+		t.Fatalf("The git command with arguments %s in directory %s failed with error %v and output %s.", strings.Join(arguments, " "), directory, err, output)
 	}
-
 	return strings.TrimSpace(string(output))
 }
 
@@ -161,53 +135,22 @@ func newIndexSourceRepository(t *testing.T) (string, string) {
 	if err != nil {
 		t.Fatalf("Temporary directory resolution failed with error %v.", err)
 	}
-
 	repository := filepath.Join(base, "repository")
 	if err := os.MkdirAll(repository, 0o755); err != nil {
 		t.Fatalf("Repository directory creation at %s failed with error %v.", repository, err)
 	}
-
-	if err := os.WriteFile(
-		filepath.Join(repository, "main.go"),
-		[]byte("package main\n"),
-		0o644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(repository, "main.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatalf("The fixture file write in directory %s failed with error %v.", repository, err)
 	}
-
 	runIndexSourceGit(t, repository, "init", "--quiet", "--initial-branch", "main")
 	runIndexSourceGit(t, repository, "add", "--all")
-	runIndexSourceGit(
-		t,
-		repository,
-		"-c",
-		"commit.gpgsign=false",
-		"commit",
-		"--quiet",
-		"--message",
-		"initial",
-	)
+	runIndexSourceGit(t, repository, "-c", "commit.gpgsign=false", "commit", "--quiet", "--message", "initial")
 	worktree := filepath.Join(base, indexSourceWorktreeBranch)
-	runIndexSourceGit(
-		t,
-		repository,
-		"worktree",
-		"add",
-		"--quiet",
-		"-b",
-		indexSourceWorktreeBranch,
-		worktree,
-	)
-
+	runIndexSourceGit(t, repository, "worktree", "add", "--quiet", "-b", indexSourceWorktreeBranch, worktree)
 	return repository, worktree
 }
 
-func runIndexSourceCLI(
-	t *testing.T,
-	binaryPath string,
-	socketPath string,
-	arguments ...string,
-) []byte {
+func runIndexSourceCLI(t *testing.T, binaryPath string, socketPath string, arguments ...string) []byte {
 	t.Helper()
 
 	command := exec.CommandContext(
@@ -220,15 +163,8 @@ func runIndexSourceCLI(
 	command.Stderr = &standardError
 	output, err := command.Output()
 	if err != nil {
-		t.Fatalf(
-			"The lm-semantic-search command with arguments %s failed with error %v, standard output %s, and standard error %s.",
-			strings.Join(arguments, " "),
-			err,
-			output,
-			standardError.String(),
-		)
+		t.Fatalf("The lm-semantic-search command with arguments %s failed with error %v, standard output %s, and standard error %s.", strings.Join(arguments, " "), err, output, standardError.String())
 	}
-
 	return output
 }
 
@@ -243,56 +179,24 @@ func TestCodebaseIndexRecordsSourcePathAndStartingCommit(t *testing.T) {
 		t,
 		binaryPath,
 		socketPath,
-		"codebase",
-		"index",
-		worktree,
-		"--source-path",
-		repository,
-		"--starting-commit",
-		startingCommit,
+		"codebase", "index", worktree,
+		"--source-path", repository,
+		"--starting-commit", startingCommit,
 	)
 
-	statusOutput := runIndexSourceCLI(
-		t,
-		binaryPath,
-		socketPath,
-		"--json",
-		"codebase",
-		"status",
-		worktree,
-	)
+	statusOutput := runIndexSourceCLI(t, binaryPath, socketPath, "--json", "codebase", "status", worktree)
 	status := &pb.GetIndexResponse{}
 	if err := protojson.Unmarshal(statusOutput, status); err != nil {
-		t.Fatalf(
-			"The parser failed to parse the codebase status output as a GetIndexResponse with error %v. The output was %s.",
-			err,
-			statusOutput,
-		)
+		t.Fatalf("The parser failed to parse the codebase status output as a GetIndexResponse with error %v. The output was %s.", err, statusOutput)
 	}
-
 	codebase := status.GetCodebase()
 	if codebase.GetCanonicalPath() != worktree {
-		t.Fatalf(
-			"The codebase status command reports canonical path %q instead of the worktree %q in output %s.",
-			codebase.GetCanonicalPath(),
-			worktree,
-			statusOutput,
-		)
+		t.Fatalf("The codebase status command reports canonical path %q instead of the worktree %q in output %s.", codebase.GetCanonicalPath(), worktree, statusOutput)
 	}
-
 	if codebase.GetWorktreeSourcePath() != repository {
-		t.Fatalf(
-			"The codebase records source path %q instead of the --source-path value %q.",
-			codebase.GetWorktreeSourcePath(),
-			repository,
-		)
+		t.Fatalf("The codebase records source path %q instead of the --source-path value %q.", codebase.GetWorktreeSourcePath(), repository)
 	}
-
 	if codebase.GetWorktreeStartingCommit() != startingCommit {
-		t.Fatalf(
-			"The codebase records starting commit %q instead of the --starting-commit value %q.",
-			codebase.GetWorktreeStartingCommit(),
-			startingCommit,
-		)
+		t.Fatalf("The codebase records starting commit %q instead of the --starting-commit value %q.", codebase.GetWorktreeStartingCommit(), startingCommit)
 	}
 }

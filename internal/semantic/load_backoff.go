@@ -29,9 +29,7 @@ const (
 // single re-issued request without the collection becoming queryable. It is
 // wrapped alongside ErrCollectionNotReady so the backoff can tell this
 // terminal outcome from the other not-ready errors the load path returns.
-var errCollectionLoadUnrecovered = errors.New(
-	"collection load did not recover after a re-issued load",
-)
+var errCollectionLoadUnrecovered = errors.New("collection load did not recover after a re-issued load")
 
 // milvusMemoryExhaustionMessages are the lowercased texts the Milvus Go client
 // surfaces when a load is refused for memory. The client (merr.Error in
@@ -59,15 +57,12 @@ func milvusMemoryExhaustion(err error) bool {
 	if err == nil {
 		return false
 	}
-
 	lowered := strings.ToLower(err.Error())
-
 	for _, message := range milvusMemoryExhaustionMessages {
 		if strings.Contains(lowered, message) {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -84,7 +79,6 @@ func collectionLoadMemorySignal(err error) bool {
 	if err == nil {
 		return false
 	}
-
 	return errors.Is(err, errCollectionLoadUnrecovered) || milvusMemoryExhaustion(err)
 }
 
@@ -127,13 +121,11 @@ func (backoff *collectionLoadBackoff) admit(ctx context.Context, collectionName 
 	if !backoff.active {
 		return nil
 	}
-
 	now := backoff.now()
 	if !now.Before(backoff.until) {
 		backoff.endLocked(ctx, "pause_elapsed")
 		return nil
 	}
-
 	remaining := backoff.until.Sub(now).Round(time.Second)
 	err := fmt.Errorf(
 		"load of collection %s deferred for %s: %w",
@@ -141,23 +133,14 @@ func (backoff *collectionLoadBackoff) admit(ctx context.Context, collectionName 
 		remaining,
 		ErrCollectionLoadDeferred,
 	)
-	slog.WarnContext(
-		ctx,
-		"semantic.collection_load_deferred",
-		"component",
-		"semantic",
-		"subcomponent",
-		"load",
-		"collection",
-		collectionName,
-		"remaining_ms",
-		remaining.Milliseconds(),
-		"signals",
-		backoff.signals,
-		"err",
-		err,
+	slog.WarnContext(ctx, "semantic.collection_load_deferred",
+		"component", "semantic",
+		"subcomponent", "load",
+		"collection", collectionName,
+		"remaining_ms", remaining.Milliseconds(),
+		"signals", backoff.signals,
+		"err", err,
 	)
-
 	return err
 }
 
@@ -177,58 +160,36 @@ func (backoff *collectionLoadBackoff) noteLoadOutcome(
 		if backoff.active {
 			backoff.endLocked(ctx, "load_succeeded")
 		}
-
 		backoff.interval = 0
-
 		return
 	}
-
 	if !collectionLoadMemorySignal(err) {
 		return
 	}
-
 	now := backoff.now()
 	backoff.interval = nextCollectionLoadBackoffInterval(backoff.interval)
 	backoff.until = now.Add(backoff.interval)
 	backoff.signals++
 	if backoff.active {
-		slog.DebugContext(
-			ctx,
-			"semantic.collection_load_backoff_extended",
-			"component",
-			"semantic",
-			"subcomponent",
-			"load",
-			"collection",
-			collectionName,
-			"pause_ms",
-			backoff.interval.Milliseconds(),
-			"signals",
-			backoff.signals,
-			"err",
-			err,
+		slog.DebugContext(ctx, "semantic.collection_load_backoff_extended",
+			"component", "semantic",
+			"subcomponent", "load",
+			"collection", collectionName,
+			"pause_ms", backoff.interval.Milliseconds(),
+			"signals", backoff.signals,
+			"err", err,
 		)
-
 		return
 	}
-
 	backoff.active = true
 	backoff.since = now
-	slog.WarnContext(
-		ctx,
-		"semantic.collection_load_backoff_started",
-		"component",
-		"semantic",
-		"subcomponent",
-		"load",
-		"collection",
-		collectionName,
-		"pause_ms",
-		backoff.interval.Milliseconds(),
-		"signals",
-		backoff.signals,
-		"err",
-		err,
+	slog.WarnContext(ctx, "semantic.collection_load_backoff_started",
+		"component", "semantic",
+		"subcomponent", "load",
+		"collection", collectionName,
+		"pause_ms", backoff.interval.Milliseconds(),
+		"signals", backoff.signals,
+		"err", err,
 	)
 }
 
@@ -236,19 +197,12 @@ func (backoff *collectionLoadBackoff) noteLoadOutcome(
 // the mutex.
 func (backoff *collectionLoadBackoff) endLocked(ctx context.Context, reason string) {
 	backoff.active = false
-	slog.InfoContext(
-		ctx,
-		"semantic.collection_load_backoff_ended",
-		"component",
-		"semantic",
-		"subcomponent",
-		"load",
-		"reason",
-		reason,
-		"paused_ms",
-		backoff.now().Sub(backoff.since).Milliseconds(),
-		"signals",
-		backoff.signals,
+	slog.InfoContext(ctx, "semantic.collection_load_backoff_ended",
+		"component", "semantic",
+		"subcomponent", "load",
+		"reason", reason,
+		"paused_ms", backoff.now().Sub(backoff.since).Milliseconds(),
+		"signals", backoff.signals,
 	)
 	backoff.signals = 0
 }
@@ -259,11 +213,9 @@ func nextCollectionLoadBackoffInterval(current time.Duration) time.Duration {
 	if current <= 0 {
 		return collectionLoadBackoffInitial
 	}
-
 	next := current * collectionLoadBackoffFactor
 	if next > collectionLoadBackoffMax {
 		return collectionLoadBackoffMax
 	}
-
 	return next
 }

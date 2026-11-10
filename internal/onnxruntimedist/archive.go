@@ -24,7 +24,6 @@ func extractTarGzip(archivePath string, destinationDirectory string) error {
 	if err := os.MkdirAll(destinationDirectory, defaultDirectoryMode); err != nil {
 		return wrapError("create extraction root", err)
 	}
-
 	realRoot, err := filepath.EvalSymlinks(destinationDirectory)
 	if err != nil {
 		return wrapError("resolve extraction root", err)
@@ -34,7 +33,6 @@ func extractTarGzip(archivePath string, destinationDirectory string) error {
 	if err != nil {
 		return wrapError("open tar gzip archive", err)
 	}
-
 	gzipReader, err := gzip.NewReader(archiveFile)
 	if err != nil {
 		_ = archiveFile.Close()
@@ -43,20 +41,16 @@ func extractTarGzip(archivePath string, destinationDirectory string) error {
 
 	pendingLinks := make([]pendingHardLink, 0)
 	tarReader := tar.NewReader(gzipReader)
-
 	for {
 		header, nextErr := tarReader.Next()
 		if errors.Is(nextErr, io.EOF) {
 			break
 		}
-
 		if nextErr != nil {
 			_ = gzipReader.Close()
 			_ = archiveFile.Close()
-
 			return wrapError("read tar entry", nextErr)
 		}
-
 		if err := extractTarEntry(
 			tarReader,
 			header,
@@ -66,7 +60,6 @@ func extractTarGzip(archivePath string, destinationDirectory string) error {
 		); err != nil {
 			_ = gzipReader.Close()
 			_ = archiveFile.Close()
-
 			return err
 		}
 	}
@@ -75,21 +68,17 @@ func extractTarGzip(archivePath string, destinationDirectory string) error {
 		if err := os.Link(link.targetPath, link.path); err != nil {
 			_ = gzipReader.Close()
 			_ = archiveFile.Close()
-
 			return wrapError("create tar hard link", err)
 		}
 	}
-
 	gzipCloseErr := gzipReader.Close()
 	archiveCloseErr := archiveFile.Close()
 	if gzipCloseErr != nil {
 		return wrapError("close gzip stream", gzipCloseErr)
 	}
-
 	if archiveCloseErr != nil {
 		return wrapError("close tar gzip archive", archiveCloseErr)
 	}
-
 	return nil
 }
 
@@ -105,7 +94,6 @@ func extractTarEntry(
 	if err != nil {
 		return err
 	}
-
 	mode := header.FileInfo().Mode().Perm()
 
 	switch header.Typeflag {
@@ -113,10 +101,15 @@ func extractTarEntry(
 		if err := os.MkdirAll(destinationPath, mode); err != nil {
 			return wrapError("create tar directory", err)
 		}
-
 		return verifyRealPathWithinRoot(realRoot, destinationPath)
 	case tar.TypeReg, 0:
-		return extractTarFile(tarReader, realRoot, destinationPath, mode, header.Size)
+		return extractTarFile(
+			tarReader,
+			realRoot,
+			destinationPath,
+			mode,
+			header.Size,
+		)
 	case tar.TypeSymlink:
 		// The target must be a local relative path, so following the link
 		// cannot leave the directory the link lives in. Combined with the real
@@ -126,53 +119,54 @@ func extractTarEntry(
 		if !filepath.IsLocal(linkTarget) {
 			return fmt.Errorf("unsafe symlink target %q", header.Linkname)
 		}
-
 		if err := createParentWithinRoot(realRoot, destinationPath); err != nil {
 			return err
 		}
-
 		// Resolve the real directory the target points into and confirm it stays
 		// within the root. Passing a path derived from the target through
 		// [filepath.EvalSymlinks] follows any symlink an earlier entry planted,
 		// so the finished link cannot resolve out of the extraction root.
-		targetDirectory := filepath.Dir(filepath.Join(filepath.Dir(destinationPath), linkTarget))
+		targetDirectory := filepath.Dir(
+			filepath.Join(filepath.Dir(destinationPath), linkTarget),
+		)
 		realTargetDirectory, resolveErr := filepath.EvalSymlinks(targetDirectory)
 		if resolveErr != nil {
 			return wrapError("resolve tar symlink target", resolveErr)
 		}
-
 		if !pathWithinRoot(realRoot, realTargetDirectory) {
-			return fmt.Errorf("symlink target %q escapes destination", header.Linkname)
+			return fmt.Errorf(
+				"symlink target %q escapes destination",
+				header.Linkname,
+			)
 		}
-
 		if err := os.Symlink(header.Linkname, destinationPath); err != nil {
 			return wrapError("create tar symlink", err)
 		}
-
 		return nil
 	case tar.TypeLink:
-		targetPath, pathErr := safeArchivePath(destinationDirectory, header.Linkname)
+		targetPath, pathErr := safeArchivePath(
+			destinationDirectory,
+			header.Linkname,
+		)
 		if pathErr != nil {
 			return pathErr
 		}
-
 		if err := createParentWithinRoot(realRoot, destinationPath); err != nil {
 			return err
 		}
-
-		*pendingLinks = append(
-			*pendingLinks,
-			pendingHardLink{
-				path:       destinationPath,
-				targetPath: targetPath,
-			},
-		)
-
+		*pendingLinks = append(*pendingLinks, pendingHardLink{
+			path:       destinationPath,
+			targetPath: targetPath,
+		})
 		return nil
 	case tar.TypeXGlobalHeader:
 		return nil
 	default:
-		return fmt.Errorf("unsupported tar entry type %d for %s", header.Typeflag, header.Name)
+		return fmt.Errorf(
+			"unsupported tar entry type %d for %s",
+			header.Typeflag,
+			header.Name,
+		)
 	}
 }
 
@@ -185,28 +179,31 @@ func extractTarFile(
 ) error {
 	slog.Debug("extract tar file", "path", destinationPath)
 	if expectedSize < 0 || expectedSize > maxExtractedFileSize {
-		return fmt.Errorf("tar entry %s has unsupported size %d", destinationPath, expectedSize)
+		return fmt.Errorf(
+			"tar entry %s has unsupported size %d",
+			destinationPath,
+			expectedSize,
+		)
 	}
-
 	if err := createParentWithinRoot(realRoot, destinationPath); err != nil {
 		return err
 	}
-
-	destination, err := os.OpenFile(destinationPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	destination, err := os.OpenFile(
+		destinationPath,
+		os.O_CREATE|os.O_WRONLY|os.O_TRUNC,
+		mode,
+	)
 	if err != nil {
 		return wrapError("create extracted tar file", err)
 	}
-
 	copyErr := copyExactSize(destination, tarReader, expectedSize)
 	closeErr := destination.Close()
 	if copyErr != nil {
 		return copyErr
 	}
-
 	if closeErr != nil {
 		return wrapError("close extracted tar file", closeErr)
 	}
-
 	return nil
 }
 
@@ -220,7 +217,6 @@ func createParentWithinRoot(realRoot string, destinationPath string) error {
 	if err := os.MkdirAll(parent, defaultDirectoryMode); err != nil {
 		return wrapError("create tar entry parent", err)
 	}
-
 	return verifyRealPathWithinRoot(realRoot, parent)
 }
 
@@ -231,11 +227,9 @@ func verifyRealPathWithinRoot(realRoot string, candidatePath string) error {
 	if err != nil {
 		return wrapError("resolve archive entry path", err)
 	}
-
 	if !pathWithinRoot(realRoot, realCandidate) {
 		return fmt.Errorf("archive entry %q escapes destination", candidatePath)
 	}
-
 	return nil
 }
 
@@ -249,10 +243,12 @@ func copyExactSize(
 	if err != nil {
 		return wrapError("copy archive entry", err)
 	}
-
 	if writtenSize != expectedSize {
-		return fmt.Errorf("archive entry copied %d bytes, want %d", writtenSize, expectedSize)
+		return fmt.Errorf(
+			"archive entry copied %d bytes, want %d",
+			writtenSize,
+			expectedSize,
+		)
 	}
-
 	return nil
 }

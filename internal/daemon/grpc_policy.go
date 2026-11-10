@@ -24,11 +24,9 @@ func (server *GRPCServer) UpdateCodebasePolicy(
 	if patchErr != nil {
 		return nil, status.Error(codes.InvalidArgument, patchErr.Error())
 	}
-
 	if argErr := requireNonEmpty(ctx, request.GetPath(), "absolutePath", true); argErr != nil {
 		return nil, argErr
 	}
-
 	requestedPath, pathErr := resolveRequestPath(
 		request.GetPath(),
 		request.GetClient().GetCallerCwd(),
@@ -38,16 +36,19 @@ func (server *GRPCServer) UpdateCodebasePolicy(
 			adapterr.Respond(ctx, adapterr.NewInvalidPath(pathErr.Error(), pathErr)),
 		)
 	}
-
-	codebase, callErr := server.manager.UpdateCodebasePolicy(ctx, requestedPath, patch)
+	codebase, callErr := server.manager.UpdateCodebasePolicy(
+		ctx,
+		requestedPath,
+		patch,
+	)
 	if callErr != nil {
 		if classified := classifyManagerError(requestedPath, callErr); classified != nil {
 			callErr = classified
 		}
-
-		return nil, status.Error(adapterr.Respond(ctx, callErr))
+		return nil, status.Error(
+			adapterr.Respond(ctx, callErr),
+		)
 	}
-
 	server.manager.refreshDependencyHealth(ctx)
 	pbCodebase := server.codebaseWireView(ctx, codebase).codebase
 	health := server.manager.DependencyHealth()
@@ -66,7 +67,6 @@ func (server *GRPCServer) UpdateCodebasePolicy(
 		NeededCount:     0,
 		TotalCount:      0,
 	}
-
 	return &pb.UpdateCodebasePolicyResponse{
 		Codebase:    pbCodebase,
 		DisplayText: server.envelopeText(health, render.MutationAck(ack)),
@@ -77,7 +77,6 @@ func pbClient(client *pb.ClientInfo) model.ClientInfo {
 	if client == nil {
 		return model.ClientInfo{Name: "", PID: 0}
 	}
-
 	return model.ClientInfo{
 		Name: client.GetName(),
 		PID:  client.GetPid(),

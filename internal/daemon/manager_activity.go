@@ -24,7 +24,6 @@ func (manager *Manager) WatcherActivity() []WatcherActivity {
 	if reporter == nil {
 		return nil
 	}
-
 	return reporter.WatcherActivity()
 }
 
@@ -34,11 +33,9 @@ func (manager *Manager) WatcherActivity() []WatcherActivity {
 func (manager *Manager) IndexSlots() (int, int) {
 	snapshot := manager.jobScheduler.Snapshot()
 	inUse := 0
-
 	for _, count := range snapshot.Running {
 		inUse += count
 	}
-
 	return inUse, snapshot.Capacity
 }
 
@@ -66,7 +63,6 @@ const pendingOperationSync = "sync"
 func (manager *Manager) PendingWork() []PendingWork {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-
 	return manager.pendingWorkLocked()
 }
 
@@ -77,26 +73,17 @@ func (manager *Manager) PendingWork() []PendingWork {
 func (manager *Manager) pendingWorkLocked() []PendingWork {
 	pending := make([]PendingWork, 0, len(manager.pendingCodeJobs))
 	for codebaseID := range manager.pendingCodeJobs {
-		pending = append(
-			pending,
-			PendingWork{
-				CodebaseID:    codebaseID,
-				CanonicalPath: manager.codebases[codebaseID].CanonicalPath,
-				Operation:     pendingOperationSync,
-			},
-		)
+		pending = append(pending, PendingWork{
+			CodebaseID:    codebaseID,
+			CanonicalPath: manager.codebases[codebaseID].CanonicalPath,
+			Operation:     pendingOperationSync,
+		})
 	}
-
-	sort.Slice(
-		pending,
-		func(first int, second int) bool {
-			if pending[first].CodebaseID != pending[second].CodebaseID {
-				return pending[first].CodebaseID < pending[second].CodebaseID
-			}
-
-			return pending[first].Operation < pending[second].Operation
-		},
-	)
-
+	sort.Slice(pending, func(first int, second int) bool {
+		if pending[first].CodebaseID != pending[second].CodebaseID {
+			return pending[first].CodebaseID < pending[second].CodebaseID
+		}
+		return pending[first].Operation < pending[second].Operation
+	})
 	return pending
 }

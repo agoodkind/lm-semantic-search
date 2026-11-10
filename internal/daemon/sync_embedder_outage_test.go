@@ -20,18 +20,12 @@ func setupThreeChangedCodebases(t *testing.T) (*Manager, []string) {
 
 	base := t.TempDir()
 	repo2 := filepath.Join(base, "repo2")
-
 	repo3 := filepath.Join(base, "repo3")
 	for _, repo := range []string{repo2, repo3} {
 		if err := os.MkdirAll(repo, 0o755); err != nil {
 			t.Fatalf("MkdirAll %s: %v", repo, err)
 		}
-
-		if err := os.WriteFile(
-			filepath.Join(repo, "main.go"),
-			[]byte("package main\n"),
-			0o644,
-		); err != nil {
+		if err := os.WriteFile(filepath.Join(repo, "main.go"), []byte("package main\n"), 0o644); err != nil {
 			t.Fatalf("WriteFile %s: %v", repo, err)
 		}
 	}
@@ -41,56 +35,39 @@ func setupThreeChangedCodebases(t *testing.T) (*Manager, []string) {
 	// sync persists converges with the file, instead of a canned hash that would
 	// leave the codebase reading as perpetually changed.
 	manager.runner = fakeRunner{
-		index: func(
-			_ context.Context,
-			root string,
-			_ model.IndexConfig,
-			_ func(indexer.Progress),
-		) (
-			indexer.Result,
-			error,
-		) {
+		index: func(_ context.Context, root string, _ model.IndexConfig, _ func(indexer.Progress)) (indexer.Result, error) {
 			content, err := os.ReadFile(filepath.Join(root, "main.go"))
 			if err != nil {
 				return indexer.Result{}, err
 			}
-
 			return indexer.Result{
 				IndexedFiles: 1,
 				TotalChunks:  1,
-				Chunks: []model.StoredChunk{
-					{
-						Content:       string(content),
-						RelativePath:  "main.go",
-						StartLine:     1,
-						EndLine:       1,
-						Language:      "go",
-						FileExtension: ".go",
-					},
-				},
+				Chunks: []model.StoredChunk{{
+					Content:       string(content),
+					RelativePath:  "main.go",
+					StartLine:     1,
+					EndLine:       1,
+					Language:      "go",
+					FileExtension: ".go",
+				}},
 				FileHashes: map[string]string{"main.go": hashText(string(content))},
 			}, nil
 		},
-		indexOne: func(_ context.Context, root string, relativePath string, _ model.IndexConfig) (
-			indexer.OneFileResult,
-			error,
-		) {
+		indexOne: func(_ context.Context, root string, relativePath string, _ model.IndexConfig) (indexer.OneFileResult, error) {
 			content, err := os.ReadFile(filepath.Join(root, relativePath))
 			if err != nil {
 				return indexer.OneFileResult{}, err
 			}
-
 			return indexer.OneFileResult{
-				Chunks: []model.StoredChunk{
-					{
-						Content:       string(content),
-						RelativePath:  relativePath,
-						StartLine:     1,
-						EndLine:       1,
-						Language:      "go",
-						FileExtension: ".go",
-					},
-				},
+				Chunks: []model.StoredChunk{{
+					Content:       string(content),
+					RelativePath:  relativePath,
+					StartLine:     1,
+					EndLine:       1,
+					Language:      "go",
+					FileExtension: ".go",
+				}},
 				FileHash: hashText(string(content)),
 			}, nil
 		},
@@ -98,17 +75,9 @@ func setupThreeChangedCodebases(t *testing.T) (*Manager, []string) {
 
 	repos := []string{repo1, repo2, repo3}
 	for _, repo := range repos {
-		if _, _, _, _, err := manager.StartIndex(
-			context.Background(),
-			repo,
-			testClientInfo(),
-			defaultIndexConfig(),
-			false,
-			emptyAdmissionBudget,
-		); err != nil {
+		if _, _, _, _, err := manager.StartIndex(context.Background(), repo, testClientInfo(), defaultIndexConfig(), false, emptyAdmissionBudget); err != nil {
 			t.Fatalf("StartIndex(%s): %v", repo, err)
 		}
-
 		waitForCodebaseStatus(t, manager, repo, model.CodebaseStatusIndexed)
 	}
 
@@ -116,11 +85,7 @@ func setupThreeChangedCodebases(t *testing.T) (*Manager, []string) {
 	// the next sweep see a real change. The faithful fake above hashes this same
 	// content, so a completed sync converges the snapshot with the file.
 	for _, repo := range repos {
-		if err := os.WriteFile(
-			filepath.Join(repo, "main.go"),
-			[]byte("package main\n// edited\n"),
-			0o644,
-		); err != nil {
+		if err := os.WriteFile(filepath.Join(repo, "main.go"), []byte("package main\n// edited\n"), 0o644); err != nil {
 			t.Fatalf("edit %s: %v", repo, err)
 		}
 	}
@@ -130,13 +95,11 @@ func setupThreeChangedCodebases(t *testing.T) (*Manager, []string) {
 
 func countDaemonSyncJobs(manager *Manager) int {
 	count := 0
-
 	for _, job := range manager.ListJobs("") {
 		if job.Client.Name == "daemon-sync" {
 			count++
 		}
 	}
-
 	return count
 }
 
@@ -148,7 +111,6 @@ func setHealthMode(manager *Manager, mode dependencyMode) {
 
 func drainToIndexed(t *testing.T, manager *Manager, repos []string) {
 	t.Helper()
-
 	for _, repo := range repos {
 		waitForCodebaseStatus(t, manager, repo, model.CodebaseStatusIndexed)
 	}
@@ -183,11 +145,7 @@ func TestRunSyncAllSyncsEveryChangedCodebaseWhenHealthy(t *testing.T) {
 	drainToIndexed(t, manager, repos)
 
 	if got := countDaemonSyncJobs(manager); got != len(repos) {
-		t.Fatalf(
-			"healthy sweep started %d sync jobs, want %d (one per changed codebase)",
-			got,
-			len(repos),
-		)
+		t.Fatalf("healthy sweep started %d sync jobs, want %d (one per changed codebase)", got, len(repos))
 	}
 
 	// A second sweep is a no-op: the synced snapshot converged with the on-disk
@@ -195,11 +153,7 @@ func TestRunSyncAllSyncsEveryChangedCodebaseWhenHealthy(t *testing.T) {
 	syncer.runSyncAll(context.Background(), "test")
 	drainToIndexed(t, manager, repos)
 	if got := countDaemonSyncJobs(manager); got != len(repos) {
-		t.Fatalf(
-			"second healthy sweep started %d sync jobs total, want %d (no re-sync of unchanged codebases)",
-			got,
-			len(repos),
-		)
+		t.Fatalf("second healthy sweep started %d sync jobs total, want %d (no re-sync of unchanged codebases)", got, len(repos))
 	}
 }
 
@@ -246,18 +200,15 @@ func TestPeriodicMaintenanceCannotBlockRecoverySweep(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("mmap maintenance did not start")
 	}
-
 	syncer.runSyncAll(context.Background(), "test")
 	if got := countDaemonSyncJobs(manager); got == 0 {
 		t.Fatal("recovery did not start while mmap maintenance blocked")
 	}
-
 	close(releaseMaintenance)
 	select {
 	case <-maintenanceDone:
 	case <-time.After(time.Second):
 		t.Fatal("maintenance did not finish")
 	}
-
 	drainToIndexed(t, manager, repos)
 }

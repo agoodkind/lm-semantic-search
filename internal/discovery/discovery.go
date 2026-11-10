@@ -34,12 +34,7 @@ type Result struct {
 // The caller supplies the daemon's one shared resolver and the codebase id it
 // keys rules under, so the walk honors the same custom overrides and cached
 // matcher every other indexability decision sees.
-func Discover(
-	ctx context.Context,
-	resolver *indexability.Resolver,
-	codebaseID string,
-	root string,
-) (Result, error) {
+func Discover(ctx context.Context, resolver *indexability.Resolver, codebaseID string, root string) (Result, error) {
 	absoluteRoot, err := filepath.Abs(root)
 	if err != nil {
 		slog.ErrorContext(ctx, "resolve absolute root failed", "root", root, "err", err)
@@ -53,41 +48,33 @@ func Discover(
 			slog.ErrorContext(ctx, "walk cancelled", "path", relativeDir, "err", walkErr)
 			return fmt.Errorf("walk cancelled at %s: %w", relativeDir, walkErr)
 		}
-
 		currentDir := filepath.Join(absoluteRoot, filepath.FromSlash(relativeDir))
 		entries, readErr := os.ReadDir(currentDir)
 		if readErr != nil {
 			slog.ErrorContext(ctx, "read directory failed", "path", currentDir, "err", readErr)
 			return fmt.Errorf("read directory %s: %w", currentDir, readErr)
 		}
-
 		for _, entry := range entries {
 			childRelative := entry.Name()
 			if relativeDir != "" {
 				childRelative = relativeDir + "/" + entry.Name()
 			}
-
 			if resolver.Ignored(ctx, codebaseID, absoluteRoot, childRelative, entry.IsDir()) {
 				continue
 			}
-
 			if entry.IsDir() {
 				if walkErr := walk(childRelative); walkErr != nil {
 					return walkErr
 				}
-
 				continue
 			}
-
 			files = append(files, filepath.Join(absoluteRoot, filepath.FromSlash(childRelative)))
 		}
-
 		return nil
 	}
 	if walkErr := walk(""); walkErr != nil {
 		return Result{}, walkErr
 	}
-
 	slices.Sort(files)
 
 	return Result{Files: files}, nil

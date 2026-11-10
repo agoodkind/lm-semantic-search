@@ -63,10 +63,8 @@ func Options(overrides Overrides) ([]selfupdate.Options, error) {
 			slog.Warn("resolve executable path failed", "err", err)
 			return nil, fmt.Errorf("resolve executable path: %w", err)
 		}
-
 		installDir = filepath.Dir(executablePath)
 	}
-
 	return OptionsForInstallDir(installDir, overrides)
 }
 
@@ -76,12 +74,10 @@ func OptionsForInstallDir(installDir string, overrides Overrides) ([]selfupdate.
 	if installDir == "" {
 		return nil, fmt.Errorf("install dir is required")
 	}
-
 	stateRoot, err := resolveStateRoot(overrides)
 	if err != nil {
 		return nil, err
 	}
-
 	statePath := filepath.Join(stateRoot, updateStateFileName)
 	cacheDir := overrides.CacheDir
 	if strings.TrimSpace(cacheDir) == "" {
@@ -90,20 +86,16 @@ func OptionsForInstallDir(installDir string, overrides Overrides) ([]selfupdate.
 
 	options := make([]selfupdate.Options, 0, len(binaryApplyOrder))
 	for _, binary := range binaryApplyOrder {
-		options = append(
-			options,
-			selfupdate.Options{
-				Config:      configForBinary(binary),
-				Client:      overrides.Client,
-				InstallPath: filepath.Join(installDir, binary),
-				CacheDir:    cacheDir,
-				StatePath:   statePath,
-				DryRun:      overrides.DryRun,
-				Log:         overrides.Log,
-			},
-		)
+		options = append(options, selfupdate.Options{
+			Config:      configForBinary(binary),
+			Client:      overrides.Client,
+			InstallPath: filepath.Join(installDir, binary),
+			CacheDir:    cacheDir,
+			StatePath:   statePath,
+			DryRun:      overrides.DryRun,
+			Log:         overrides.Log,
+		})
 	}
-
 	return options, nil
 }
 
@@ -113,13 +105,11 @@ func CheckOptions(overrides Overrides) (selfupdate.Options, error) {
 	if err != nil {
 		return selfupdate.Options{}, err
 	}
-
 	for _, option := range options {
 		if option.Config.Binary == daemonBinary {
 			return option, nil
 		}
 	}
-
 	return selfupdate.Options{}, fmt.Errorf("daemon update options unavailable")
 }
 
@@ -130,31 +120,22 @@ func NetworkCheckOptions(ctx context.Context, overrides Overrides) (selfupdate.O
 	if err != nil {
 		return selfupdate.Options{}, err
 	}
-
 	option.Config.AuthToken = resolveGitHubToken(ctx, overrides.Log)
-
 	return option, nil
 }
 
 // NetworkOptionsForInstallDir returns OptionsForInstallDir with the resolved
 // GitHub token set on every binary, for an install that queries the release
 // API.
-func NetworkOptionsForInstallDir(
-	ctx context.Context,
-	installDir string,
-	overrides Overrides,
-) ([]selfupdate.Options, error) {
+func NetworkOptionsForInstallDir(ctx context.Context, installDir string, overrides Overrides) ([]selfupdate.Options, error) {
 	options, err := OptionsForInstallDir(installDir, overrides)
 	if err != nil {
 		return nil, err
 	}
-
 	authToken := resolveGitHubToken(ctx, overrides.Log)
-
 	for index := range options {
 		options[index].Config.AuthToken = authToken
 	}
-
 	return options, nil
 }
 
@@ -164,7 +145,6 @@ func StatePath(overrides Overrides) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
 	return filepath.Join(stateRoot, updateStateFileName), nil
 }
 
@@ -177,13 +157,10 @@ func ApplyAll(ctx context.Context, overrides Overrides) (ApplyAllResult, error) 
 	if err != nil {
 		return ApplyAllResult{}, err
 	}
-
 	authToken := resolveGitHubToken(ctx, overrides.Log)
-
 	for index := range options {
 		options[index].Config.AuthToken = authToken
 	}
-
 	result := ApplyAllResult{
 		Results:            make([]BinaryApplyResult, 0, len(options)),
 		UpdateAvailable:    false,
@@ -191,33 +168,25 @@ func ApplyAll(ctx context.Context, overrides Overrides) (ApplyAllResult, error) 
 		DryRun:             overrides.DryRun,
 		LaunchCheckSkipped: false,
 	}
-
 	applyResults, applyErr := selfupdate.ApplyAll(ctx, options)
 	for index, applyResult := range applyResults {
-		result.Results = append(
-			result.Results,
-			BinaryApplyResult{
-				Binary: options[index].Config.Binary,
-				Result: applyResult,
-			},
-		)
+		result.Results = append(result.Results, BinaryApplyResult{
+			Binary: options[index].Config.Binary,
+			Result: applyResult,
+		})
 		result.UpdateAvailable = result.UpdateAvailable || applyResult.UpdateAvailable
 		result.Applied = result.Applied || applyResult.Applied
 		result.DryRun = result.DryRun || applyResult.DryRun
 		result.LaunchCheckSkipped = result.LaunchCheckSkipped || applyResult.LaunchCheckSkipped
 	}
-
 	if applyErr != nil {
 		log := overrides.Log
 		if log == nil {
 			log = slog.Default()
 		}
-
 		log.WarnContext(ctx, "apply binary updates failed", "err", applyErr)
-
 		return result, fmt.Errorf("apply release binaries: %w", applyErr)
 	}
-
 	return result, nil
 }
 
@@ -241,12 +210,10 @@ func resolveStateRoot(overrides Overrides) (string, error) {
 	if strings.TrimSpace(overrides.StateRoot) != "" {
 		return overrides.StateRoot, nil
 	}
-
 	cfg, err := config.Default()
 	if err != nil {
 		slog.Warn("load default config for update state failed", "err", err)
 		return "", fmt.Errorf("load default config: %w", err)
 	}
-
 	return cfg.StateRoot, nil
 }

@@ -63,11 +63,7 @@ func TestNoOpCompletionKeepsBanner(t *testing.T) {
 	manager.health = dependencyHealth{Mode: dependencyEmbedderUnreachable}
 	manager.mu.Unlock()
 
-	manager.updateJobCompleted(
-		context.Background(),
-		job.ID,
-		indexer.Result{IndexedFiles: 0, TotalChunks: 0},
-	)
+	manager.updateJobCompleted(context.Background(), job.ID, indexer.Result{IndexedFiles: 0, TotalChunks: 0})
 
 	if !manager.DependencyHealth().Degraded() {
 		t.Fatal("a no-op completion cleared the banner; want it kept during the outage")
@@ -82,11 +78,7 @@ func TestNoOpCompletionKeepsBanner(t *testing.T) {
 	manager.jobs[job.ID] = embeddedJob
 	manager.mu.Unlock()
 
-	manager.updateJobCompleted(
-		context.Background(),
-		job.ID,
-		indexer.Result{IndexedFiles: 3, TotalChunks: 12},
-	)
+	manager.updateJobCompleted(context.Background(), job.ID, indexer.Result{IndexedFiles: 3, TotalChunks: 12})
 
 	if manager.DependencyHealth().Degraded() {
 		t.Fatal("a completion that embedded did not clear the banner")
@@ -112,20 +104,12 @@ func TestEmbedProgressClearsBanner(t *testing.T) {
 	manager.health = dependencyHealth{Mode: dependencyEmbedderBusy}
 	manager.mu.Unlock()
 
-	manager.updateJobProgress(
-		job.ID,
-		indexer.Progress{FilesTotal: 10, FilesProcessed: 1, FilesEmbedded: 0},
-		"file",
-	)
+	manager.updateJobProgress(job.ID, indexer.Progress{FilesTotal: 10, FilesProcessed: 1, FilesEmbedded: 0}, "file")
 	if !manager.DependencyHealth().Degraded() {
 		t.Fatal("a no-embed progress update cleared the banner; want it kept")
 	}
 
-	manager.updateJobProgress(
-		job.ID,
-		indexer.Progress{FilesTotal: 10, FilesProcessed: 2, FilesEmbedded: 1},
-		"file",
-	)
+	manager.updateJobProgress(job.ID, indexer.Progress{FilesTotal: 10, FilesProcessed: 2, FilesEmbedded: 1}, "file")
 	if manager.DependencyHealth().Degraded() {
 		t.Fatal("an embed-progress update did not clear the banner")
 	}
@@ -152,21 +136,12 @@ func TestDependencyHealthFollowsJobOutcomes(t *testing.T) {
 		t.Fatal("health degraded before any failure, want healthy")
 	}
 
-	manager.updateJobFailed(
-		context.Background(),
-		job.ID,
-		adapterr.NewEmbedderUnreachable(errors.New("connection refused")),
-	)
+	manager.updateJobFailed(context.Background(), job.ID, adapterr.NewEmbedderUnreachable(errors.New("connection refused")))
 
 	health := manager.DependencyHealth()
 	if health.Mode != dependencyEmbedderUnreachable {
-		t.Fatalf(
-			"health mode = %q, want %q after an unreachable failure",
-			health.Mode,
-			dependencyEmbedderUnreachable,
-		)
+		t.Fatalf("health mode = %q, want %q after an unreachable failure", health.Mode, dependencyEmbedderUnreachable)
 	}
-
 	if health.Since.IsZero() {
 		t.Fatal("health Since is zero after degrading, want a timestamp")
 	}
@@ -179,23 +154,17 @@ func TestDependencyHealthFollowsJobOutcomes(t *testing.T) {
 	manager.jobs[job.ID] = recoveredJob
 	manager.mu.Unlock()
 
-	manager.updateJobCompleted(
-		context.Background(),
-		job.ID,
-		indexer.Result{IndexedFiles: 1, TotalChunks: 1},
-	)
+	manager.updateJobCompleted(context.Background(), job.ID, indexer.Result{IndexedFiles: 1, TotalChunks: 1})
 
 	if manager.DependencyHealth().Degraded() {
 		t.Fatal("health still degraded after a completed job, want cleared")
 	}
-
 	// A completed job that embedded a file reached both dependencies, so both
 	// carry a reachability time.
 	recovered := manager.DependencyHealth()
 	if recovered.EmbedderReachableAt.IsZero() {
 		t.Fatal("EmbedderReachableAt is zero after a job embedded a file, want a timestamp")
 	}
-
 	if recovered.StoreReachableAt.IsZero() {
 		t.Fatal("StoreReachableAt is zero after a job wrote to the store, want a timestamp")
 	}
@@ -203,14 +172,9 @@ func TestDependencyHealthFollowsJobOutcomes(t *testing.T) {
 
 func TestNewManagerMarksStoreUnavailableWhenMilvusBootDialFails(t *testing.T) {
 	stateRoot := t.TempDir()
-
 	cfg := config.Config{
-		StateRoot: stateRoot,
-		SocketPath: filepath.Join(
-			stateRoot,
-			"sockets",
-			"lm-semantic-search-daemon.sock",
-		),
+		StateRoot:              stateRoot,
+		SocketPath:             filepath.Join(stateRoot, "sockets", "lm-semantic-search-daemon.sock"),
 		RegistryPath:           filepath.Join(stateRoot, "registry.json"),
 		JobsPath:               filepath.Join(stateRoot, "jobs.jsonl"),
 		EventsPath:             filepath.Join(stateRoot, "events.jsonl"),
@@ -230,21 +194,11 @@ func TestNewManagerMarksStoreUnavailableWhenMilvusBootDialFails(t *testing.T) {
 		SyncIntervalMS:         300000,
 		MaxConcurrentIndexJobs: 1,
 	}
-	for _, path := range []string{
-		cfg.StateRoot,
-		cfg.LogsDir,
-		cfg.MerkleDir,
-		cfg.LocksDir,
-		cfg.SocketsDir,
-		cfg.ChunksDir,
-		cfg.GraphDir,
-		cfg.ContextRoot,
-	} {
+	for _, path := range []string{cfg.StateRoot, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.SocketsDir, cfg.ChunksDir, cfg.GraphDir, cfg.ContextRoot} {
 		if err := store.EnsureDir(path); err != nil {
 			t.Fatalf("EnsureDir returned error: %v", err)
 		}
 	}
-
 	if err := store.WriteRegistry(cfg.RegistryPath, model.RegistryFile{}); err != nil {
 		t.Fatalf("WriteRegistry returned error: %v", err)
 	}
@@ -255,7 +209,6 @@ func TestNewManagerMarksStoreUnavailableWhenMilvusBootDialFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager returned error: %v", err)
 	}
-
 	t.Cleanup(func() {
 		if service, ok := manager.semantic.(*semantic.Service); ok {
 			if closeErr := service.Close(context.Background()); closeErr != nil {
@@ -268,7 +221,6 @@ func TestNewManagerMarksStoreUnavailableWhenMilvusBootDialFails(t *testing.T) {
 	if health.Mode != dependencyStoreUnavailable {
 		t.Fatalf("DependencyHealth().Mode = %q, want %q", health.Mode, dependencyStoreUnavailable)
 	}
-
 	if health.Since.IsZero() {
 		t.Fatal("DependencyHealth().Since is zero, want the boot failure timestamp")
 	}
@@ -281,11 +233,9 @@ func closedDaemonMilvusAddress(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("Listen returned error: %v", err)
 	}
-
 	address := listener.Addr().String()
 	if err := listener.Close(); err != nil {
 		t.Fatalf("Close listener returned error: %v", err)
 	}
-
 	return address
 }

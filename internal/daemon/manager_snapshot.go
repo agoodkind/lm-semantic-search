@@ -76,22 +76,16 @@ func (manager *Manager) StatusSnapshot() StatusSnapshot {
 	// every refresh to hold a few live jobs.
 	schedulerSnapshot := manager.jobScheduler.Snapshot()
 	activeJobs := make([]model.Job, 0, schedulerSnapshot.Capacity)
-
 	for _, job := range manager.jobs {
 		if isTerminalJobState(job.State) {
 			continue
 		}
-
 		job = jobWithSchedulerReason(job, schedulerSnapshot.Reasons)
 		activeJobs = append(activeJobs, job)
 	}
-
-	sort.Slice(
-		activeJobs,
-		func(first int, second int) bool {
-			return activeJobs[first].StartedAt.After(activeJobs[second].StartedAt)
-		},
-	)
+	sort.Slice(activeJobs, func(first int, second int) bool {
+		return activeJobs[first].StartedAt.After(activeJobs[second].StartedAt)
+	})
 	watcher = watcherActivityWithoutRegisteredConverges(watcher, activeJobs)
 
 	return StatusSnapshot{
@@ -116,15 +110,14 @@ func jobWithSchedulerReason(
 		job.SchedulingReason = model.SchedulingReasonUnspecified
 		return job
 	}
-
 	reason, found := reasons[job.ID]
 	if found {
 		job.SchedulingReason = model.CanonicalSchedulingReason(string(reason))
 		return job
 	}
-
-	job.SchedulingReason = model.CanonicalSchedulingReason(string(job.SchedulingReason))
-
+	job.SchedulingReason = model.CanonicalSchedulingReason(
+		string(job.SchedulingReason),
+	)
 	return job
 }
 
@@ -133,13 +126,11 @@ func watcherActivityWithoutRegisteredConverges(
 	activeJobs []model.Job,
 ) []WatcherActivity {
 	registered := make(map[string]struct{})
-
 	for _, job := range activeJobs {
 		if job.Operation == "converge" {
 			registered[job.CodebaseID] = struct{}{}
 		}
 	}
-
 	if len(registered) == 0 {
 		return watcher
 	}
@@ -149,10 +140,8 @@ func watcherActivityWithoutRegisteredConverges(
 		if _, found := registered[activity.CodebaseID]; found {
 			continue
 		}
-
 		filtered = append(filtered, activity)
 	}
-
 	return filtered
 }
 
@@ -164,6 +153,5 @@ func (snapshot StatusSnapshot) CanonicalPaths() map[string]string {
 	for _, view := range snapshot.Codebases {
 		paths[view.Codebase.ID] = view.Codebase.CanonicalPath
 	}
-
 	return paths
 }

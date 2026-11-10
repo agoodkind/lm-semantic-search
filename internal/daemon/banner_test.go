@@ -19,14 +19,9 @@ import (
 // with the matching environment reference.
 func TestRenderHealthBannerVariants(t *testing.T) {
 	t.Parallel()
-	cfg := config.Config{
-		OpenAIBaseURL: "http://localhost:5400/v1",
-		MilvusAddress: "127.0.0.1:19530",
-	}
+	cfg := config.Config{OpenAIBaseURL: "http://localhost:5400/v1", MilvusAddress: "127.0.0.1:19530"}
 
-	if got := render.HealthBanner(
-		resolveBannerView(dependencyHealth{Mode: dependencyHealthy}, cfg),
-	); got != "" {
+	if got := render.HealthBanner(resolveBannerView(dependencyHealth{Mode: dependencyHealthy}, cfg)); got != "" {
 		t.Fatalf("healthy banner = %q, want empty", got)
 	}
 
@@ -36,42 +31,22 @@ func TestRenderHealthBannerVariants(t *testing.T) {
 		wantRef     string
 	}{
 		{dependencyEmbedderUnreachable, "unreachable", "OPENAI_BASE_URL=http://localhost:5400/v1"},
-		{
-			dependencyEmbedderRejected,
-			"rejecting requests",
-			"Check the model name, dimensions, and credentials",
-		},
-		{
-			dependencyEmbedderPaused,
-			"paused to preserve battery",
-			"Leave low power mode or resume the embedding service",
-		},
+		{dependencyEmbedderRejected, "rejecting requests", "Check the model name, dimensions, and credentials"},
+		{dependencyEmbedderPaused, "paused to preserve battery", "Leave low power mode or resume the embedding service"},
 		{dependencyEmbedderBusy, "throttling requests", "OPENAI_BASE_URL=http://localhost:5400/v1"},
 		{dependencyStoreUnavailable, "Vector store unavailable", "MILVUS_ADDRESS=127.0.0.1:19530"},
 	}
 	for _, testCase := range cases {
-		out := render.HealthBanner(
-			resolveBannerView(
-				dependencyHealth{
-					Mode:                testCase.mode,
-					StoreReachableAt:    clock.Now(),
-					EmbedderReachableAt: clock.Now(),
-				},
-				cfg,
-			),
-		)
+		out := render.HealthBanner(resolveBannerView(dependencyHealth{Mode: testCase.mode, StoreReachableAt: clock.Now(), EmbedderReachableAt: clock.Now()}, cfg))
 		if !strings.HasPrefix(out, "🟥 ") {
 			t.Fatalf("%s banner missing the 🟥 marker: %q", testCase.mode, out)
 		}
-
 		if !strings.Contains(out, testCase.wantHeadGot) {
 			t.Fatalf("%s banner missing %q in: %q", testCase.mode, testCase.wantHeadGot, out)
 		}
-
 		if !strings.Contains(out, testCase.wantRef) {
 			t.Fatalf("%s banner missing reference %q in: %q", testCase.mode, testCase.wantRef, out)
 		}
-
 		if strings.Count(out, "🟥") != 1 {
 			t.Fatalf("%s banner should have exactly one marker: %q", testCase.mode, out)
 		}
@@ -114,27 +89,16 @@ func TestListJobsPauseFailureShowsPauseRecoveryGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListJobs returned error: %v", err)
 	}
-
 	text := response.GetDisplayText()
 	if !strings.Contains(text, "paused to preserve battery") {
 		t.Fatalf("ListJobs omitted the battery pause explanation:\n%s", text)
 	}
-
 	if !strings.Contains(text, "Leave low power mode or resume the embedding service") {
 		t.Fatalf("ListJobs omitted pause recovery guidance:\n%s", text)
 	}
-
-	for _, contradictory := range []string{
-		"rejecting requests",
-		"embedding config is fixed",
-		"model name, dimensions, and credentials",
-	} {
+	for _, contradictory := range []string{"rejecting requests", "embedding config is fixed", "model name, dimensions, and credentials"} {
 		if strings.Contains(text, contradictory) {
-			t.Fatalf(
-				"ListJobs included contradictory configuration guidance %q:\n%s",
-				contradictory,
-				text,
-			)
+			t.Fatalf("ListJobs included contradictory configuration guidance %q:\n%s", contradictory, text)
 		}
 	}
 }
@@ -148,17 +112,13 @@ func TestRenderGetJobNoEchoWhenDegraded(t *testing.T) {
 		CanonicalPath: "/repo",
 		Operation:     "index",
 		State:         model.JobStateFailed,
-		Error: &model.JobError{
-			Message:   "embedding endpoint is unreachable; verify OPENAI_BASE_URL",
-			Retryable: true,
-		},
+		Error:         &model.JobError{Message: "embedding endpoint is unreachable; verify OPENAI_BASE_URL", Retryable: true},
 	}
 
 	degraded := render.GetJob(resolveJobEntry(*job, true, ""), true)
 	if strings.Contains(degraded, "Error:") {
 		t.Fatalf("degraded job view echoed the banner cause:\n%s", degraded)
 	}
-
 	if !strings.Contains(degraded, "State: failed, retryable") {
 		t.Fatalf("degraded job view missing retryable state:\n%s", degraded)
 	}
@@ -186,12 +146,7 @@ func TestGetIndexDegradedEnvelope(t *testing.T) {
 	codebase.Status = model.CodebaseStatusIndexing
 	manager.mu.Lock()
 	manager.codebases[codebase.ID] = codebase
-	manager.health = dependencyHealth{
-		Mode:                dependencyEmbedderUnreachable,
-		Since:               clock.Now(),
-		StoreReachableAt:    clock.Now(),
-		EmbedderReachableAt: clock.Now(),
-	}
+	manager.health = dependencyHealth{Mode: dependencyEmbedderUnreachable, Since: clock.Now(), StoreReachableAt: clock.Now(), EmbedderReachableAt: clock.Now()}
 	manager.mu.Unlock()
 
 	server := NewGRPCServer(manager, nil)
@@ -199,21 +154,17 @@ func TestGetIndexDegradedEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIndex returned error: %v", err)
 	}
-
 	text := resp.GetDisplayText()
 
 	if strings.Count(text, "🟥") != 1 {
 		t.Fatalf("want exactly one banner, got:\n%s", text)
 	}
-
 	if !strings.Contains(text, "Embedding server unreachable") {
 		t.Fatalf("missing unreachable banner:\n%s", text)
 	}
-
 	if strings.Contains(text, "❌") {
 		t.Fatalf("a degraded pipeline must not read as a codebase failure:\n%s", text)
 	}
-
 	for _, line := range strings.Split(text, "\n") {
 		if strings.TrimSpace(line) == "" {
 			t.Fatalf("envelope produced a blank line:\n%s", text)
@@ -236,12 +187,7 @@ func TestStartIndexShowsBannerWhenDegraded(t *testing.T) {
 		probeErr:    adapterr.NewEmbedderUnreachable(nil),
 	}
 	manager.mu.Lock()
-	manager.health = dependencyHealth{
-		Mode:                dependencyEmbedderUnreachable,
-		Since:               clock.Now(),
-		StoreReachableAt:    clock.Now(),
-		EmbedderReachableAt: clock.Now(),
-	}
+	manager.health = dependencyHealth{Mode: dependencyEmbedderUnreachable, Since: clock.Now(), StoreReachableAt: clock.Now(), EmbedderReachableAt: clock.Now()}
 	manager.mu.Unlock()
 
 	server := NewGRPCServer(manager, nil)
@@ -249,11 +195,9 @@ func TestStartIndexShowsBannerWhenDegraded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartIndex returned error: %v", err)
 	}
-
 	if !strings.Contains(resp.GetDisplayText(), "🟥") {
 		t.Fatalf("StartIndex display text lacks the degraded banner:\n%s", resp.GetDisplayText())
 	}
-
 	// Let the async index job settle before the test returns, so its checkpoint
 	// writes do not race t.TempDir cleanup.
 	waitForCodebaseSettled(t, manager, repoPath)

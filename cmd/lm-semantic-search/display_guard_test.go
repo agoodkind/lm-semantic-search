@@ -19,35 +19,24 @@ import (
 // already resolved.
 func rawStatusFieldReads(fset *token.FileSet, parsed *ast.File, label string) []string {
 	var violations []string
-	ast.Inspect(
-		parsed,
-		func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-
-			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-
-			if len(call.Args) > 0 {
-				return true
-			}
-
-			if selector.Sel.Name == "GetStatus" || selector.Sel.Name == "GetState" {
-				position := fset.Position(node.Pos())
-				violations = append(
-					violations,
-					label+":"+position.String()+": calls "+selector.Sel.Name,
-				)
-			}
-
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
 			return true
-		},
-	)
-
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if len(call.Args) > 0 {
+			return true
+		}
+		if selector.Sel.Name == "GetStatus" || selector.Sel.Name == "GetState" {
+			position := fset.Position(node.Pos())
+			violations = append(violations, label+":"+position.String()+": calls "+selector.Sel.Name)
+		}
+		return true
+	})
 	return violations
 }
 
@@ -60,23 +49,18 @@ func TestCLIDisplayDoesNotReadRawStatusFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}
-
 	fset := token.NewFileSet()
 	var violations []string
-
 	for _, file := range files {
 		if strings.HasSuffix(file, "_test.go") {
 			continue
 		}
-
 		parsed, parseErr := parser.ParseFile(fset, file, nil, 0)
 		if parseErr != nil {
 			t.Fatalf("parse %s: %v", file, parseErr)
 		}
-
 		violations = append(violations, rawStatusFieldReads(fset, parsed, file)...)
 	}
-
 	if len(violations) > 0 {
 		t.Fatalf("CLI reads raw status fields for display:\n%s", strings.Join(violations, "\n"))
 	}
@@ -121,21 +105,17 @@ func render(codebase *thing) string { return codebase.GetDisplayStatus() }`,
 	}
 
 	for _, testCase := range cases {
-		t.Run(
-			testCase.name,
-			func(t *testing.T) {
-				t.Parallel()
-				fset := token.NewFileSet()
-				parsed, err := parser.ParseFile(fset, "sample.go", testCase.source, 0)
-				if err != nil {
-					t.Fatalf("parse: %v", err)
-				}
-
-				got := rawStatusFieldReads(fset, parsed, "sample.go")
-				if len(got) != testCase.want {
-					t.Fatalf("violations = %d, want %d: %v", len(got), testCase.want, got)
-				}
-			},
-		)
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			fset := token.NewFileSet()
+			parsed, err := parser.ParseFile(fset, "sample.go", testCase.source, 0)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			got := rawStatusFieldReads(fset, parsed, "sample.go")
+			if len(got) != testCase.want {
+				t.Fatalf("violations = %d, want %d: %v", len(got), testCase.want, got)
+			}
+		})
 	}
 }

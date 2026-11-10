@@ -49,23 +49,18 @@ func (options ModelDownloadOptions) withDefaults() ModelDownloadOptions {
 	if options.NetworkSource == nil {
 		options.NetworkSource = defaults.NetworkSource
 	}
-
 	if options.HTTPClient == nil {
 		options.HTTPClient = defaults.HTTPClient
 	}
-
 	if options.Presets == nil {
 		options.Presets = defaults.Presets
 	}
-
 	if options.RecheckInterval <= 0 {
 		options.RecheckInterval = defaults.RecheckInterval
 	}
-
 	if options.RetryInterval <= 0 {
 		options.RetryInterval = defaults.RetryInterval
 	}
-
 	return options
 }
 
@@ -81,13 +76,9 @@ func NewManagerWithOptions(
 	cfg config.Config,
 	options ManagerOptions,
 ) (*Manager, error) {
-	return newManagerWithDependencies(
-		ctx,
-		cfg,
-		managerDependencies{
-			semanticFactory: nil,
-			activitySource:  platformactivity.New(ctx),
-			modelDownload:   options.ModelDownload,
-		},
-	)
+	return newManagerWithDependencies(ctx, cfg, managerDependencies{
+		semanticFactory: nil,
+		activitySource:  platformactivity.New(ctx),
+		modelDownload:   options.ModelDownload,
+	})
 }

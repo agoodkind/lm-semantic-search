@@ -17,7 +17,6 @@ func (manager *Manager) Close(ctx context.Context) error {
 	if err := manager.cancelAndWaitForJobs(ctx); err != nil {
 		return err
 	}
-
 	manager.jobScheduler.Close()
 	manager.closeJobJournal()
 	graphErr := manager.waitForGraphOperations(ctx)
@@ -26,12 +25,10 @@ func (manager *Manager) Close(ctx context.Context) error {
 	if !ok {
 		return graphErr
 	}
-
 	if err := closer.Close(ctx); err != nil {
 		slog.ErrorContext(ctx, "close semantic backend", "err", err)
 		return errors.Join(graphErr, fmt.Errorf("close semantic backend: %w", err))
 	}
-
 	return graphErr
 }
 
@@ -39,47 +36,30 @@ func (manager *Manager) waitForGraphOperations(ctx context.Context) error {
 	manager.graphMutex.Lock()
 	defer manager.graphMutex.Unlock()
 
-	stopWake := context.AfterFunc(
-		ctx,
-		func() {
-			manager.graphMutex.Lock()
-			defer manager.graphMutex.Unlock()
-
-			for _, state := range manager.graphLifecycle {
-				state.idle.Broadcast()
-			}
-		},
-	)
+	stopWake := context.AfterFunc(ctx, func() {
+		manager.graphMutex.Lock()
+		defer manager.graphMutex.Unlock()
+		for _, state := range manager.graphLifecycle {
+			state.idle.Broadcast()
+		}
+	})
 	defer stopWake()
 
 	for {
 		var busy *graphLifecycleState
-
 		for _, state := range manager.graphLifecycle {
 			state.clearing = true
 			if state.active > 0 {
 				busy = state
 			}
 		}
-
 		if busy == nil {
 			return nil
 		}
-
 		if err := ctx.Err(); err != nil {
-			slog.ErrorContext(
-				ctx,
-				"close context ended while graph index operation was still running",
-				"err",
-				err,
-			)
-
-			return fmt.Errorf(
-				"close manager after context ended while graph index operation was still running: %w",
-				err,
-			)
+			slog.ErrorContext(ctx, "close context ended while graph index operation was still running", "err", err)
+			return fmt.Errorf("close manager after context ended while graph index operation was still running: %w", err)
 		}
-
 		busy.idle.Wait()
 	}
 }
@@ -87,35 +67,26 @@ func (manager *Manager) waitForGraphOperations(ctx context.Context) error {
 func (manager *Manager) cancelAndWaitForJobs(ctx context.Context) error {
 	for {
 		manager.mu.Lock()
-
 		cancels := make([]context.CancelFunc, 0, len(manager.cancels))
 		for _, cancel := range manager.cancels {
 			cancels = append(cancels, cancel)
 		}
-
 		doneChannels := make([]chan struct{}, 0, len(manager.done))
 		for _, done := range manager.done {
 			doneChannels = append(doneChannels, done)
 		}
-
 		manager.mu.Unlock()
 
 		for _, cancel := range cancels {
 			cancel()
 		}
-
 		if len(doneChannels) == 0 {
 			return nil
 		}
-
 		for _, done := range doneChannels {
 			if err := waitForJobDone(ctx, done); err != nil {
 				slog.ErrorContext(ctx, "stop active jobs before manager close", "err", err)
-
-				return fmt.Errorf(
-					"stop active jobs before manager close: wait for active job: %w",
-					err,
-				)
+				return fmt.Errorf("stop active jobs before manager close: wait for active job: %w", err)
 			}
 		}
 	}

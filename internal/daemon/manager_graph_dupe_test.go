@@ -27,16 +27,10 @@ func TestRecordGraphIndexSkipsConcurrentDuplicate(t *testing.T) {
 	var indexCalls atomic.Int32
 	entered := make(chan struct{})
 	releaseWorker := make(chan struct{})
-	manager.graphIndex = func(
-		ctx context.Context,
-		engine *cbm.Engine,
-		canonicalPath string,
-		mode string,
-	) error {
+	manager.graphIndex = func(ctx context.Context, engine *cbm.Engine, canonicalPath string, mode string) error {
 		indexCalls.Add(1)
 		close(entered)
 		<-releaseWorker
-
 		return nil
 	}
 
@@ -63,7 +57,6 @@ func TestRecordGraphIndexSkipsConcurrentDuplicate(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("second graph index did not skip while the first was in flight")
 	}
-
 	if got := indexCalls.Load(); got != 1 {
 		t.Fatalf("graphIndex call count = %d while first pass in flight, want 1", got)
 	}
@@ -74,7 +67,6 @@ func TestRecordGraphIndexSkipsConcurrentDuplicate(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("first graph index did not finish after release")
 	}
-
 	if got := indexCalls.Load(); got != 1 {
 		t.Fatalf("graphIndex call count = %d after first pass finished, want 1", got)
 	}
@@ -97,17 +89,11 @@ func TestRecordGraphIndexHoldsSlotWhileDetachedWorkerRuns(t *testing.T) {
 	var indexCalls atomic.Int32
 	entered := make(chan struct{})
 	releaseWorker := make(chan struct{})
-	manager.graphIndex = func(
-		ctx context.Context,
-		engine *cbm.Engine,
-		canonicalPath string,
-		mode string,
-	) error {
+	manager.graphIndex = func(ctx context.Context, engine *cbm.Engine, canonicalPath string, mode string) error {
 		if indexCalls.Add(1) == 1 {
 			close(entered)
 			<-releaseWorker
 		}
-
 		return nil
 	}
 
@@ -123,7 +109,6 @@ func TestRecordGraphIndexHoldsSlotWhileDetachedWorkerRuns(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("first graph index did not start")
 	}
-
 	cancel()
 	select {
 	case <-firstDone:
@@ -138,17 +123,14 @@ func TestRecordGraphIndexHoldsSlotWhileDetachedWorkerRuns(t *testing.T) {
 
 	close(releaseWorker)
 	deadline := time.Now().Add(2 * time.Second)
-
 	for {
 		manager.recordGraphIndexNonFatal(context.Background(), codebase.ID, repoPath, "hash-3")
 		if indexCalls.Load() == 2 {
 			break
 		}
-
 		if time.Now().After(deadline) {
 			t.Fatalf("graphIndex call count = %d after worker exit, want 2", indexCalls.Load())
 		}
-
 		time.Sleep(10 * time.Millisecond)
 	}
 }
