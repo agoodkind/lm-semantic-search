@@ -31,8 +31,10 @@ func parentDeathSignal(ctx context.Context, parentPID int) <-chan struct{} {
 			err,
 		)
 		goSafeOrphan(ctx, func() { pollParentDeath(ctx, ch) })
+
 		return ch
 	}
+
 	if pidfd < 0 || pidfd > math.MaxInt32 {
 		// File descriptors fit in int32 by kernel contract; this guard
 		// satisfies the strict integer-overflow lint without trusting the
@@ -40,10 +42,13 @@ func parentDeathSignal(ctx context.Context, parentPID int) <-chan struct{} {
 		_ = unix.Close(pidfd)
 		slog.WarnContext(ctx, "pidfd out of int32 range; falling back to polling", "pidfd", pidfd)
 		goSafeOrphan(ctx, func() { pollParentDeath(ctx, ch) })
+
 		return ch
 	}
+
 	pidfd32 := int32(pidfd)
 	goSafeOrphan(ctx, func() { waitPidfdExit(ctx, pidfd32, ch) })
+
 	return ch
 }
 
@@ -55,18 +60,23 @@ func waitPidfdExit(ctx context.Context, pidfd int32, ch chan struct{}) {
 	defer func() { _ = unix.Close(int(pidfd)) }()
 	fds := []unix.PollFd{{Fd: pidfd, Events: unix.POLLIN, Revents: 0}}
 	const pollTimeoutMillis = 1000
+
 	for {
 		n, err := unix.Poll(fds, pollTimeoutMillis)
 		if ctx.Err() != nil {
 			return
 		}
+
 		if err != nil {
 			if errors.Is(err, unix.EINTR) {
 				continue
 			}
+
 			slog.ErrorContext(ctx, "pidfd poll failed", "err", err)
+
 			return
 		}
+
 		if n > 0 {
 			return
 		}

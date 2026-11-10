@@ -19,6 +19,7 @@ func TestThermalZoneHotTripReportsSafe(t *testing.T) {
 	if !reading.available {
 		t.Fatal("available = false, want true")
 	}
+
 	if reading.unsafe {
 		t.Fatal("unsafe = true, want false")
 	}
@@ -35,6 +36,7 @@ func TestThermalZoneCriticalTripReportsUnsafeAtThreshold(t *testing.T) {
 	if !reading.available {
 		t.Fatal("available = false, want true")
 	}
+
 	if !reading.unsafe {
 		t.Fatal("unsafe = false, want true")
 	}
@@ -51,6 +53,7 @@ func TestThermalZonePairsTripTypeAndTemperatureByIndex(t *testing.T) {
 	if reading.available {
 		t.Fatal("available = true, want false")
 	}
+
 	if reading.unsafe {
 		t.Fatal("unsafe = true, want false")
 	}
@@ -79,6 +82,7 @@ func TestThermalZoneMalformedValuesAreUnavailable(t *testing.T) {
 				if reading.available {
 					t.Fatal("available = true, want false")
 				}
+
 				if reading.unsafe {
 					t.Fatal("unsafe = true, want false")
 				}
@@ -98,6 +102,7 @@ func TestThermalZoneWithoutUsableTripPairIsUnavailable(t *testing.T) {
 	if reading.available {
 		t.Fatal("available = true, want false")
 	}
+
 	if reading.unsafe {
 		t.Fatal("unsafe = true, want false")
 	}
@@ -117,6 +122,7 @@ func TestThermalZoneUsesAnyUsableHotOrCriticalTrip(t *testing.T) {
 	if !reading.available {
 		t.Fatal("available = false, want true")
 	}
+
 	if !reading.unsafe {
 		t.Fatal("unsafe = false, want true")
 	}
@@ -128,6 +134,7 @@ func writeThermalValue(t *testing.T, root string, relativePath string, value str
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("create thermal directory: %v", err)
 	}
+
 	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
 		t.Fatalf("write thermal value: %v", err)
 	}

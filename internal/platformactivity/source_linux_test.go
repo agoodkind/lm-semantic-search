@@ -86,6 +86,7 @@ func TestLinuxActivitySelectsLocalActiveUserLoginSessions(t *testing.T) {
 	if !snapshot.InputAvailable {
 		t.Fatal("InputAvailable = false, want true")
 	}
+
 	if snapshot.InputIdleFor != 300*time.Microsecond {
 		t.Fatalf("InputIdleFor = %s, want 300us", snapshot.InputIdleFor)
 	}
@@ -125,9 +126,11 @@ func TestLoginSessionRequiresEverySelectedSessionIdle(t *testing.T) {
 	if !snapshot.InputAvailable {
 		t.Fatal("InputAvailable = false, want true")
 	}
+
 	if snapshot.InputIdleFor != 0 {
 		t.Fatalf("InputIdleFor = %s, want 0", snapshot.InputIdleFor)
 	}
+
 	if snapshot.InputReason != model.SchedulingReasonUserActive {
 		t.Fatalf("InputReason = %q, want user active", snapshot.InputReason)
 	}
@@ -164,6 +167,7 @@ func TestLinuxActivityFallbackExplainsUnavailableThermalState(t *testing.T) {
 	if snapshot.ThermalAvailable {
 		t.Fatal("ThermalAvailable = true, want false")
 	}
+
 	if snapshot.ThermalReason != inputUnavailableReason {
 		t.Fatalf("ThermalReason = %q, want %q", snapshot.ThermalReason, inputUnavailableReason)
 	}
@@ -268,6 +272,7 @@ func TestLoginSessionInvalidPropertiesAreRejected(t *testing.T) {
 				for propertyName, value := range valid {
 					properties[propertyName] = value
 				}
+
 				properties[testCase.name] = testCase.value
 
 				if _, err := login1SessionPropertiesFromVariants(properties); err == nil {
@@ -291,6 +296,7 @@ func TestLoginSessionDoesNotRequireIdlePropertiesForUnselectedSession(t *testing
 	if err != nil {
 		t.Fatalf("login1SessionPropertiesFromVariants: %v", err)
 	}
+
 	activity := sessionActivityFromProperties(501, parsed)
 	if !activity.Remote {
 		t.Fatal("Remote = false, want true")
@@ -320,9 +326,11 @@ func assertInputUnavailable(t *testing.T, snapshot Snapshot) {
 	if snapshot.InputAvailable {
 		t.Fatal("InputAvailable = true, want false")
 	}
+
 	if snapshot.InputIdleFor != 0 {
 		t.Fatalf("InputIdleFor = %s, want 0", snapshot.InputIdleFor)
 	}
+
 	if snapshot.InputReason != model.SchedulingReasonActivityUnavailable {
 		t.Fatalf("InputReason = %q, want activity unavailable", snapshot.InputReason)
 	}
