@@ -52,6 +52,7 @@ func TestEligibleByStatKeepsRegularFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("ok\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
+
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("Stat returned error: %v", err)
@@ -61,6 +62,7 @@ func TestEligibleByStatKeepsRegularFile(t *testing.T) {
 	if !keep {
 		t.Fatalf("eligibleByStat keep = false, want true with reason %q", reason)
 	}
+
 	if reason != SkipKeep {
 		t.Fatalf("eligibleByStat reason = %q, want %q", reason, SkipKeep)
 	}
@@ -79,6 +81,7 @@ func TestEligibleByStatSkipsDirectory(t *testing.T) {
 	if keep {
 		t.Fatal("eligibleByStat keep = true, want false for a directory")
 	}
+
 	if reason != SkipNotRegular {
 		t.Fatalf("eligibleByStat reason = %q, want %q", reason, SkipNotRegular)
 	}
@@ -92,6 +95,7 @@ func TestEligibleByStatSkipsOversize(t *testing.T) {
 	if err := os.WriteFile(path, []byte("large\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
+
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("Stat returned error: %v", err)
@@ -101,6 +105,7 @@ func TestEligibleByStatSkipsOversize(t *testing.T) {
 	if keep {
 		t.Fatal("eligibleByStat keep = true, want false for an oversize file")
 	}
+
 	if reason != SkipOversize {
 		t.Fatalf("eligibleByStat reason = %q, want %q", reason, SkipOversize)
 	}
@@ -114,6 +119,7 @@ func TestEligibleByStatDisabledCapKeepsRegularFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("large\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
+
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("Stat returned error: %v", err)
@@ -123,6 +129,7 @@ func TestEligibleByStatDisabledCapKeepsRegularFile(t *testing.T) {
 	if !keep {
 		t.Fatalf("eligibleByStat keep = false, want true with disabled cap and reason %q", reason)
 	}
+
 	if reason != SkipKeep {
 		t.Fatalf("eligibleByStat reason = %q, want %q", reason, SkipKeep)
 	}
@@ -135,6 +142,7 @@ func TestEligibleContentKeepsUTF8(t *testing.T) {
 	if !keep {
 		t.Fatalf("eligibleContent keep = false, want true with reason %q", reason)
 	}
+
 	if reason != SkipKeep {
 		t.Fatalf("eligibleContent reason = %q, want %q", reason, SkipKeep)
 	}
@@ -147,6 +155,7 @@ func TestEligibleContentSkipsNonUTF8(t *testing.T) {
 	if keep {
 		t.Fatal("eligibleContent keep = true, want false for non-UTF-8")
 	}
+
 	if reason != SkipNonUTF8 {
 		t.Fatalf("eligibleContent reason = %q, want %q", reason, SkipNonUTF8)
 	}

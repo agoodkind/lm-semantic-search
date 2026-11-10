@@ -12,12 +12,15 @@ import (
 )
 
 func TestDarwinActivityReportsValidIdleAndNominalThermalState(t *testing.T) {
-	stubNativeActivityReader(t, nativeActivityResult{
-		idleSeconds:      125.25,
-		inputAvailable:   true,
-		thermalAvailable: true,
-		thermalUnsafe:    false,
-	})
+	stubNativeActivityReader(
+		t,
+		nativeActivityResult{
+			idleSeconds:      125.25,
+			inputAvailable:   true,
+			thermalAvailable: true,
+			thermalUnsafe:    false,
+		},
+	)
 
 	source := New(context.Background())
 	snapshot := source.Sample(context.Background())
@@ -25,15 +28,19 @@ func TestDarwinActivityReportsValidIdleAndNominalThermalState(t *testing.T) {
 	if !snapshot.InputAvailable {
 		t.Fatal("InputAvailable = false, want true")
 	}
+
 	if snapshot.InputIdleFor != 125250*time.Millisecond {
 		t.Fatalf("InputIdleFor = %s, want 2m5.25s", snapshot.InputIdleFor)
 	}
+
 	if !snapshot.ThermalAvailable {
 		t.Fatal("ThermalAvailable = false, want true")
 	}
+
 	if snapshot.ThermalUnsafe {
 		t.Fatal("ThermalUnsafe = true, want false")
 	}
+
 	source.Close()
 }
 
@@ -66,52 +73,59 @@ func TestNativeActivityRejectsInvalidOrUnavailableIdle(t *testing.T) {
 	}
 
 	for name, result := range testCases {
-		t.Run(name, func(t *testing.T) {
-			stubNativeActivityReader(t, result)
+		t.Run(
+			name,
+			func(t *testing.T) {
+				stubNativeActivityReader(t, result)
 
-			snapshot := New(context.Background()).Sample(context.Background())
+				snapshot := New(context.Background()).Sample(context.Background())
 
-			if snapshot.InputAvailable {
-				t.Fatal("InputAvailable = true, want false")
-			}
-			if snapshot.InputIdleFor != 0 {
-				t.Fatalf("InputIdleFor = %s, want 0", snapshot.InputIdleFor)
-			}
-			if snapshot.InputReason != model.SchedulingReasonActivityUnavailable {
-				t.Fatalf(
-					"InputReason = %q, want activity unavailable",
-					snapshot.InputReason,
-				)
-			}
-		})
+				if snapshot.InputAvailable {
+					t.Fatal("InputAvailable = true, want false")
+				}
+
+				if snapshot.InputIdleFor != 0 {
+					t.Fatalf("InputIdleFor = %s, want 0", snapshot.InputIdleFor)
+				}
+
+				if snapshot.InputReason != model.SchedulingReasonActivityUnavailable {
+					t.Fatalf("InputReason = %q, want activity unavailable", snapshot.InputReason)
+				}
+			},
+		)
 	}
 }
 
 func TestDarwinActivityReportsSeriousAndCriticalThermalStatesUnsafe(t *testing.T) {
 	for _, state := range []string{"serious", "critical"} {
-		t.Run(state, func(t *testing.T) {
-			stubNativeActivityReader(t, nativeActivityResult{
-				idleSeconds:      300,
-				inputAvailable:   true,
-				thermalAvailable: true,
-				thermalUnsafe:    true,
-			})
-
-			snapshot := New(context.Background()).Sample(context.Background())
-
-			if !snapshot.ThermalAvailable {
-				t.Fatal("ThermalAvailable = false, want true")
-			}
-			if !snapshot.ThermalUnsafe {
-				t.Fatal("ThermalUnsafe = false, want true")
-			}
-			if snapshot.ThermalReason != model.SchedulingReasonThermalSafety {
-				t.Fatalf(
-					"ThermalReason = %q, want thermal safety",
-					snapshot.ThermalReason,
+		t.Run(
+			state,
+			func(t *testing.T) {
+				stubNativeActivityReader(
+					t,
+					nativeActivityResult{
+						idleSeconds:      300,
+						inputAvailable:   true,
+						thermalAvailable: true,
+						thermalUnsafe:    true,
+					},
 				)
-			}
-		})
+
+				snapshot := New(context.Background()).Sample(context.Background())
+
+				if !snapshot.ThermalAvailable {
+					t.Fatal("ThermalAvailable = false, want true")
+				}
+
+				if !snapshot.ThermalUnsafe {
+					t.Fatal("ThermalUnsafe = false, want true")
+				}
+
+				if snapshot.ThermalReason != model.SchedulingReasonThermalSafety {
+					t.Fatalf("ThermalReason = %q, want thermal safety", snapshot.ThermalReason)
+				}
+			},
+		)
 	}
 }
 

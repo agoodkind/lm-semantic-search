@@ -15,11 +15,13 @@ func CurrentClientInfo() (*pb.ClientInfo, error) {
 	if pid < 0 || pid > math.MaxInt32 {
 		return nil, fmt.Errorf("process id %d does not fit in int32", pid)
 	}
+
 	workingDir, err := os.Getwd()
 	if err != nil {
 		slog.Error("resolve working directory failed", "err", err)
 		return nil, fmt.Errorf("resolve working directory: %w", err)
 	}
+
 	return &pb.ClientInfo{
 		Name:      "cli",
 		Pid:       int32(pid),

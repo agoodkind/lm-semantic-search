@@ -97,22 +97,35 @@ func TestEngineWritesValidGraphProperties(t *testing.T) {
 		if readErr != nil {
 			t.Fatalf("read updated source %s: %v", name, readErr)
 		}
-		if writeErr := os.WriteFile(filepath.Join(repositoryPath, name), updatedSource, 0o644); writeErr != nil {
+
+		if writeErr := os.WriteFile(
+			filepath.Join(repositoryPath, name),
+			updatedSource,
+			0o644,
+		); writeErr != nil {
 			t.Fatalf("write updated source %s: %v", name, writeErr)
 		}
 	}
+
 	if err = engine.Index(context.Background(), repositoryPath, "fast"); err != nil {
 		t.Fatalf("incremental Index returned error: %v", err)
 	}
 
 	wantLongCallee, wantLongTopic := readLongCall(t)
 	var asyncCallees, asyncTopics, edgeBrokers, routeBrokers, localNames, methods []string
+
 	for _, row := range readGraphProperties(t, cacheDir) {
 		var properties graphProperties
 		if decodeErr := json.Unmarshal([]byte(row.PropertyValue), &properties); decodeErr != nil {
-			t.Errorf("%s row has invalid properties JSON %q: %v", row.RecordType, row.PropertyValue, decodeErr)
+			t.Errorf(
+				"%s row has invalid properties JSON %q: %v",
+				row.RecordType,
+				row.PropertyValue,
+				decodeErr,
+			)
 			continue
 		}
+
 		switch row.RecordType {
 		case asyncCallsRecordType:
 			asyncCallees = append(asyncCallees, properties.Callee)
@@ -125,30 +138,42 @@ func TestEngineWritesValidGraphProperties(t *testing.T) {
 			methods = append(methods, properties.Method)
 		}
 	}
+
 	for _, wantTopic := range []string{wantAsyncTopic, wantLongTopic} {
 		if !slices.Contains(asyncTopics, wantTopic) {
 			t.Errorf("ASYNC_CALLS url_path values are %q; want %q", asyncTopics, wantTopic)
 		}
 	}
+
 	if !slices.Contains(asyncCallees, wantLongCallee) {
 		t.Errorf("ASYNC_CALLS callee values are %q; want %q", asyncCallees, wantLongCallee)
 	}
+
 	if !slices.Contains(edgeBrokers, wantBroker) {
 		t.Errorf("ASYNC_CALLS broker values are %q; want %q", edgeBrokers, wantBroker)
 	}
+
 	if !slices.Contains(routeBrokers, wantBroker) {
 		t.Errorf("Route broker values are %q; want %q", routeBrokers, wantBroker)
 	}
+
 	if !slices.Contains(methods, wantMethod) {
 		t.Errorf("Route method values are %q; want %q", methods, wantMethod)
 	}
+
 	wantLongLocalName := `value("` + strings.Repeat("a", longLocalNameBytes) + `")`
-	for _, wantLocalName := range []string{wantQuotedLocalName, wantMultilineLocalName, wantLongLocalName} {
+	for _, wantLocalName := range []string{
+		wantQuotedLocalName,
+		wantMultilineLocalName,
+		wantLongLocalName,
+	} {
 		if !slices.Contains(localNames, wantLocalName) {
 			t.Errorf("IMPORTS local_name values are %q; want %q", localNames, wantLocalName)
 		}
 	}
+
 	importTargets := queryColumn(t, engine, edgePropertiesProject, importTargetsQuery)
+
 	for _, wantTarget := range wantImportTargets {
 		if !slices.Contains(importTargets, wantTarget) {
 			t.Errorf("query_graph IMPORTS targets are %q; want %q", importTargets, wantTarget)
@@ -164,11 +189,13 @@ func readGraphProperties(t *testing.T, cacheDir string) []graphPropertyRow {
 	if err != nil {
 		t.Fatalf("read %s: %v", edgePropertiesQuery, err)
 	}
+
 	output := runSQLite(t, graphDatabasePath(t, cacheDir, edgePropertiesProject), script)
 	var rows []graphPropertyRow
 	if err = json.Unmarshal(output, &rows); err != nil {
 		t.Fatalf("decode sqlite3 output: %v: %s", err, output)
 	}
+
 	return rows
 }
 
@@ -180,9 +207,11 @@ func graphDatabasePath(t *testing.T, cacheDir string, project string) string {
 	if err != nil {
 		t.Fatalf("find graph database: %v", err)
 	}
+
 	if len(matches) != 1 {
 		t.Fatalf("found %d graph databases in %s, want 1", len(matches), cacheDir)
 	}
+
 	return matches[0]
 }
 
@@ -197,6 +226,7 @@ func runSQLite(t *testing.T, databasePath string, script []byte) []byte {
 	if err != nil {
 		t.Fatalf("run sqlite3 on %s: %v: %s", databasePath, err, stderr.String())
 	}
+
 	return output
 }
 
@@ -207,14 +237,23 @@ func readLongCall(t *testing.T) (string, string) {
 	if err != nil {
 		t.Fatalf("read %s: %v", edgePropertiesLongCall, err)
 	}
+
 	match := longCallPattern.FindSubmatch(source)
 	if match == nil {
 		t.Fatalf("%s does not contain the long call", edgePropertiesLongCall)
 	}
+
 	callee, topic := string(match[1]), string(match[2])
 	if len(callee) < longCalleeMinimumBytes || len(topic) < longTopicMinimumBytes {
-		t.Fatalf("the long call has a %d-byte callee and a %d-byte topic; want at least %d and %d bytes", len(callee), len(topic), longCalleeMinimumBytes, longTopicMinimumBytes)
+		t.Fatalf(
+			"the long call has a %d-byte callee and a %d-byte topic; want at least %d and %d bytes",
+			len(callee),
+			len(topic),
+			longCalleeMinimumBytes,
+			longTopicMinimumBytes,
+		)
 	}
+
 	return callee, topic
 }
 
@@ -228,6 +267,7 @@ func TestEngineResolvesCallThroughEscapedImportKey(t *testing.T) {
 	if err := os.CopyFS(repositoryPath, os.DirFS(escapedImportRepository)); err != nil {
 		t.Fatalf("copy %s: %v", escapedImportRepository, err)
 	}
+
 	cacheDir := t.TempDir()
 	engine, err := cbm.Open(escapedImportProject, cacheDir)
 	if err != nil {
@@ -237,28 +277,41 @@ func TestEngineResolvesCallThroughEscapedImportKey(t *testing.T) {
 	if err = engine.Index(context.Background(), repositoryPath, "fast"); err != nil {
 		t.Fatalf("Index returned error: %v", err)
 	}
+
 	edgeScript, err := os.ReadFile(escapedImportEdgeSQL)
 	if err != nil {
 		t.Fatalf("read %s: %v", escapedImportEdgeSQL, err)
 	}
-	inserted := strings.TrimSpace(string(runSQLite(t, graphDatabasePath(t, cacheDir, escapedImportProject), edgeScript)))
+
+	inserted := strings.TrimSpace(
+		string(runSQLite(t, graphDatabasePath(t, cacheDir, escapedImportProject), edgeScript)),
+	)
 	if inserted != "2" {
 		t.Fatalf("%s created %q IMPORTS edges; want 2", escapedImportEdgeSQL, inserted)
 	}
+
 	updatedSource, err := os.ReadFile(escapedImportUpdate)
 	if err != nil {
 		t.Fatalf("read %s: %v", escapedImportUpdate, err)
 	}
-	if err = os.WriteFile(filepath.Join(repositoryPath, "main.js"), updatedSource, 0o644); err != nil {
+
+	if err = os.WriteFile(
+		filepath.Join(repositoryPath, "main.js"),
+		updatedSource,
+		0o644,
+	); err != nil {
 		t.Fatalf("write updated main.js: %v", err)
 	}
+
 	if err = engine.Index(context.Background(), repositoryPath, "fast"); err != nil {
 		t.Fatalf("incremental Index returned error: %v", err)
 	}
+
 	targets := queryColumn(t, engine, escapedImportProject, escapedImportCallsQuery)
 	if !slices.Contains(targets, escapedImportWantTarget) {
 		t.Errorf("run calls %q; want %q", targets, escapedImportWantTarget)
 	}
+
 	if slices.Contains(targets, escapedImportOtherTarget) {
 		t.Errorf("run calls %q; it must not call %q", targets, escapedImportOtherTarget)
 	}
@@ -272,31 +325,42 @@ func queryColumn(t *testing.T, engine *cbm.Engine, project string, queryPath str
 	if err != nil {
 		t.Fatalf("read %s: %v", queryPath, err)
 	}
-	arguments, err := json.Marshal(map[string]string{"query": strings.TrimSpace(string(query)), "project": project})
+
+	arguments, err := json.Marshal(map[string]string{
+		"query":   strings.TrimSpace(string(query)),
+		"project": project,
+	})
 	if err != nil {
 		t.Fatalf("marshal query_graph arguments: %v", err)
 	}
+
 	rawResponse, err := engine.Tool("query_graph", string(arguments))
 	if err != nil {
 		t.Fatalf("query_graph returned error: %v", err)
 	}
+
 	var response queryGraphResponse
 	if err = json.Unmarshal([]byte(rawResponse), &response); err != nil {
 		t.Fatalf("decode query_graph response: %v: %s", err, rawResponse)
 	}
+
 	if response.IsError {
 		t.Fatalf("query_graph reported an error: %s", rawResponse)
 	}
+
 	targets := make([]string, 0, len(response.StructuredContent.Rows))
 	for _, row := range response.StructuredContent.Rows {
 		var columns []string
 		if err = json.Unmarshal(row, &columns); err != nil {
 			t.Fatalf("decode query_graph row %s: %v", row, err)
 		}
+
 		if len(columns) != 1 {
 			t.Fatalf("query_graph row %s has %d columns; want 1", row, len(columns))
 		}
+
 		targets = append(targets, columns[0])
 	}
+
 	return targets
 }

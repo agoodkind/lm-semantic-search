@@ -46,9 +46,11 @@ func (source *closeTrackingActivitySource) Close() {
 			source.closedBeforeJob = true
 		}
 	}
+
 	if source.journalOpen != nil {
 		source.journalOpenAtClose = source.journalOpen()
 	}
+
 	if source.closedSignal != nil {
 		close(source.closedSignal)
 	}
@@ -63,6 +65,7 @@ func (semantic *closeTrackingSemantic) Close(context.Context) error {
 			semantic.closedBeforeJob = true
 		}
 	}
+
 	return nil
 }
 
@@ -74,6 +77,7 @@ func TestManagerCloseClosesSemanticBackend(t *testing.T) {
 	if err := manager.Close(context.Background()); err != nil {
 		t.Fatalf("Manager.Close returned error: %v", err)
 	}
+
 	if !semantic.closed {
 		t.Fatal("Manager.Close did not close the semantic backend")
 	}
@@ -85,21 +89,23 @@ func TestManagerCloseCancelsAndWaitsForDetachedJob(t *testing.T) {
 	jobEntered := make(chan struct{}, 1)
 	jobStopped := make(chan struct{})
 	releaseJob := make(chan struct{})
-	manager.runner = fakeRunner{indexOne: func(
-		ctx context.Context,
-		_ string,
-		_ string,
-		_ model.IndexConfig,
-	) (indexer.OneFileResult, error) {
-		jobEntered <- struct{}{}
-		select {
-		case <-ctx.Done():
-			close(jobStopped)
-			return indexer.OneFileResult{}, ctx.Err()
-		case <-releaseJob:
-			return indexer.OneFileResult{}, nil
-		}
-	}}
+	manager.runner = fakeRunner{
+		indexOne: func(
+			ctx context.Context,
+			_ string,
+			_ string,
+			_ model.IndexConfig,
+		) (indexer.OneFileResult, error) {
+			jobEntered <- struct{}{}
+			select {
+			case <-ctx.Done():
+				close(jobStopped)
+				return indexer.OneFileResult{}, ctx.Err()
+			case <-releaseJob:
+				return indexer.OneFileResult{}, nil
+			}
+		},
+	}
 	semantic := &closeTrackingSemantic{
 		semanticIndex: manager.semantic,
 		jobStopped:    jobStopped,
@@ -113,6 +119,7 @@ func TestManagerCloseCancelsAndWaitsForDetachedJob(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("detached job did not enter the runner")
 	}
+
 	cancelRequest()
 
 	manager.mu.Lock()
@@ -130,14 +137,17 @@ func TestManagerCloseCancelsAndWaitsForDetachedJob(t *testing.T) {
 	if err := manager.Close(closeContext); err != nil {
 		t.Fatalf("Manager.Close returned error: %v", err)
 	}
+
 	select {
 	case <-jobStopped:
 	default:
 		t.Fatal("detached job did not observe manager close cancellation")
 	}
+
 	if semantic.closedBeforeJob {
 		t.Fatal("semantic backend closed before the detached job stopped")
 	}
+
 	if !semantic.closed {
 		t.Fatal("semantic backend did not close after the detached job stopped")
 	}
@@ -161,20 +171,24 @@ func TestManagerCloseClosesActivityAfterJobsAndBeforeJournal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newManagerWithDependencies returned error: %v", err)
 	}
+
 	activity.journalOpen = func() bool {
 		return manager.jobJournal != nil
 	}
-	manager.runner = fakeRunner{indexOne: func(
-		ctx context.Context,
-		_ string,
-		_ string,
-		_ model.IndexConfig,
-	) (indexer.OneFileResult, error) {
-		close(jobEntered)
-		<-ctx.Done()
-		close(jobStopped)
-		return indexer.OneFileResult{}, ctx.Err()
-	}}
+	manager.runner = fakeRunner{
+		indexOne: func(
+			ctx context.Context,
+			_ string,
+			_ string,
+			_ model.IndexConfig,
+		) (indexer.OneFileResult, error) {
+			close(jobEntered)
+			<-ctx.Done()
+			close(jobStopped)
+
+			return indexer.OneFileResult{}, ctx.Err()
+		},
+	}
 	_, job := seedBootstrapCodebase(t, manager, repoPath, defaultIndexConfig())
 	manager.runJobAsync(context.Background(), job.ID)
 	select {
@@ -186,15 +200,19 @@ func TestManagerCloseClosesActivityAfterJobsAndBeforeJournal(t *testing.T) {
 	if err := manager.Close(context.Background()); err != nil {
 		t.Fatalf("Manager.Close returned error: %v", err)
 	}
+
 	if !activity.closed {
 		t.Fatal("activity source remained open")
 	}
+
 	if activity.closedBeforeJob {
 		t.Fatal("activity source closed before the job stopped")
 	}
+
 	if !activity.journalOpenAtClose {
 		t.Fatal("activity source closed after the journal")
 	}
+
 	if manager.jobJournal != nil {
 		t.Fatal("job journal remained open")
 	}
@@ -216,6 +234,7 @@ func TestManagerCloseDoesNotHoldMutexWhileClosingJournal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newManagerWithDependencies returned error: %v", err)
 	}
+
 	manager.closeJobJournal()
 
 	writeStarted := make(chan struct{})
@@ -225,6 +244,7 @@ func TestManagerCloseDoesNotHoldMutexWhileClosingJournal(t *testing.T) {
 		func(string, model.JobEvent) error {
 			close(writeStarted)
 			<-releaseWrite
+
 			return nil
 		},
 		func(string, model.JobEvent) error { return nil },
@@ -239,6 +259,7 @@ func TestManagerCloseDoesNotHoldMutexWhileClosingJournal(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("enqueue blocking journal event: %v", err)
 	}
+
 	<-writeStarted
 
 	closeResult := make(chan error, 1)
@@ -251,6 +272,7 @@ func TestManagerCloseDoesNotHoldMutexWhileClosingJournal(t *testing.T) {
 		close(releaseWrite)
 		t.Fatal("activity source did not close")
 	}
+
 	time.Sleep(50 * time.Millisecond)
 	mutexAcquired := make(chan struct{})
 	go func() {
@@ -264,10 +286,12 @@ func TestManagerCloseDoesNotHoldMutexWhileClosingJournal(t *testing.T) {
 		mutexAvailable = true
 	case <-time.After(250 * time.Millisecond):
 	}
+
 	close(releaseWrite)
 	if err := <-closeResult; err != nil {
 		t.Fatalf("Manager.Close returned error: %v", err)
 	}
+
 	if !mutexAvailable {
 		<-mutexAcquired
 		t.Fatal("Manager.Close held manager.mu while journal close waited for I/O")
@@ -290,8 +314,10 @@ func TestNewManagerClosesSemanticBackendWhenLoadFails(t *testing.T) {
 		if manager != nil {
 			_ = manager.Close(context.Background())
 		}
+
 		t.Fatal("newManagerWithSemanticFactory returned no load error")
 	}
+
 	if !semantic.closed {
 		t.Fatal("semantic backend remained open after manager load failed")
 	}
@@ -315,8 +341,10 @@ func TestNewManagerClosesActivityWhenSemanticFactoryFails(t *testing.T) {
 		if manager != nil {
 			_ = manager.Close(context.Background())
 		}
+
 		t.Fatal("newManagerWithDependencies returned no semantic factory error")
 	}
+
 	if !activity.closed {
 		t.Fatal("activity source remained open after semantic factory failure")
 	}

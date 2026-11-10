@@ -21,10 +21,13 @@ func IsGRPCUnavailable(err error) bool {
 	if err == nil {
 		return false
 	}
+
 	grpcStatus, ok := status.FromError(err)
 	if !ok {
 		return false
 	}
+
 	code := grpcStatus.Code()
+
 	return code == codes.Unavailable || code == codes.DeadlineExceeded
 }

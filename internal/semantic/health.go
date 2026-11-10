@@ -48,14 +48,37 @@ func (service *Service) ProbeHealth(ctx context.Context) error {
 	if service == nil || strings.TrimSpace(service.cfg.MilvusAddress) == "" {
 		return nil
 	}
+
 	if !service.Available() || service.milvus == nil {
-		slog.WarnContext(ctx, "vector store health probe requires a connected client", "err", ErrUnavailable)
-		return fmt.Errorf("probe vector store client: %w", adapterr.NewMilvusUnavailable(ErrUnavailable))
+		slog.WarnContext(
+			ctx,
+			"vector store health probe requires a connected client",
+			"err",
+			ErrUnavailable,
+		)
+
+		return fmt.Errorf(
+			"probe vector store client: %w",
+			adapterr.NewMilvusUnavailable(ErrUnavailable),
+		)
 	}
-	if _, err := service.milvus.ListCollections(ctx, milvusclient.NewListCollectionOption()); err != nil {
-		slog.WarnContext(ctx, "vector store health probe failed", "operation", "list collections", "err", err)
+
+	if _, err := service.milvus.ListCollections(
+		ctx,
+		milvusclient.NewListCollectionOption(),
+	); err != nil {
+		slog.WarnContext(
+			ctx,
+			"vector store health probe failed",
+			"operation",
+			"list collections",
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("probe Milvus collection list: %w", adapterr.NewMilvusUnavailable(err))
 	}
+
 	return nil
 }
 
@@ -68,24 +91,52 @@ func (service *Service) ProbeHealth(ctx context.Context) error {
 // store that cannot answer returns a classified outage so the caller treats the
 // readiness as unknown; the global store banner is left to ProbeHealth. A service
 // not configured for or not connected to Milvus reports (false, false, nil).
-func (service *Service) CollectionState(ctx context.Context, codebasePath string) (bool, bool, error) {
+func (service *Service) CollectionState(
+	ctx context.Context,
+	codebasePath string,
+) (bool, bool, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	if service == nil || !service.Available() || service.milvus == nil {
 		return false, false, nil
 	}
+
 	collectionName := service.CollectionName(codebasePath)
 	has, err := service.hasCollection(ctx, collectionName, "check collection "+collectionName)
 	if err != nil {
-		slog.ErrorContext(ctx, "check collection state failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
-		return false, false, fmt.Errorf("check collection state %s: %w", collectionName, adapterr.NewMilvusUnavailable(err))
+		slog.ErrorContext(
+			ctx,
+			"check collection state failed",
+			"collection",
+			collectionName,
+			"peer",
+			peerInfo.String(),
+			"err",
+			err,
+		)
+
+		return false, false, fmt.Errorf(
+			"check collection state %s: %w",
+			collectionName,
+			adapterr.NewMilvusUnavailable(err),
+		)
 	}
+
 	if !has {
 		return false, false, nil
 	}
-	loadState, err := service.milvus.GetLoadState(ctx, milvusclient.NewGetLoadStateOption(collectionName))
+
+	loadState, err := service.milvus.GetLoadState(
+		ctx,
+		milvusclient.NewGetLoadStateOption(collectionName),
+	)
 	if err != nil {
-		return true, false, fmt.Errorf("read collection load state %s: %w", collectionName, adapterr.NewMilvusUnavailable(err))
+		return true, false, fmt.Errorf(
+			"read collection load state %s: %w",
+			collectionName,
+			adapterr.NewMilvusUnavailable(err),
+		)
 	}
+
 	return true, loadState.State == entity.LoadStateLoaded, nil
 }
 
@@ -98,6 +149,7 @@ func (service *Service) ObserveCollection(
 	if service == nil || !service.Available() || service.milvus == nil {
 		return unknownCollectionObservation(), nil
 	}
+
 	return service.observeCollectionName(ctx, service.CollectionName(codebasePath))
 }
 
@@ -119,9 +171,24 @@ func (service *Service) observeCollectionName(
 
 	has, err := service.hasCollection(ctx, collectionName, "check collection "+collectionName)
 	if err != nil {
-		slog.WarnContext(ctx, "observe collection existence failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
-		return unknown, fmt.Errorf("observe collection %s: %w", collectionName, adapterr.NewMilvusUnavailable(err))
+		slog.WarnContext(
+			ctx,
+			"observe collection existence failed",
+			"collection",
+			collectionName,
+			"peer",
+			peerInfo.String(),
+			"err",
+			err,
+		)
+
+		return unknown, fmt.Errorf(
+			"observe collection %s: %w",
+			collectionName,
+			adapterr.NewMilvusUnavailable(err),
+		)
 	}
+
 	if !has {
 		return CollectionObservation{
 			State:     CollectionStateAbsent,
@@ -129,14 +196,30 @@ func (service *Service) observeCollectionName(
 			RowsKnown: false,
 		}, nil
 	}
+
 	loadState, err := service.milvus.GetLoadState(
 		ctx,
 		milvusclient.NewGetLoadStateOption(collectionName),
 	)
 	if err != nil {
-		slog.WarnContext(ctx, "observe collection load state failed", "collection", collectionName, "peer", peerInfo.String(), "err", err)
-		return unknown, fmt.Errorf("observe collection load state %s: %w", collectionName, adapterr.NewMilvusUnavailable(err))
+		slog.WarnContext(
+			ctx,
+			"observe collection load state failed",
+			"collection",
+			collectionName,
+			"peer",
+			peerInfo.String(),
+			"err",
+			err,
+		)
+
+		return unknown, fmt.Errorf(
+			"observe collection load state %s: %w",
+			collectionName,
+			adapterr.NewMilvusUnavailable(err),
+		)
 	}
+
 	observedState := resolveObservedCollectionState(controllerState, loadState.State)
 	switch observedState {
 	case CollectionStateIdle:
@@ -146,8 +229,13 @@ func (service *Service) observeCollectionName(
 	case CollectionStateReady:
 		rows, countErr := service.collectionRowCount(ctx, collectionName)
 		if countErr != nil {
-			return CollectionObservation{State: CollectionStateReady, Rows: 0, RowsKnown: false}, nil
+			return CollectionObservation{
+				State:     CollectionStateReady,
+				Rows:      0,
+				RowsKnown: false,
+			}, nil
 		}
+
 		return CollectionObservation{
 			State:     CollectionStateReady,
 			Rows:      rows,
@@ -156,6 +244,7 @@ func (service *Service) observeCollectionName(
 	case CollectionStateAbsent, CollectionStateUnknown:
 		return unknown, nil
 	}
+
 	return unknown, nil
 }
 
@@ -174,6 +263,7 @@ func resolveObservedCollectionState(
 	if controllerState == collectionResidencyLoading {
 		return CollectionStateLoading
 	}
+
 	switch milvusState {
 	case entity.LoadStateNotLoad:
 		return CollectionStateIdle
@@ -184,5 +274,6 @@ func resolveObservedCollectionState(
 	case entity.LoadStateUnloading:
 		return CollectionStateUnknown
 	}
+
 	return CollectionStateUnknown
 }

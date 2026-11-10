@@ -128,15 +128,18 @@ func Run(source Source, options Options) error {
 	if live {
 		return runScreen(source, interval, options.Now)
 	}
+
 	snapshot, err := source()
 	if err != nil {
 		return err
 	}
+
 	_, err = fmt.Fprintf(os.Stdout, "%s\n", strings.TrimSpace(Dump(snapshot)))
 	if err != nil {
 		slog.Error("write status dump failed", "err", err)
 		return fmt.Errorf("write status dump: %w", err)
 	}
+
 	return nil
 }
 
@@ -147,10 +150,12 @@ func runScreen(source Source, interval time.Duration, now func() time.Time) erro
 	if err != nil {
 		return err
 	}
+
 	program := tea.NewProgram(newStatusModel(source, interval, now, first))
 	if _, runErr := program.Run(); runErr != nil {
 		slog.Error("run status TUI failed", "err", runErr)
 		return fmt.Errorf("run status screen: %w", runErr)
 	}
+
 	return nil
 }

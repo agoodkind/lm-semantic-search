@@ -15,6 +15,7 @@ func resolveBannerView(health dependencyHealth, cfg config.Config) view.BannerVi
 	if !health.Degraded() {
 		return view.BannerView{Headline: "", Detail: ""}
 	}
+
 	// The time is read for the dependency this banner is about to name, so the
 	// detail line never reports a store probe's round trip as the moment the
 	// embedding endpoint last answered. A dependency that has not answered in this
@@ -25,12 +26,18 @@ func resolveBannerView(health dependencyHealth, cfg config.Config) view.BannerVi
 	case dependencyEmbedderRejected:
 		return view.BannerView{
 			Headline: headline,
-			Detail:   joinBannerDetail("Check the model name, dimensions, and credentials", embedderEndpointRef(cfg)),
+			Detail: joinBannerDetail(
+				"Check the model name, dimensions, and credentials",
+				embedderEndpointRef(cfg),
+			),
 		}
 	case dependencyEmbedderPaused:
 		return view.BannerView{
 			Headline: headline,
-			Detail:   joinBannerDetail("Leave low power mode or resume the embedding service", embedderEndpointRef(cfg)),
+			Detail: joinBannerDetail(
+				"Leave low power mode or resume the embedding service",
+				embedderEndpointRef(cfg),
+			),
 		}
 	case dependencyStoreUnavailable:
 		return view.BannerView{
@@ -56,6 +63,7 @@ func embedderEndpointRef(cfg config.Config) string {
 	if url == "" {
 		return "OPENAI_BASE_URL is unset"
 	}
+
 	return "OPENAI_BASE_URL=" + url
 }
 
@@ -64,6 +72,7 @@ func storeEndpointRef(cfg config.Config) string {
 	if address == "" {
 		return "MILVUS_ADDRESS is unset"
 	}
+
 	return "MILVUS_ADDRESS=" + address
 }
 
@@ -74,5 +83,6 @@ func joinBannerDetail(parts ...string) string {
 			kept = append(kept, part)
 		}
 	}
+
 	return strings.Join(kept, " · ")
 }

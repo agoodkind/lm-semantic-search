@@ -63,7 +63,10 @@ func (generic *GenericStore) collection(collectionName string) (*collection, str
 
 // EnsureCollection returns an error for a collection with rows of another
 // vector width.
-func (generic *GenericStore) EnsureCollection(ctx context.Context, request lmcollection.EnsureRequest) error {
+func (generic *GenericStore) EnsureCollection(
+	ctx context.Context,
+	request lmcollection.EnsureRequest,
+) error {
 	if err := operationContextError(ctx, "ensure local collection"); err != nil {
 		return err
 	}
@@ -81,7 +84,12 @@ func (generic *GenericStore) EnsureCollection(ctx context.Context, request lmcol
 // Upsert writes rows to a collection. A row replaces the stored row with the
 // same ID. The store normalizes each vector to unit length. Upsert validates
 // every row before it writes.
-func (generic *GenericStore) Upsert(ctx context.Context, collectionName string, declaration lmcollection.Declaration, rows []lmcollection.Row) error {
+func (generic *GenericStore) Upsert(
+	ctx context.Context,
+	collectionName string,
+	declaration lmcollection.Declaration,
+	rows []lmcollection.Row,
+) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -97,13 +105,31 @@ func (generic *GenericStore) Upsert(ctx context.Context, collectionName string, 
 	for _, source := range rows {
 		if _, duplicate := seenIDs[source.ID]; duplicate {
 			err := fmt.Errorf("upsert into %s: row ID %s appears more than once", name, source.ID)
-			slog.ErrorContext(ctx, "prepare local collection row failed", "collection", name, "relative_path", source.RelativePath, "err", err)
+			slog.ErrorContext(
+				ctx,
+				"prepare local collection row failed",
+				"collection",
+				name,
+				"relative_path",
+				source.RelativePath,
+				"err",
+				err,
+			)
 			return err
 		}
 		seenIDs[source.ID] = struct{}{}
 		next, prepareErr := generic.genericRow(declaration.Scalars, source)
 		if prepareErr != nil {
-			slog.ErrorContext(ctx, "prepare local collection row failed", "collection", name, "relative_path", source.RelativePath, "err", prepareErr)
+			slog.ErrorContext(
+				ctx,
+				"prepare local collection row failed",
+				"collection",
+				name,
+				"relative_path",
+				source.RelativePath,
+				"err",
+				prepareErr,
+			)
 			return fmt.Errorf("upsert into %s: %w", name, prepareErr)
 		}
 		prepared = append(prepared, next)
@@ -111,7 +137,10 @@ func (generic *GenericStore) Upsert(ctx context.Context, collectionName string, 
 	return missingAsLibraryError(stored.upsert(prepared))
 }
 
-func (generic *GenericStore) genericRow(declared []lmcollection.ScalarColumn, source lmcollection.Row) (row, error) {
+func (generic *GenericStore) genericRow(
+	declared []lmcollection.ScalarColumn,
+	source lmcollection.Row,
+) (row, error) {
 	if source.ID == "" {
 		return row{}, fmt.Errorf("row %s does not have an ID", source.RelativePath)
 	}
@@ -124,13 +153,29 @@ func (generic *GenericStore) genericRow(declared []lmcollection.ScalarColumn, so
 		value, present := source.Scalars[column.Name]
 		if !present || value.Null {
 			if !column.Nullable {
-				return row{}, fmt.Errorf("row %s does not have a value for column %s, and the column is not nullable", source.RelativePath, column.Name)
+				return row{}, fmt.Errorf(
+					"row %s does not have a value for column %s, and the column is not nullable",
+					source.RelativePath,
+					column.Name,
+				)
 			}
-			scalars[column.Name] = lmcollection.ScalarValue{Type: column.Type, Null: true, String: "", Bool: false, Int64: 0}
+			scalars[column.Name] = lmcollection.ScalarValue{
+				Type:   column.Type,
+				Null:   true,
+				String: "",
+				Bool:   false,
+				Int64:  0,
+			}
 			continue
 		}
 		if value.Type != column.Type {
-			return row{}, fmt.Errorf("row %s has a %s value for %s column %s", source.RelativePath, value.Type, column.Type, column.Name)
+			return row{}, fmt.Errorf(
+				"row %s has a %s value for %s column %s",
+				source.RelativePath,
+				value.Type,
+				column.Type,
+				column.Name,
+			)
 		}
 		value.String = strings.ToValidUTF8(value.String, invalidUTF8Replacement)
 		scalars[column.Name] = value
@@ -160,7 +205,10 @@ func (generic *GenericStore) genericRow(declared []lmcollection.ScalarColumn, so
 // lmcollection.RankingDepth rows match, and it reads the nearest
 // lmcollection.RankingDepth rows from the vector index otherwise. Search
 // ignores request.Query.
-func (generic *GenericStore) Search(ctx context.Context, request lmcollection.SearchRequest) ([]lmcollection.Hit, error) {
+func (generic *GenericStore) Search(ctx context.Context, request lmcollection.SearchRequest) (
+	[]lmcollection.Hit,
+	error,
+) {
 	if err := operationContextError(ctx, "search local collection"); err != nil {
 		return nil, err
 	}
@@ -169,12 +217,26 @@ func (generic *GenericStore) Search(ctx context.Context, request lmcollection.Se
 		return nil, err
 	}
 	if _, compileErr := lmcollection.Compile(request.Filter); compileErr != nil {
-		slog.ErrorContext(ctx, "validate collection filter failed", "collection", name, "err", compileErr)
+		slog.ErrorContext(
+			ctx,
+			"validate collection filter failed",
+			"collection",
+			name,
+			"err",
+			compileErr,
+		)
 		return nil, fmt.Errorf("validate filter for %s: %w", name, compileErr)
 	}
 	query, err := normalizeVector(request.Vector)
 	if err != nil {
-		slog.ErrorContext(ctx, "normalize local collection query failed", "collection", name, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"normalize local collection query failed",
+			"collection",
+			name,
+			"err",
+			err,
+		)
 		return nil, fmt.Errorf("search %s: query %w", name, err)
 	}
 	width, exists, err := stored.width()
@@ -185,11 +247,20 @@ func (generic *GenericStore) Search(ctx context.Context, request lmcollection.Se
 		return nil, lmcollection.ErrCollectionMissing
 	}
 	if len(query) != width {
-		return nil, fmt.Errorf("search %s: query vector has width %d, want %d", name, len(query), width)
+		return nil, fmt.Errorf(
+			"search %s: query vector has width %d, want %d",
+			name,
+			len(query),
+			width,
+		)
 	}
 	declared := request.Declaration.Scalars
 	matchesFilter := func(candidate row) bool {
-		return request.Filter == nil || evaluateFilter(*request.Filter, candidate, declared) == truthTrue
+		return request.Filter == nil || evaluateFilter(
+			*request.Filter,
+			candidate,
+			declared,
+		) == truthTrue
 	}
 	candidates, err := stored.rankCandidates(ctx, query, matchesFilter, lmcollection.RankingDepth)
 	if err != nil {
@@ -201,23 +272,27 @@ func (generic *GenericStore) Search(ctx context.Context, request lmcollection.Se
 		groupLimit = request.PerGroupLimit
 	}
 	perGroup := make(map[string]int32)
-	selected := limitScoredRows(candidates, effectiveLimit(request.Limit), func(candidate scoredRow) bool {
-		if request.MinScore > 0 && candidate.score < request.MinScore {
-			return false
-		}
-		if !matchesFilter(candidate.stored) {
-			return false
-		}
-		if groupLimit <= 0 {
+	selected := limitScoredRows(
+		candidates,
+		effectiveLimit(request.Limit),
+		func(candidate scoredRow) bool {
+			if request.MinScore > 0 && candidate.score < request.MinScore {
+				return false
+			}
+			if !matchesFilter(candidate.stored) {
+				return false
+			}
+			if groupLimit <= 0 {
+				return true
+			}
+			key := storedCell(candidate.stored, request.GroupBy).GroupKey()
+			if perGroup[key] >= groupLimit {
+				return false
+			}
+			perGroup[key]++
 			return true
-		}
-		key := storedCell(candidate.stored, request.GroupBy).GroupKey()
-		if perGroup[key] >= groupLimit {
-			return false
-		}
-		perGroup[key]++
-		return true
-	})
+		},
+	)
 	hits := make([]lmcollection.Hit, 0, len(selected))
 	for _, candidate := range selected {
 		hits = append(hits, genericHit(candidate.stored, candidate.score, declared))
@@ -227,7 +302,10 @@ func (generic *GenericStore) Search(ctx context.Context, request lmcollection.Se
 
 // Query returns the rows a filter matches in ascending ID order. A request
 // without a filter must specify a positive Limit.
-func (generic *GenericStore) Query(ctx context.Context, request lmcollection.QueryRequest) ([]lmcollection.Hit, error) {
+func (generic *GenericStore) Query(ctx context.Context, request lmcollection.QueryRequest) (
+	[]lmcollection.Hit,
+	error,
+) {
 	if err := operationContextError(ctx, "query local collection"); err != nil {
 		return nil, err
 	}
@@ -236,16 +314,31 @@ func (generic *GenericStore) Query(ctx context.Context, request lmcollection.Que
 		return nil, err
 	}
 	if _, compileErr := lmcollection.Compile(request.Filter); compileErr != nil {
-		slog.ErrorContext(ctx, "validate collection filter failed", "collection", name, "err", compileErr)
+		slog.ErrorContext(
+			ctx,
+			"validate collection filter failed",
+			"collection",
+			name,
+			"err",
+			compileErr,
+		)
 		return nil, fmt.Errorf("validate filter for %s: %w", name, compileErr)
 	}
 	if request.Filter == nil && request.Limit <= 0 {
 		return nil, fmt.Errorf("query %s: a query without a filter needs a positive limit", name)
 	}
 	declared := request.Declaration.Scalars
-	rows, err := stored.selectRows(func(candidate row) bool {
-		return request.Filter == nil || evaluateFilter(*request.Filter, candidate, declared) == truthTrue
-	}, request.Limit, false)
+	rows, err := stored.selectRows(
+		func(candidate row) bool {
+			return request.Filter == nil || evaluateFilter(
+				*request.Filter,
+				candidate,
+				declared,
+			) == truthTrue
+		},
+		request.Limit,
+		false,
+	)
 	if err != nil {
 		return nil, missingAsLibraryError(err)
 	}
@@ -258,7 +351,11 @@ func (generic *GenericStore) Query(ctx context.Context, request lmcollection.Que
 
 // Delete removes every row for which the complete filter evaluates to true.
 // It reads each column with the type the row stores.
-func (generic *GenericStore) Delete(ctx context.Context, collectionName string, filter lmcollection.Filter) (int64, error) {
+func (generic *GenericStore) Delete(
+	ctx context.Context,
+	collectionName string,
+	filter lmcollection.Filter,
+) (int64, error) {
 	if err := operationContextError(ctx, "delete local collection rows"); err != nil {
 		return 0, err
 	}
@@ -267,20 +364,33 @@ func (generic *GenericStore) Delete(ctx context.Context, collectionName string, 
 		return 0, err
 	}
 	if _, compileErr := lmcollection.CompileInline(&filter); compileErr != nil {
-		slog.ErrorContext(ctx, "validate collection filter failed", "collection", name, "err", compileErr)
+		slog.ErrorContext(
+			ctx,
+			"validate collection filter failed",
+			"collection",
+			name,
+			"err",
+			compileErr,
+		)
 		return 0, fmt.Errorf("validate filter for %s: %w", name, compileErr)
 	}
 	removed, err := stored.deleteWhere(func(candidate row) bool {
-		return evaluateFilterCells(filter, func(columnName string) lmcollection.ScalarCell {
-			return storedCell(candidate, columnName)
-		}) == truthTrue
+		return evaluateFilterCells(
+			filter,
+			func(columnName string) lmcollection.ScalarCell {
+				return storedCell(candidate, columnName)
+			},
+		) == truthTrue
 	})
 	return removed, missingAsLibraryError(err)
 }
 
 // QueryRows returns rows in ascending ID order. Each returned vector has unit
 // length.
-func (generic *GenericStore) QueryRows(ctx context.Context, request lmcollection.RowsRequest) ([]lmcollection.StoredRow, error) {
+func (generic *GenericStore) QueryRows(ctx context.Context, request lmcollection.RowsRequest) (
+	[]lmcollection.StoredRow,
+	error,
+) {
 	if err := operationContextError(ctx, "query local collection item rows"); err != nil {
 		return nil, err
 	}
@@ -289,10 +399,16 @@ func (generic *GenericStore) QueryRows(ctx context.Context, request lmcollection
 		return nil, err
 	}
 	if len(request.ItemIDs) == 0 && len(request.PathPrefixes) == 0 {
-		return nil, fmt.Errorf("query rows of %s: request does not select an item or a path prefix", name)
+		return nil, fmt.Errorf(
+			"query rows of %s: request does not select an item or a path prefix",
+			name,
+		)
 	}
 	if len(request.ItemIDs) > 0 && request.Declaration.ItemIDColumn == "" {
-		return nil, fmt.Errorf("query rows of %s: declaration does not have an item ID column", name)
+		return nil, fmt.Errorf(
+			"query rows of %s: declaration does not have an item ID column",
+			name,
+		)
 	}
 	selects := itemSelector(request.Declaration.ItemIDColumn, request.ItemIDs, request.PathPrefixes)
 	rows, err := stored.selectRows(selects, 0, request.IncludeVector)
@@ -303,17 +419,20 @@ func (generic *GenericStore) QueryRows(ctx context.Context, request lmcollection
 	storedRows := make([]lmcollection.StoredRow, 0, len(rows))
 	for _, selected := range rows {
 		contentSum := sha256.Sum256([]byte(selected.Content))
-		storedRows = append(storedRows, lmcollection.StoredRow{
-			ID:                selected.ID,
-			RelativePath:      selected.RelativePath,
-			Content:           selected.Content,
-			SplitPart:         selected.SplitPart,
-			SplitPartRecorded: selected.SplitPartRecorded,
-			EmbeddingModel:    selected.EmbeddingModel,
-			ContentHash:       hex.EncodeToString(contentSum[:]),
-			Vector:            selected.Vector,
-			Scalars:           genericCells(selected, declared),
-		})
+		storedRows = append(
+			storedRows,
+			lmcollection.StoredRow{
+				ID:                selected.ID,
+				RelativePath:      selected.RelativePath,
+				Content:           selected.Content,
+				SplitPart:         selected.SplitPart,
+				SplitPartRecorded: selected.SplitPartRecorded,
+				EmbeddingModel:    selected.EmbeddingModel,
+				ContentHash:       hex.EncodeToString(contentSum[:]),
+				Vector:            selected.Vector,
+				Scalars:           genericCells(selected, declared),
+			},
+		)
 	}
 	return storedRows, nil
 }
@@ -321,7 +440,10 @@ func (generic *GenericStore) QueryRows(ctx context.Context, request lmcollection
 // DeleteItems removes every row with an item ID column value in ItemIDs and
 // every row with a relativePath that starts with one of PathPrefixes.
 // DeleteItems skips an empty prefix.
-func (generic *GenericStore) DeleteItems(ctx context.Context, request lmcollection.DeleteItemsRequest) (int64, error) {
+func (generic *GenericStore) DeleteItems(
+	ctx context.Context,
+	request lmcollection.DeleteItemsRequest,
+) (int64, error) {
 	if err := operationContextError(ctx, "delete local collection items"); err != nil {
 		return 0, err
 	}
@@ -330,24 +452,39 @@ func (generic *GenericStore) DeleteItems(ctx context.Context, request lmcollecti
 		return 0, err
 	}
 	if len(request.ItemIDs) == 0 && len(request.PathPrefixes) == 0 {
-		return 0, fmt.Errorf("delete items from %s: request does not select an item or a path prefix", name)
+		return 0, fmt.Errorf(
+			"delete items from %s: request does not select an item or a path prefix",
+			name,
+		)
 	}
 	if len(request.ItemIDs) > 0 && request.Declaration.ItemIDColumn == "" {
-		return 0, fmt.Errorf("delete items from %s: declaration does not have an item ID column", name)
+		return 0, fmt.Errorf(
+			"delete items from %s: declaration does not have an item ID column",
+			name,
+		)
 	}
-	prefixes := slices.DeleteFunc(slices.Clone(request.PathPrefixes), func(prefix string) bool {
-		return prefix == ""
-	})
+	prefixes := slices.DeleteFunc(
+		slices.Clone(request.PathPrefixes),
+		func(prefix string) bool {
+			return prefix == ""
+		},
+	)
 	if len(request.ItemIDs) == 0 && len(prefixes) == 0 {
 		return 0, nil
 	}
-	removed, err := stored.deleteWhere(itemSelector(request.Declaration.ItemIDColumn, request.ItemIDs, prefixes))
+	removed, err := stored.deleteWhere(
+		itemSelector(request.Declaration.ItemIDColumn, request.ItemIDs, prefixes),
+	)
 	return removed, missingAsLibraryError(err)
 }
 
 // BackfillScalars returns [lmcollection.ErrCollectionMissing] for an absent
 // collection.
-func (generic *GenericStore) BackfillScalars(ctx context.Context, collectionName string, backfill lmcollection.ScalarBackfill) (int, int, error) {
+func (generic *GenericStore) BackfillScalars(
+	ctx context.Context,
+	collectionName string,
+	backfill lmcollection.ScalarBackfill,
+) (int, int, error) {
 	name := strings.TrimSpace(collectionName)
 	if name == "" {
 		return 0, 0, errors.New("collection name is required")
@@ -429,7 +566,11 @@ func (stored *collection) ensure(dimensions int) error {
 	}
 	if stored.exists && len(stored.rows) > 0 {
 		if dimensions > 0 && stored.dimensions != dimensions {
-			return fmt.Errorf("collection stores vectors of width %d, and the request declares width %d", stored.dimensions, dimensions)
+			return fmt.Errorf(
+				"collection stores vectors of width %d, and the request declares width %d",
+				stored.dimensions,
+				dimensions,
+			)
 		}
 		return nil
 	}
@@ -464,7 +605,12 @@ func (stored *collection) upsert(added []row) error {
 	addedIDs := make(map[string]struct{}, len(added))
 	for _, candidate := range added {
 		if len(candidate.Vector) != stored.dimensions {
-			return fmt.Errorf("row %s has a vector of width %d, want %d", candidate.RelativePath, len(candidate.Vector), stored.dimensions)
+			return fmt.Errorf(
+				"row %s has a vector of width %d, want %d",
+				candidate.RelativePath,
+				len(candidate.Vector),
+				stored.dimensions,
+			)
 		}
 		addedIDs[candidate.ID] = struct{}{}
 	}
@@ -488,7 +634,10 @@ func (stored *collection) upsert(added []row) error {
 	return stored.persistLocked(rewritten)
 }
 
-func (stored *collection) selectRows(keep func(row) bool, limit int, withVectors bool) ([]row, error) {
+func (stored *collection) selectRows(keep func(row) bool, limit int, withVectors bool) (
+	[]row,
+	error,
+) {
 	stored.mutex.Lock()
 	defer stored.mutex.Unlock()
 	if err := stored.loadLocked(); err != nil {
@@ -509,9 +658,12 @@ func (stored *collection) selectRows(keep func(row) bool, limit int, withVectors
 		}
 		selected = append(selected, candidate)
 	}
-	slices.SortFunc(selected, func(left row, right row) int {
-		return strings.Compare(left.ID, right.ID)
-	})
+	slices.SortFunc(
+		selected,
+		func(left row, right row) int {
+			return strings.Compare(left.ID, right.ID)
+		},
+	)
 	if limit > 0 && len(selected) > limit {
 		selected = selected[:limit]
 	}

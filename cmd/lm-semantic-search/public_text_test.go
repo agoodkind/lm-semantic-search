@@ -50,6 +50,7 @@ func TestCLIPublicTextOmitsTraceAnnotations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve status directory: %v", err)
 	}
+
 	commands := []cliCommand{
 		{args: []string{"codebase", "status", statusPath}, wantText: statusPath},
 		{args: []string{"job", "list"}, wantText: noTrackedJobsText},
@@ -61,9 +62,15 @@ func TestCLIPublicTextOmitsTraceAnnotations(t *testing.T) {
 		if run.exitCode != 0 {
 			t.Fatalf("%s exited %d:\n%s%s", name, run.exitCode, run.stdout, run.stderr)
 		}
+
 		assertNoTraceAnnotation(t, name, run.stdout+run.stderr)
 		if !strings.Contains(run.stdout, command.wantText) {
-			t.Fatalf("%s stdout = %q, want a result that contains %q", name, run.stdout, command.wantText)
+			t.Fatalf(
+				"%s stdout = %q, want a result that contains %q",
+				name,
+				run.stdout,
+				command.wantText,
+			)
 		}
 	}
 
@@ -71,9 +78,14 @@ func TestCLIPublicTextOmitsTraceAnnotations(t *testing.T) {
 	if run.exitCode == 0 {
 		t.Fatalf("job get %s succeeded, want a job-not-found error:\n%s", missingJobID, run.stdout)
 	}
+
 	assertNoTraceAnnotation(t, "job get", run.stdout+run.stderr)
 	if !hasErrorLine(run.stderr, missingJobID) {
-		t.Fatalf("job get stderr = %q, want an Error: line that contains %q", run.stderr, missingJobID)
+		t.Fatalf(
+			"job get stderr = %q, want an Error: line that contains %q",
+			run.stderr,
+			missingJobID,
+		)
 	}
 }
 
@@ -83,6 +95,7 @@ func hasErrorLine(stderr string, want string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -93,6 +106,7 @@ func buildCLI(t *testing.T) string {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build %s: %v\n%s", cliPackage, err, output)
 	}
+
 	return binaryPath
 }
 
@@ -111,8 +125,10 @@ func runCLI(t *testing.T, binaryPath string, args ...string) cliRun {
 		if !errors.As(err, &exitError) {
 			t.Fatalf("run %s %v: %v", binaryPath, args, err)
 		}
+
 		exitCode = exitError.ExitCode()
 	}
+
 	return cliRun{exitCode: exitCode, stdout: stdout.String(), stderr: stderr.String()}
 }
 
@@ -125,9 +141,11 @@ func runCLI(t *testing.T, binaryPath string, args ...string) cliRun {
 // test cleanup that stops the server and closes the manager.
 func startPublicTextDaemon(t *testing.T) string {
 	t.Helper()
+
 	for _, variable := range sandbox.Env(t.TempDir()) {
 		t.Setenv(variable.Name, variable.Value)
 	}
+
 	t.Setenv("CLAUDE_CONTEXT_PROFILE", config.ProfileStandard)
 	t.Setenv("MILVUS_ADDRESS", "")
 	t.Setenv("CLAUDE_CONTEXT_BACKGROUND_SYNC", "false")
@@ -138,6 +156,7 @@ func startPublicTextDaemon(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("create socket directory: %v", err)
 	}
+
 	t.Cleanup(func() { _ = os.RemoveAll(socketDirectory) })
 	socketPath := filepath.Join(socketDirectory, "d.sock")
 	t.Setenv("CLAUDE_CONTEXTD_SOCKET_PATH", socketPath)
@@ -146,19 +165,23 @@ func startPublicTextDaemon(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("load sandbox config: %v", err)
 	}
+
 	for _, directory := range sandbox.Directories(cfg) {
 		if err := os.MkdirAll(directory, 0o755); err != nil {
 			t.Fatalf("create sandbox directory %s: %v", directory, err)
 		}
 	}
+
 	manager, err := daemon.NewManager(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("start sandbox manager: %v", err)
 	}
+
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", socketPath)
 	if err != nil {
 		t.Fatalf("listen on %s: %v", socketPath, err)
 	}
+
 	server := grpc.NewServer(
 		grpc.MaxRecvMsgSize(grpcutil.MaxMessageBytes),
 		grpc.MaxSendMsgSize(grpcutil.MaxMessageBytes),
@@ -175,6 +198,7 @@ func startPublicTextDaemon(t *testing.T) string {
 			t.Errorf("close sandbox manager: %v", err)
 		}
 	})
+
 	return socketPath
 }
 

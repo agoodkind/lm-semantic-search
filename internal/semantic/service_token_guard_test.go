@@ -21,16 +21,21 @@ func TestExpandOverTokenBudgetSplitsOversizeChunk(t *testing.T) {
 	if len(out) < 4 {
 		t.Fatalf("expected at least 4 sub-chunks, got %d", len(out))
 	}
+
 	var joined strings.Builder
+
 	for _, chunk := range out {
 		if len(chunk.Content) > byteBudget {
 			t.Fatalf("sub-chunk over byte budget: %d > %d", len(chunk.Content), byteBudget)
 		}
+
 		if chunk.RelativePath != "conv/x/1" {
 			t.Fatalf("sub-chunk lost RelativePath: %q", chunk.RelativePath)
 		}
+
 		joined.WriteString(chunk.Content)
 	}
+
 	if joined.String() != content {
 		t.Fatal("sub-chunks did not round-trip to the original content")
 	}
@@ -49,26 +54,27 @@ func TestExpandOverTokenBudgetAssignsDistinctStablePositions(t *testing.T) {
 		config.ActiveEmbedTokenLimit(serviceConfig),
 	)
 	content := strings.Repeat("x", byteBudget*2)
-	chunks := []model.StoredChunk{{
-		Content:           content,
-		RelativePath:      "conv/x/1",
-		SplitPartRecorded: true,
-	}}
+	chunks := []model.StoredChunk{
+		{
+			Content:           content,
+			RelativePath:      "conv/x/1",
+			SplitPartRecorded: true,
+		},
+	}
 
 	out := service.expandOverTokenBudget(context.Background(), "cb", chunks, "test")
 	if len(out) != 2 {
 		t.Fatalf("split rows = %d, want 2", len(out))
 	}
+
 	if out[0].SplitPart != 1 {
 		t.Fatalf("first split position = %d, want 1", out[0].SplitPart)
 	}
+
 	if out[1].SplitPart != int32(byteBudget+1) {
-		t.Fatalf(
-			"second split position = %d, want %d",
-			out[1].SplitPart,
-			byteBudget+1,
-		)
+		t.Fatalf("second split position = %d, want %d", out[1].SplitPart, byteBudget+1)
 	}
+
 	if generateID(out[0], 0) == generateID(out[1], 1) {
 		t.Fatal("identical split rows share a primary key")
 	}
@@ -78,29 +84,31 @@ func TestExpandOversizeChunksAssignsDistinctStablePositions(t *testing.T) {
 	t.Parallel()
 
 	content := strings.Repeat("x", milvusVarcharMaxBytes*2)
-	chunks := []model.StoredChunk{{
-		Content:           content,
-		RelativePath:      "src/large.go",
-		SplitPartRecorded: true,
-	}}
+	chunks := []model.StoredChunk{
+		{
+			Content:           content,
+			RelativePath:      "src/large.go",
+			SplitPartRecorded: true,
+		},
+	}
 
 	out, changed := expandOversizeChunks(chunks)
 	if !changed {
 		t.Fatal("expandOversizeChunks reported no change")
 	}
+
 	if len(out) != 2 {
 		t.Fatalf("split rows = %d, want 2", len(out))
 	}
+
 	if out[0].SplitPart != 1 {
 		t.Fatalf("first split position = %d, want 1", out[0].SplitPart)
 	}
+
 	if out[1].SplitPart != int32(milvusVarcharMaxBytes+1) {
-		t.Fatalf(
-			"second split position = %d, want %d",
-			out[1].SplitPart,
-			milvusVarcharMaxBytes+1,
-		)
+		t.Fatalf("second split position = %d, want %d", out[1].SplitPart, milvusVarcharMaxBytes+1)
 	}
+
 	if generateID(out[0], 0) == generateID(out[1], 1) {
 		t.Fatal("identical varchar split rows share a primary key")
 	}
@@ -116,6 +124,7 @@ func TestExpandOverTokenBudgetEnforcesModelLimitWhenUnset(t *testing.T) {
 	if byteBudget <= 0 {
 		t.Fatalf("expected a positive byte budget when unset, got %d", byteBudget)
 	}
+
 	content := strings.Repeat("abcde", 40000)
 	chunks := []model.StoredChunk{{Content: content, RelativePath: "conv/y/2"}}
 
@@ -123,13 +132,17 @@ func TestExpandOverTokenBudgetEnforcesModelLimitWhenUnset(t *testing.T) {
 	if len(out) < 2 {
 		t.Fatalf("expected the oversize chunk to split when unset, got %d sub-chunks", len(out))
 	}
+
 	var joined strings.Builder
+
 	for _, chunk := range out {
 		if len(chunk.Content) > byteBudget {
 			t.Fatalf("sub-chunk over byte budget: %d > %d", len(chunk.Content), byteBudget)
 		}
+
 		joined.WriteString(chunk.Content)
 	}
+
 	if joined.String() != content {
 		t.Fatal("sub-chunks did not round-trip to the original content")
 	}
@@ -150,8 +163,14 @@ func TestExpandOverTokenBudgetSubChunksStayUnderModelTokenLimit(t *testing.T) {
 		// Conservative token estimate at 2.5 bytes/token: ceil(len * 2 / 5).
 		conservativeTokens := (len(chunk.Content)*2 + 4) / 5
 		if conservativeTokens >= config.EmbedModelInputTokenLimit {
-			t.Fatalf("sub-chunk of %d bytes estimates %d tokens, want < %d", len(chunk.Content), conservativeTokens, config.EmbedModelInputTokenLimit)
+			t.Fatalf(
+				"sub-chunk of %d bytes estimates %d tokens, want < %d",
+				len(chunk.Content),
+				conservativeTokens,
+				config.EmbedModelInputTokenLimit,
+			)
 		}
+
 		if len(chunk.Content) > byteBudget {
 			t.Fatalf("sub-chunk over byte budget: %d > %d", len(chunk.Content), byteBudget)
 		}

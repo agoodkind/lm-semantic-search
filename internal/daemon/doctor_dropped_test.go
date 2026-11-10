@@ -85,6 +85,7 @@ func TestRenderQuarantinedSectionStatesNoneWhenEmpty(t *testing.T) {
 	if !strings.Contains(section, "Quarantined codebases") {
 		t.Fatalf("render quarantined section missing = %q", section)
 	}
+
 	if !strings.Contains(section, "none") {
 		t.Fatalf("render quarantined section empty = %q, want a none statement", section)
 	}
@@ -111,10 +112,12 @@ func TestDoctorDisplayTextIncludesDroppedSection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Doctor returned error: %v", err)
 	}
+
 	text := response.GetDisplayText()
 	if !strings.Contains(text, "Dropped codebases") {
 		t.Fatalf("Doctor display_text missing dropped section:\n%s", text)
 	}
+
 	if !strings.Contains(text, repoPath) {
 		t.Fatalf("Doctor display_text missing dropped path %q:\n%s", repoPath, text)
 	}
@@ -144,10 +147,12 @@ func TestDoctorDisplayTextIncludesQuarantinedSection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Doctor returned error: %v", err)
 	}
+
 	text := response.GetDisplayText()
 	if !strings.Contains(text, "Quarantined codebases") {
 		t.Fatalf("Doctor display_text missing quarantined section:\n%s", text)
 	}
+
 	if !strings.Contains(text, repoPath) {
 		t.Fatalf("Doctor display_text missing quarantined path %q:\n%s", repoPath, text)
 	}

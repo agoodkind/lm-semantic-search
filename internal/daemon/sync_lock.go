@@ -77,6 +77,7 @@ func (lease syncLockLease) release(ctx context.Context) {
 	if lease.lock == nil || lease.once == nil {
 		return
 	}
+
 	lease.once.Do(func() {
 		lease.lock.releaseReference(ctx)
 	})
@@ -96,6 +97,7 @@ func (lock *syncLock) acquire(ctx context.Context) (syncLockLease, syncLockOutco
 
 	if err := store.EnsureDir(lock.rootDir); err != nil {
 		slog.ErrorContext(ctx, "ensure sync lock root failed", "path", lock.rootDir, "err", err)
+
 		return syncLockLease{lock: nil, once: nil}, syncLockFailed,
 			fmt.Errorf("ensure sync lock root %s: %w", lock.rootDir, err)
 	}
@@ -107,6 +109,7 @@ func (lock *syncLock) acquire(ctx context.Context) (syncLockLease, syncLockOutco
 
 	lock.file = file
 	lock.refcount = 1
+
 	return newSyncLockLease(lock), syncLockAcquired, nil
 }
 
@@ -131,11 +134,14 @@ func (lock *syncLock) lockFileLocked(
 		_ = file.Close()
 		return nil, syncLockBusy, nil
 	}
+
 	if err != nil {
 		_ = file.Close()
 		slog.ErrorContext(ctx, "acquire sync lock failed", "path", lock.lockPath, "err", err)
+
 		return nil, syncLockFailed, fmt.Errorf("acquire sync lock %s: %w", lock.lockPath, err)
 	}
+
 	return file, syncLockAcquired, nil
 }
 
@@ -145,12 +151,15 @@ func (lock *syncLock) unlockFileLocked(ctx context.Context) {
 	if lock.file == nil {
 		return
 	}
+
 	if err := syscall.Flock(int(lock.file.Fd()), syscall.LOCK_UN); err != nil {
 		slog.ErrorContext(ctx, "release sync lock failed", "path", lock.lockPath, "err", err)
 	}
+
 	if err := lock.file.Close(); err != nil {
 		slog.ErrorContext(ctx, "close sync lock failed", "path", lock.lockPath, "err", err)
 	}
+
 	lock.file = nil
 }
 
@@ -163,9 +172,11 @@ func (lock *syncLock) releaseReference(ctx context.Context) {
 	if lock.refcount == 0 {
 		return
 	}
+
 	lock.refcount--
 	if lock.refcount > 0 {
 		return
 	}
+
 	lock.unlockFileLocked(ctx)
 }

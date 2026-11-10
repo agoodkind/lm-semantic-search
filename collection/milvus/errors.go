@@ -42,12 +42,15 @@ func SearchSentinel(err error) *adapterr.AdapterError {
 	if err == nil {
 		return nil
 	}
+
 	if strings.Contains(strings.ToLower(err.Error()), collectionNotLoadedMessage) {
 		return collection.ErrCollectionNotReady
 	}
+
 	if Unavailable(err) {
 		return adapterr.NewMilvusUnavailable(err)
 	}
+
 	return nil
 }
 
@@ -64,10 +67,12 @@ func WrapError(ctx context.Context, err error, operation string) error {
 	if err == nil {
 		return nil
 	}
+
 	slog.ErrorContext(ctx, "milvus operation failed", "operation", operation, "err", err)
 	if Unavailable(err) {
 		return fmt.Errorf("%s: %w", operation, adapterr.NewMilvusUnavailable(err))
 	}
+
 	return fmt.Errorf("%s: %w", operation, err)
 }
 
@@ -79,5 +84,6 @@ func SearchError(ctx context.Context, operation string, collectionName string, e
 	if sentinel := SearchSentinel(err); sentinel != nil {
 		return sentinel
 	}
+
 	return fmt.Errorf("%s collection %s: %w", operation, collectionName, err)
 }

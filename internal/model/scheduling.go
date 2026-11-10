@@ -104,33 +104,44 @@ func ValidateSchedulingPolicy(policy SchedulingPolicy) error {
 	default:
 		return fmt.Errorf("priority must be high, normal, or low")
 	}
+
 	if policy.IdleAfterSeconds <= 0 {
 		return fmt.Errorf("idle after seconds must be positive")
 	}
+
 	return nil
 }
 
 // ApplySchedulingPolicyPatch fills legacy zero values and applies the patch.
-func ApplySchedulingPolicyPatch(stored SchedulingPolicy, patch SchedulingPolicyPatch) (SchedulingPolicy, error) {
+func ApplySchedulingPolicyPatch(
+	stored SchedulingPolicy,
+	patch SchedulingPolicyPatch,
+) (SchedulingPolicy, error) {
 	policy := stored
 	defaults := DefaultSchedulingPolicy()
 	if policy.Priority == "" {
 		policy.Priority = defaults.Priority
 	}
+
 	if policy.IdleAfterSeconds == 0 {
 		policy.IdleAfterSeconds = defaults.IdleAfterSeconds
 	}
+
 	if patch.Priority != nil {
 		policy.Priority = *patch.Priority
 	}
+
 	if patch.Quiet != nil {
 		policy.Quiet = *patch.Quiet
 	}
+
 	if patch.IdleAfterSeconds != nil {
 		policy.IdleAfterSeconds = *patch.IdleAfterSeconds
 	}
+
 	if err := ValidateSchedulingPolicy(policy); err != nil {
 		return SchedulingPolicy{}, err
 	}
+
 	return policy, nil
 }

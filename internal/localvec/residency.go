@@ -29,7 +29,9 @@ func (store *Store) PinStaging(
 	if err := ctx.Err(); err != nil {
 		wrappedErr := fmt.Errorf("pin local staging collection: %w", err)
 		slog.WarnContext(ctx, "pin local staging collection cancelled", "error", wrappedErr)
+
 		return nil, wrappedErr
 	}
+
 	return semantic.NoopCollectionPin{}, nil
 }

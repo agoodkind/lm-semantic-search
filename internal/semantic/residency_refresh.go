@@ -21,14 +21,17 @@ func (service *Service) refreshLoadingResidency(
 	if len(loading) == 0 {
 		return
 	}
+
 	ticker := time.NewTicker(residencyRefreshInterval)
 	defer ticker.Stop()
+
 	for len(loading) != 0 {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
+
 		pending := loading[:0]
 		for _, name := range loading {
 			observe, keep := service.residency.prepareLoadingReconciliation(generation, name)
@@ -36,8 +39,10 @@ func (service *Service) refreshLoadingResidency(
 				if keep {
 					pending = append(pending, name)
 				}
+
 				continue
 			}
+
 			state := collectionResidencyUnknown
 			remote, err := client.GetLoadState(ctx, milvusclient.NewGetLoadStateOption(name))
 			if err != nil {
@@ -53,11 +58,13 @@ func (service *Service) refreshLoadingResidency(
 				case entity.LoadStateUnloading:
 				}
 			}
+
 			service.residency.applyReconciliation(ctx, generation, name, state)
 			if state == collectionResidencyLoading || state == collectionResidencyUnknown {
 				pending = append(pending, name)
 			}
 		}
+
 		loading = pending
 	}
 }
@@ -72,13 +79,18 @@ func (controller *collectionResidencyController) prepareLoadingReconciliation(
 		controller.reconciliationActivity[name] >= generation {
 		return false, false
 	}
+
 	entry := controller.entries[name]
-	if entry == nil || (entry.state != collectionResidencyLoading && entry.state != collectionResidencyUnknown) {
+	if entry == nil ||
+		(entry.state != collectionResidencyLoading && entry.state != collectionResidencyUnknown) {
 		return false, false
 	}
+
 	if controller.entryHasActivityLocked(entry) {
 		return false, true
 	}
+
 	entry.reconciliation = generation
+
 	return true, true
 }

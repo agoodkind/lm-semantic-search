@@ -32,8 +32,10 @@ func ApplyProfile(cfg Config) Config {
 		if cfg.IndexBackend == "" {
 			cfg.IndexBackend = IndexBackendMilvus
 		}
+
 		return cfg
 	}
+
 	preset, err := offlinemodel.Resolve(cfg.OfflineEmbeddingModel)
 	if err == nil {
 		cfg.OfflineEmbeddingModel = preset.Name
@@ -45,9 +47,11 @@ func ApplyProfile(cfg Config) Config {
 		cfg.EmbeddingDimension = 0
 		cfg.QueryInstructionPrefix = ""
 	}
+
 	cfg.IndexBackend = IndexBackendLocal
 	cfg.EmbeddingProvider = EmbeddingProviderONNX
 	cfg.MilvusAddress = ""
 	cfg.MilvusToken = ""
+
 	return cfg
 }

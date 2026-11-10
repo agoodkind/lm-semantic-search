@@ -29,6 +29,7 @@ func TestPlatformSourceReturnsDefinedClassificationWithinTimeout(t *testing.T) {
 	default:
 		t.Fatalf("Classify = %q, want a defined classification", classification)
 	}
+
 	if elapsed > platform.ClassifyTimeout+classifyReturnMargin {
 		t.Fatalf(
 			"Classify took %s, want at most %s",
@@ -36,6 +37,7 @@ func TestPlatformSourceReturnsDefinedClassificationWithinTimeout(t *testing.T) {
 			platform.ClassifyTimeout+classifyReturnMargin,
 		)
 	}
+
 	t.Logf("classification=%s elapsed=%s", classification, elapsed)
 }
 
@@ -45,10 +47,6 @@ func TestPlatformSourceReturnsUnknownForCancelledContext(t *testing.T) {
 
 	classification := platform.New().Classify(ctx)
 	if classification != networkcost.ClassificationUnknown {
-		t.Fatalf(
-			"Classify = %q want %q",
-			classification,
-			networkcost.ClassificationUnknown,
-		)
+		t.Fatalf("Classify = %q want %q", classification, networkcost.ClassificationUnknown)
 	}
 }

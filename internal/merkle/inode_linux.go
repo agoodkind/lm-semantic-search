@@ -13,5 +13,6 @@ func inodeFromFileInfo(info os.FileInfo) InodeRef {
 	if !ok {
 		return InodeRef{Device: "", Inode: 0}
 	}
+
 	return InodeRef{Device: strconv.FormatUint(stat.Dev, 10), Inode: stat.Ino}
 }

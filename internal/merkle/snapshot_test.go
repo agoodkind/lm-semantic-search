@@ -23,12 +23,14 @@ type guardedBuffer struct {
 func (guarded *guardedBuffer) Write(data []byte) (int, error) {
 	guarded.mu.Lock()
 	defer guarded.mu.Unlock()
+
 	return guarded.buffer.Write(data)
 }
 
 func (guarded *guardedBuffer) text() string {
 	guarded.mu.Lock()
 	defer guarded.mu.Unlock()
+
 	return guarded.buffer.String()
 }
 
@@ -37,18 +39,22 @@ func (guarded *guardedBuffer) text() string {
 // logged during the window.
 func (guarded *guardedBuffer) linesContaining(matches ...string) []string {
 	found := make([]string, 0)
+
 	for _, line := range strings.Split(guarded.text(), "\n") {
 		carriesAll := true
+
 		for _, match := range matches {
 			if !strings.Contains(line, match) {
 				carriesAll = false
 				break
 			}
 		}
+
 		if carriesAll {
 			found = append(found, line)
 		}
 	}
+
 	return found
 }
 
@@ -57,8 +63,11 @@ func captureDefaultLogger(t *testing.T) *guardedBuffer {
 
 	logs := &guardedBuffer{}
 	previousLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	slog.SetDefault(
+		slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	)
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
 	return logs
 }
 
@@ -74,15 +83,25 @@ func TestLoadSnapshotForConfigMissingFileReportsAbsenceWithoutClaimingFailure(t 
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("err = %v, want one wrapping os.ErrNotExist", err)
 	}
+
 	if snapshot.ConfigDigest != "sha256:request" {
 		t.Fatalf("ConfigDigest = %q, want sha256:request", snapshot.ConfigDigest)
 	}
+
 	if len(snapshot.Files) != 0 {
 		t.Fatalf("Files = %#v, want empty", snapshot.Files)
 	}
-	if len(logs.linesContaining("level=DEBUG", "read Merkle snapshot not found; starting fresh", missingPath)) == 0 {
+
+	if len(
+		logs.linesContaining(
+			"level=DEBUG",
+			"read Merkle snapshot not found; starting fresh",
+			missingPath,
+		),
+	) == 0 {
 		t.Fatalf("the absent checkpoint was not reported at debug level:\n%s", logs.text())
 	}
+
 	if lines := logs.linesContaining("level=ERROR", missingPath); len(lines) > 0 {
 		t.Fatalf("the absent checkpoint was reported as a failure:\n%s", strings.Join(lines, "\n"))
 	}
@@ -95,19 +114,25 @@ func TestLoadSnapshotForConfigUnparseableFileReportsFailure(t *testing.T) {
 	if err := os.WriteFile(corruptPath, []byte("{"), 0o600); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
+
 	logs := captureDefaultLogger(t)
 
 	snapshot, err := LoadSnapshotForConfig(corruptPath, "sha256:request", "")
 	if err == nil {
 		t.Fatal("err = nil, want the parse failure")
 	}
+
 	if errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("err = %v, want a parse failure rather than an absence", err)
 	}
+
 	if len(snapshot.Files) != 0 {
 		t.Fatalf("Files = %#v, want empty", snapshot.Files)
 	}
-	if len(logs.linesContaining("level=ERROR", "unmarshal Merkle snapshot failed", corruptPath)) == 0 {
+
+	if len(
+		logs.linesContaining("level=ERROR", "unmarshal Merkle snapshot failed", corruptPath),
+	) == 0 {
 		t.Fatalf("the unparseable checkpoint was not reported as a failure:\n%s", logs.text())
 	}
 }
@@ -128,6 +153,7 @@ func TestLoadSnapshotForConfigMismatchedDigestReportsItsOwnCause(t *testing.T) {
 	if !errors.Is(err, ErrConfigDigestMismatch) {
 		t.Fatalf("err = %v, want one wrapping ErrConfigDigestMismatch", err)
 	}
+
 	if errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("err = %v, want a mismatch rather than an absence", err)
 	}
@@ -141,13 +167,16 @@ func TestLoadSnapshotForConfigMatchingDigest(t *testing.T) {
 	if err := WriteSnapshot(path, stored); err != nil {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
+
 	loaded, err := LoadSnapshotForConfig(path, "sha256:digest-a", "")
 	if err != nil {
 		t.Fatalf("LoadSnapshotForConfig returned error: %v", err)
 	}
+
 	if loaded.ConfigDigest != "sha256:digest-a" {
 		t.Fatalf("ConfigDigest = %q", loaded.ConfigDigest)
 	}
+
 	if !reflect.DeepEqual(loaded.Files, stored.Files) {
 		t.Fatalf("Files = %#v, want %#v", loaded.Files, stored.Files)
 	}
@@ -161,10 +190,12 @@ func TestLoadSnapshotForConfigMismatchedDigest(t *testing.T) {
 	if err := WriteSnapshot(path, stored); err != nil {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
+
 	loaded, _ := LoadSnapshotForConfig(path, "sha256:digest-b", "")
 	if loaded.ConfigDigest != "sha256:digest-b" {
 		t.Fatalf("ConfigDigest = %q, want fresh sha256:digest-b", loaded.ConfigDigest)
 	}
+
 	if len(loaded.Files) != 0 {
 		t.Fatalf("Files = %#v, want empty due to digest mismatch", loaded.Files)
 	}
@@ -182,13 +213,16 @@ func TestLoadSnapshotForConfigLegacyAcceptDigest(t *testing.T) {
 	if err := WriteSnapshot(path, stored); err != nil {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
+
 	loaded, err := LoadSnapshotForConfig(path, "sha256:request", "sha256:request")
 	if err != nil {
 		t.Fatalf("LoadSnapshotForConfig returned error: %v", err)
 	}
+
 	if loaded.ConfigDigest != "sha256:request" {
 		t.Fatalf("ConfigDigest = %q, want stamped request digest", loaded.ConfigDigest)
 	}
+
 	if !reflect.DeepEqual(loaded.Files, stored.Files) {
 		t.Fatalf("Files = %#v, want %#v", loaded.Files, stored.Files)
 	}
@@ -204,6 +238,7 @@ func TestLoadSnapshotForConfigLegacyRejectsOnMismatch(t *testing.T) {
 	if err := WriteSnapshot(path, stored); err != nil {
 		t.Fatalf("WriteSnapshot returned error: %v", err)
 	}
+
 	loaded, _ := LoadSnapshotForConfig(path, "sha256:request", "sha256:other")
 	if len(loaded.Files) != 0 {
 		t.Fatalf("Files = %#v, want empty due to legacy digest mismatch", loaded.Files)
@@ -225,15 +260,18 @@ func TestDiffSnapshotsAddOnly(t *testing.T) {
 	t.Parallel()
 
 	prev := Snapshot{Files: map[string]string{"a.go": "hash-a"}}
-	current := Snapshot{Files: map[string]string{
-		"a.go":  "hash-a",
-		"b.go":  "hash-b",
-		"sub/c": "hash-c",
-	}}
+	current := Snapshot{
+		Files: map[string]string{
+			"a.go":  "hash-a",
+			"b.go":  "hash-b",
+			"sub/c": "hash-c",
+		},
+	}
 	diff := DiffSnapshots(prev, current)
 	if !reflect.DeepEqual(diff.Added, []string{"b.go", "sub/c"}) {
 		t.Fatalf("added = %#v", diff.Added)
 	}
+
 	if len(diff.Modified) != 0 || len(diff.Removed) != 0 {
 		t.Fatalf("diff = %#v", diff)
 	}
@@ -248,6 +286,7 @@ func TestDiffSnapshotsModifyOnly(t *testing.T) {
 	if !reflect.DeepEqual(diff.Modified, []string{"a.go"}) {
 		t.Fatalf("modified = %#v", diff.Modified)
 	}
+
 	if len(diff.Added) != 0 || len(diff.Removed) != 0 {
 		t.Fatalf("diff = %#v", diff)
 	}
@@ -262,6 +301,7 @@ func TestDiffSnapshotsRemoveOnly(t *testing.T) {
 	if !reflect.DeepEqual(diff.Removed, []string{"old.go"}) {
 		t.Fatalf("removed = %#v", diff.Removed)
 	}
+
 	if len(diff.Added) != 0 || len(diff.Modified) != 0 {
 		t.Fatalf("diff = %#v", diff)
 	}
@@ -270,23 +310,29 @@ func TestDiffSnapshotsRemoveOnly(t *testing.T) {
 func TestDiffSnapshotsMixed(t *testing.T) {
 	t.Parallel()
 
-	prev := Snapshot{Files: map[string]string{
-		"keep.go":   "same",
-		"change.go": "old",
-		"gone.go":   "old",
-	}}
-	current := Snapshot{Files: map[string]string{
-		"keep.go":   "same",
-		"change.go": "new",
-		"added.go":  "fresh",
-	}}
+	prev := Snapshot{
+		Files: map[string]string{
+			"keep.go":   "same",
+			"change.go": "old",
+			"gone.go":   "old",
+		},
+	}
+	current := Snapshot{
+		Files: map[string]string{
+			"keep.go":   "same",
+			"change.go": "new",
+			"added.go":  "fresh",
+		},
+	}
 	diff := DiffSnapshots(prev, current)
 	if !reflect.DeepEqual(diff.Added, []string{"added.go"}) {
 		t.Fatalf("added = %#v", diff.Added)
 	}
+
 	if !reflect.DeepEqual(diff.Modified, []string{"change.go"}) {
 		t.Fatalf("modified = %#v", diff.Modified)
 	}
+
 	if !reflect.DeepEqual(diff.Removed, []string{"gone.go"}) {
 		t.Fatalf("removed = %#v", diff.Removed)
 	}
@@ -295,7 +341,10 @@ func TestDiffSnapshotsMixed(t *testing.T) {
 func TestDiffSnapshotsBothEmpty(t *testing.T) {
 	t.Parallel()
 
-	diff := DiffSnapshots(Snapshot{Files: map[string]string{}}, Snapshot{Files: map[string]string{}})
+	diff := DiffSnapshots(
+		Snapshot{Files: map[string]string{}},
+		Snapshot{Files: map[string]string{}},
+	)
 	if !diff.Empty() {
 		t.Fatalf("diff = %#v", diff)
 	}

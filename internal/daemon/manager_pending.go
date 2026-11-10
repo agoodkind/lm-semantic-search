@@ -47,7 +47,10 @@ const (
 
 // activeJobLocked classifies a codebase's in-flight code job against an incoming
 // request's config. Caller holds manager.mu.
-func (manager *Manager) activeJobLocked(codebase model.Codebase, indexConfig model.IndexConfig) (model.Job, activeJobResolution, error) {
+func (manager *Manager) activeJobLocked(
+	codebase model.Codebase,
+	indexConfig model.IndexConfig,
+) (model.Job, activeJobResolution, error) {
 	var emptyJob model.Job
 	if codebase.ActiveJobID == "" {
 		return emptyJob, activeJobNone, nil
@@ -61,12 +64,20 @@ func (manager *Manager) activeJobLocked(codebase model.Codebase, indexConfig mod
 	switch activeJob.State {
 	case model.JobStateCompleted, model.JobStateFailed, model.JobStateCancelled:
 		return emptyJob, activeJobNone, nil
-	case model.JobStateQueued, model.JobStateRunning, model.JobStatePaused, model.JobStateCancelling:
+	case model.JobStateQueued,
+		model.JobStateRunning,
+		model.JobStatePaused,
+		model.JobStateCancelling:
 	default:
-		return emptyJob, activeJobNone, fmt.Errorf("unknown job state %s for active job %s", activeJob.State, activeJob.ID)
+		return emptyJob, activeJobNone, fmt.Errorf(
+			"unknown job state %s for active job %s",
+			activeJob.State,
+			activeJob.ID,
+		)
 	}
 
-	if activeJob.Config.IgnoreDigest == indexConfig.IgnoreDigest && activeJob.Config.SplitterType == indexConfig.SplitterType {
+	if activeJob.Config.IgnoreDigest == indexConfig.IgnoreDigest &&
+		activeJob.Config.SplitterType == indexConfig.SplitterType {
 		return activeJob, activeJobDedup, nil
 	}
 
@@ -77,11 +88,18 @@ func (manager *Manager) activeJobLocked(codebase model.Codebase, indexConfig mod
 // into the codebase's single depth-1 pending slot. The newer request's config,
 // path, and client win (latest-writer-wins) while force ORs sticky. Caller holds
 // manager.mu.
-func (manager *Manager) mergePendingCodeRequestLocked(codebaseID string, incoming pendingCodeRequest) {
+func (manager *Manager) mergePendingCodeRequestLocked(
+	codebaseID string,
+	incoming pendingCodeRequest,
+) {
 	if existing, found := manager.pendingCodeJobs[codebaseID]; found {
 		incoming.force = incoming.force || existing.force
-		incoming.policyPatch = mergeSchedulingPolicyPatches(existing.policyPatch, incoming.policyPatch)
+		incoming.policyPatch = mergeSchedulingPolicyPatches(
+			existing.policyPatch,
+			incoming.policyPatch,
+		)
 	}
+
 	manager.pendingCodeJobs[codebaseID] = incoming
 }
 
@@ -110,14 +128,18 @@ func (manager *Manager) queueDeduplicatedPolicyOverride(
 	if !found || isTerminalJobState(current.State) {
 		return
 	}
-	manager.mergePendingCodeRequestLocked(current.CodebaseID, pendingCodeRequest{
-		requestedPath: requestedPath,
-		canonicalPath: canonicalPath,
-		client:        client,
-		indexConfig:   indexConfig,
-		force:         force,
-		policyPatch:   policyPatch,
-	})
+
+	manager.mergePendingCodeRequestLocked(
+		current.CodebaseID,
+		pendingCodeRequest{
+			requestedPath: requestedPath,
+			canonicalPath: canonicalPath,
+			client:        client,
+			indexConfig:   indexConfig,
+			force:         force,
+			policyPatch:   policyPatch,
+		},
+	)
 }
 
 // enqueueCodeSyncJobLocked writes the registry mutations for a fresh code sync
@@ -125,42 +147,69 @@ func (manager *Manager) queueDeduplicatedPolicyOverride(
 // SyncIndex's post-admission body so a drained code job runs the same path a
 // first-time sync does. On a persistence error it rolls back the codebase
 // mutation. Caller holds manager.mu and runs runJobAsync after unlocking.
-func (manager *Manager) enqueueCodeSyncJobLocked(current model.Codebase, request pendingCodeRequest) (model.Job, error) {
+func (manager *Manager) enqueueCodeSyncJobLocked(
+	current model.Codebase,
+	request pendingCodeRequest,
+) (model.Job, error) {
 	original := current
 	now := clock.Now()
-	resolvedCodebase, effectivePolicy, err := manager.resolveIndexPolicyLocked(current, indexPolicyIntent{
-		Patch:      request.policyPatch,
-		Initialize: false,
-	})
+	resolvedCodebase, effectivePolicy, err := manager.resolveIndexPolicyLocked(
+		current,
+		indexPolicyIntent{
+			Patch:      request.policyPatch,
+			Initialize: false,
+		},
+	)
 	if err != nil {
 		return model.Job{}, err
 	}
+
 	current = resolvedCodebase
 	current.Status = model.CodebaseStatusIndexing
 	current.EffectiveConfig = request.indexConfig
 	if manager.semantic != nil && manager.semantic.Available() {
 		current.CollectionName = manager.semantic.CollectionName(request.canonicalPath)
 	}
+
 	if info, ok := gitworktree.Resolve(request.canonicalPath); ok && info.Linked {
 		current.WorktreeCommonDir = info.CommonDir
 	}
+
 	current.UpdatedAt = now
-	job := newQueuedJob(current.ID, request.requestedPath, request.canonicalPath, request.client, string(jobOperationSync), request.force, request.indexConfig, emptyAdmissionBudget, now)
-	applyJobSchedulingPolicy(&job, effectivePolicy, request.policyPatch, manager.nextQueueSequenceLocked())
+	job := newQueuedJob(
+		current.ID,
+		request.requestedPath,
+		request.canonicalPath,
+		request.client,
+		string(jobOperationSync),
+		request.force,
+		request.indexConfig,
+		emptyAdmissionBudget,
+		now,
+	)
+	applyJobSchedulingPolicy(
+		&job,
+		effectivePolicy,
+		request.policyPatch,
+		manager.nextQueueSequenceLocked(),
+	)
 	current.ActiveJobID = job.ID
 	manager.codebases[current.ID] = current
 	if err := manager.saveLocked(); err != nil {
 		manager.codebases[original.ID] = original
 		return model.Job{}, err
 	}
+
 	if err := manager.appendJobLocked("start_sync", job); err != nil {
 		manager.codebases[original.ID] = original
 		return model.Job{}, err
 	}
+
 	// The re-enriched EffectiveConfig may carry new custom ignore patterns, so
 	// signal the observer to invalidate; the next decision rebuilds from the
 	// registry source of truth.
 	manager.observer.Invalidate(current.ID)
+
 	return job, nil
 }
 
@@ -170,7 +219,10 @@ func (manager *Manager) enqueueCodeSyncJobLocked(current model.Codebase, request
 // this transition, so it reads the finished checkpoint. It returns the queued job
 // id and true when it drained work; the caller runs runDrainedJob after releasing
 // manager.mu. Caller holds manager.mu and has already set ActiveJobID = "".
-func (manager *Manager) drainPendingJobLocked(ctx context.Context, codebaseID string) (string, bool) {
+func (manager *Manager) drainPendingJobLocked(
+	ctx context.Context,
+	codebaseID string,
+) (string, bool) {
 	current, found := manager.codebases[codebaseID]
 	if !found {
 		// The codebase is gone, so drop any stale pending work rather than resurrect
@@ -178,6 +230,7 @@ func (manager *Manager) drainPendingJobLocked(ctx context.Context, codebaseID st
 		delete(manager.pendingCodeJobs, codebaseID)
 		return "", false
 	}
+
 	if current.ActiveJobID != "" {
 		// A successor is already active for this codebase, so the depth-1 slot waits
 		// for the next terminal transition rather than double-queue.
@@ -188,11 +241,21 @@ func (manager *Manager) drainPendingJobLocked(ctx context.Context, codebaseID st
 		delete(manager.pendingCodeJobs, codebaseID)
 		job, err := manager.enqueueCodeSyncJobLocked(current, request)
 		if err != nil {
-			slog.ErrorContext(ctx, "drain pending code job failed", "codebase_id", codebaseID, "err", err)
+			slog.ErrorContext(
+				ctx,
+				"drain pending code job failed",
+				"codebase_id",
+				codebaseID,
+				"err",
+				err,
+			)
+
 			return "", false
 		}
+
 		return job.ID, true
 	}
+
 	return "", false
 }
 

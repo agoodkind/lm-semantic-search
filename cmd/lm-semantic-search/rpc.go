@@ -30,6 +30,7 @@ func resolveClientInfo() (*pb.ClientInfo, error) {
 		slog.Error("resolve client info failed", "err", err)
 		return nil, fmt.Errorf("resolve client info: %w", err)
 	}
+
 	return clientInfo, nil
 }
 
@@ -45,6 +46,7 @@ func callDaemon(options cliOptions, call rpcCall) (protoMessage, error) {
 		slog.Error("dial daemon failed", "socket_path", options.socketPath, "err", err)
 		return nil, fmt.Errorf("dial daemon: %w", err)
 	}
+
 	defer func() { _ = connection.Close() }()
 
 	result, err := call(ctx, client)
@@ -52,6 +54,7 @@ func callDaemon(options cliOptions, call rpcCall) (protoMessage, error) {
 		slog.Error("daemon RPC failed", "socket_path", options.socketPath, "err", err)
 		return nil, formatCallError(err)
 	}
+
 	return result, nil
 }
 
@@ -60,6 +63,7 @@ func callAndPrint(options cliOptions, call rpcCall) error {
 	if err != nil {
 		return err
 	}
+
 	return printResponse(options, result)
 }
 
@@ -69,10 +73,12 @@ func printResponse(options cliOptions, result protoMessage) error {
 		slog.Error("format response failed", "err", err)
 		return fmt.Errorf("format response: %w", err)
 	}
+
 	_, err = fmt.Fprintf(os.Stdout, "%s\n", formatted)
 	if err != nil {
 		return fmt.Errorf("write response output: %w", err)
 	}
+
 	return nil
 }
 
@@ -81,6 +87,7 @@ func formatCallError(err error) error {
 	if ok {
 		return errors.New(grpcErr.Message())
 	}
+
 	return errors.New(err.Error())
 }
 
@@ -88,8 +95,10 @@ func safeSearchLimit(limit int) (int32, error) {
 	if limit < 0 {
 		return 0, fmt.Errorf("limit must be non-negative")
 	}
+
 	if limit > math.MaxInt32 {
 		return 0, fmt.Errorf("limit %d exceeds int32", limit)
 	}
+
 	return int32(limit), nil
 }

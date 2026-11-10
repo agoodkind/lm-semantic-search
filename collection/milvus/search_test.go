@@ -19,12 +19,20 @@ const (
 	testLoadRulesColumn     = "loadRules"
 )
 
-func candidate(primaryKey string, relativePath string, conversationID string, score float64) milvus.Candidate {
+func candidate(
+	primaryKey string,
+	relativePath string,
+	conversationID string,
+	score float64,
+) milvus.Candidate {
 	return milvus.Candidate{
 		PrimaryKey:   primaryKey,
 		RelativePath: relativePath,
-		Group:        collection.ValueCell(testGroupColumn, collection.StringScalar(conversationID)),
-		Score:        score,
+		Group: collection.ValueCell(
+			testGroupColumn,
+			collection.StringScalar(conversationID),
+		),
+		Score: score,
 	}
 }
 
@@ -33,6 +41,7 @@ func candidateKeys(candidates []milvus.Candidate) []string {
 	for _, ranked := range candidates {
 		keys = append(keys, ranked.PrimaryKey)
 	}
+
 	return keys
 }
 
@@ -50,7 +59,10 @@ func TestSelectCandidatesBreaksTiesByPathThenKey(t *testing.T) {
 		candidate("k5", "conv/c/0", "c", 0.7),
 	}
 	want := []string{"k1", "k2", "k3", "k5", "k4"}
-	if got := candidateKeys(milvus.SelectCandidates(candidates, 0, 0, 0)); !reflect.DeepEqual(got, want) {
+	if got := candidateKeys(milvus.SelectCandidates(candidates, 0, 0, 0)); !reflect.DeepEqual(
+		got,
+		want,
+	) {
 		t.Fatalf("selected keys = %v, want %v", got, want)
 	}
 }
@@ -62,23 +74,45 @@ func TestSelectCandidatesFillsPastAnOverfilledTop(t *testing.T) {
 	t.Parallel()
 
 	candidates := make([]milvus.Candidate, 0, 40)
+
 	for index := range 30 {
-		candidates = append(candidates, candidate(fmt.Sprintf("dense-%02d", index), fmt.Sprintf("conv/dense/%02d", index), "dense", 1.0))
+		candidates = append(
+			candidates,
+			candidate(
+				fmt.Sprintf("dense-%02d", index),
+				fmt.Sprintf("conv/dense/%02d", index),
+				"dense",
+				1.0,
+			),
+		)
 	}
+
 	for index := range 10 {
 		conversationID := fmt.Sprintf("other-%02d", index)
-		candidates = append(candidates, candidate(conversationID, "conv/"+conversationID+"/0", conversationID, 0.5-float64(index)/100))
+		candidates = append(
+			candidates,
+			candidate(
+				conversationID,
+				"conv/"+conversationID+"/0",
+				conversationID,
+				0.5-float64(index)/100,
+			),
+		)
 	}
+
 	selected := milvus.SelectCandidates(candidates, 2, 0, 10)
 	if len(selected) != 10 {
 		t.Fatalf("selected %d candidates, want 10", len(selected))
 	}
+
 	dense := 0
+
 	for _, ranked := range selected {
 		if ranked.Group.Value.String == "dense" {
 			dense++
 		}
 	}
+
 	if dense != 2 {
 		t.Fatalf("selected %d dense candidates, want the cap of 2", dense)
 	}
@@ -100,12 +134,14 @@ func TestSelectCandidatesSmallerLimitIsPrefix(t *testing.T) {
 		}
 	}
 	larger := candidateKeys(milvus.SelectCandidates(candidates(), 2, 0.45, 5))
+
 	for limit := int32(1); limit <= 5; limit++ {
 		smaller := candidateKeys(milvus.SelectCandidates(candidates(), 2, 0.45, limit))
 		if len(smaller) > len(larger) || !reflect.DeepEqual(smaller, larger[:len(smaller)]) {
 			t.Fatalf("limit %d selected %v, want a prefix of %v", limit, smaller, larger)
 		}
 	}
+
 	if want := []string{"k1", "k2", "k4", "k5"}; !reflect.DeepEqual(larger, want) {
 		t.Fatalf("selected %v, want %v (cap 2 drops k3, floor 0.45 drops k6)", larger, want)
 	}
@@ -118,7 +154,12 @@ func TestSelectCandidatesGroupsByCellValue(t *testing.T) {
 	t.Parallel()
 
 	nullCandidate := func(primaryKey string, score float64, cell collection.ScalarCell) milvus.Candidate {
-		return milvus.Candidate{PrimaryKey: primaryKey, RelativePath: "row/" + primaryKey, Group: cell, Score: score}
+		return milvus.Candidate{
+			PrimaryKey:   primaryKey,
+			RelativePath: "row/" + primaryKey,
+			Group:        cell,
+			Score:        score,
+		}
 	}
 	candidates := []milvus.Candidate{
 		candidate("k1", "conv/x/0", "x", 0.9),
@@ -128,7 +169,11 @@ func TestSelectCandidatesGroupsByCellValue(t *testing.T) {
 		nullCandidate("k5", 0.5, collection.NullCell(testGroupColumn)),
 		nullCandidate("k6", 0.4, collection.AbsentCell(testGroupColumn)),
 	}
-	if got, want := candidateKeys(milvus.SelectCandidates(candidates, 1, 0, 10)), []string{"k1", "k3", "k5"}; !reflect.DeepEqual(got, want) {
+	if got, want := candidateKeys(milvus.SelectCandidates(candidates, 1, 0, 10)), []string{
+		"k1",
+		"k3",
+		"k5",
+	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("selected %v, want %v", got, want)
 	}
 }
@@ -148,6 +193,7 @@ func TestScalarCellAtDecodesDeclaredScalars(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build nullable workspace column: %v", err)
 	}
+
 	resultSet := milvusclient.ResultSet{
 		ResultCount: 2,
 		Fields: milvusclient.DataSet{
@@ -157,10 +203,25 @@ func TestScalarCellAtDecodesDeclaredScalars(t *testing.T) {
 		},
 	}
 	declared := []collection.ScalarColumn{
-		{Name: testWorkspaceRootColumn, Type: collection.ScalarTypeString, Nullable: true, MaxLength: 1024},
+		{
+			Name:      testWorkspaceRootColumn,
+			Type:      collection.ScalarTypeString,
+			Nullable:  true,
+			MaxLength: 1024,
+		},
 		{Name: testArchivedColumn, Type: collection.ScalarTypeBool, Nullable: true, MaxLength: 0},
-		{Name: testMessageIndexColumn, Type: collection.ScalarTypeInt64, Nullable: true, MaxLength: 0},
-		{Name: testLoadRulesColumn, Type: collection.ScalarTypeString, Nullable: true, MaxLength: 256},
+		{
+			Name:      testMessageIndexColumn,
+			Type:      collection.ScalarTypeInt64,
+			Nullable:  true,
+			MaxLength: 0,
+		},
+		{
+			Name:      testLoadRulesColumn,
+			Type:      collection.ScalarTypeString,
+			Nullable:  true,
+			MaxLength: 256,
+		},
 	}
 	want := [][]collection.ScalarCell{
 		{
@@ -176,15 +237,27 @@ func TestScalarCellAtDecodesDeclaredScalars(t *testing.T) {
 			collection.AbsentCell(testLoadRulesColumn),
 		},
 	}
+
 	for rowIndex := range 2 {
 		cells := make([]collection.ScalarCell, 0, len(declared))
 		for _, scalarColumn := range declared {
-			cell, cellErr := milvus.ScalarCellAt(resultSet.GetColumn(scalarColumn.Name), scalarColumn, rowIndex)
+			cell, cellErr := milvus.ScalarCellAt(
+				resultSet.GetColumn(scalarColumn.Name),
+				scalarColumn,
+				rowIndex,
+			)
 			if cellErr != nil {
-				t.Fatalf("ScalarCellAt(%s, %d) returned error: %v", scalarColumn.Name, rowIndex, cellErr)
+				t.Fatalf(
+					"ScalarCellAt(%s, %d) returned error: %v",
+					scalarColumn.Name,
+					rowIndex,
+					cellErr,
+				)
 			}
+
 			cells = append(cells, cell)
 		}
+
 		if !reflect.DeepEqual(cells, want[rowIndex]) {
 			t.Fatalf("row %d cells = %+v, want %+v", rowIndex, cells, want[rowIndex])
 		}

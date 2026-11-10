@@ -43,12 +43,15 @@ func storeSearchSentinel(err error) *adapterr.AdapterError {
 	if err == nil {
 		return nil
 	}
+
 	if strings.Contains(strings.ToLower(err.Error()), collectionNotLoadedMessage) {
 		return ErrCollectionNotReady
 	}
+
 	if storeUnavailable(err) {
 		return adapterr.NewMilvusUnavailable(err)
 	}
+
 	return nil
 }
 
@@ -71,9 +74,11 @@ func classifyFlushError(err error) error {
 	if err == nil {
 		return nil
 	}
+
 	if strings.Contains(strings.ToLower(err.Error()), flushRateLimitMessage) {
 		return flushRateLimitError{cause: err}
 	}
+
 	return err
 }
 
@@ -90,9 +95,11 @@ func wrapStoreError(ctx context.Context, err error, operation string) error {
 	if err == nil {
 		return nil
 	}
+
 	slog.ErrorContext(ctx, "milvus operation failed", "operation", operation, "err", err)
 	if storeUnavailable(err) {
 		return fmt.Errorf("%s: %w", operation, adapterr.NewMilvusUnavailable(err))
 	}
+
 	return fmt.Errorf("%s: %w", operation, err)
 }

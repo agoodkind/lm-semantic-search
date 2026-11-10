@@ -68,6 +68,7 @@ func GlyphFor(display Display) string {
 	if glyph, ok := glyphByDisplay[display]; ok {
 		return glyph
 	}
+
 	return "•"
 }
 
@@ -77,6 +78,7 @@ func LabelFor(display Display) string {
 	if label, ok := labelByDisplay[display]; ok {
 		return label
 	}
+
 	return string(display)
 }
 
@@ -87,9 +89,11 @@ func BannerHeadlineFor(mode DependencyMode) string {
 	if !mode.Degraded() {
 		return ""
 	}
+
 	if headline, ok := bannerHeadlineByMode[mode]; ok {
 		return headline
 	}
+
 	return genericDegradedHeadline
 }
 

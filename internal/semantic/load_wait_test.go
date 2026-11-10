@@ -33,7 +33,13 @@ func TestWaitForCollectionLoadBoundsAStuckLoad(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- waitForCollectionLoad(context.Background(), "hybrid_code_chunks_stuck", 20*time.Millisecond, stuckProbe, reissue)
+		done <- waitForCollectionLoad(
+			context.Background(),
+			"hybrid_code_chunks_stuck",
+			20*time.Millisecond,
+			stuckProbe,
+			reissue,
+		)
 	}()
 
 	var err error
@@ -46,15 +52,22 @@ func TestWaitForCollectionLoadBoundsAStuckLoad(t *testing.T) {
 	if err == nil {
 		t.Fatal("waitForCollectionLoad returned nil for a collection that never loaded")
 	}
+
 	if !errors.Is(err, ErrCollectionNotReady) {
-		t.Fatalf("waitForCollectionLoad error = %v, want it to classify as ErrCollectionNotReady", err)
+		t.Fatalf(
+			"waitForCollectionLoad error = %v, want it to classify as ErrCollectionNotReady",
+			err,
+		)
 	}
+
 	if got := reissues.Load(); got != 1 {
 		t.Fatalf("re-issued loads = %d, want exactly 1 bounded recovery attempt", got)
 	}
+
 	if !strings.Contains(err.Error(), "hybrid_code_chunks_stuck") {
 		t.Fatalf("error %q does not name the stuck collection", err)
 	}
+
 	if !strings.Contains(err.Error(), "40%") {
 		t.Fatalf("error %q does not report the load progress Milvus exposed", err)
 	}
@@ -70,6 +83,7 @@ func TestWaitForCollectionLoadRecoversAfterOneReissue(t *testing.T) {
 		if reissued.Load() {
 			return collectionLoadState{Loaded: true, Progress: 0, ProgressKnown: false}, nil
 		}
+
 		return collectionLoadState{Loaded: false, Progress: 0, ProgressKnown: false}, nil
 	}
 	reissue := func(context.Context) error {
@@ -77,7 +91,13 @@ func TestWaitForCollectionLoadRecoversAfterOneReissue(t *testing.T) {
 		return nil
 	}
 
-	if err := waitForCollectionLoad(context.Background(), "conv_chunks_recovered", 20*time.Millisecond, probe, reissue); err != nil {
+	if err := waitForCollectionLoad(
+		context.Background(),
+		"conv_chunks_recovered",
+		20*time.Millisecond,
+		probe,
+		reissue,
+	); err != nil {
 		t.Fatalf("waitForCollectionLoad returned error after a successful re-issued load: %v", err)
 	}
 }
@@ -97,9 +117,16 @@ func TestWaitForCollectionLoadReturnsImmediatelyWhenLoaded(t *testing.T) {
 		return nil
 	}
 
-	if err := waitForCollectionLoad(context.Background(), "hybrid_code_chunks_ready", time.Minute, probe, reissue); err != nil {
+	if err := waitForCollectionLoad(
+		context.Background(),
+		"hybrid_code_chunks_ready",
+		time.Minute,
+		probe,
+		reissue,
+	); err != nil {
 		t.Fatalf("waitForCollectionLoad returned error for a loaded collection: %v", err)
 	}
+
 	if got := probes.Load(); got != 1 {
 		t.Fatalf("load-state probes = %d, want 1", got)
 	}
@@ -120,7 +147,13 @@ func TestWaitForCollectionLoadReturnsProbeFailure(t *testing.T) {
 		return nil
 	}
 
-	err := waitForCollectionLoad(context.Background(), "hybrid_code_chunks_broken", time.Minute, probe, reissue)
+	err := waitForCollectionLoad(
+		context.Background(),
+		"hybrid_code_chunks_broken",
+		time.Minute,
+		probe,
+		reissue,
+	)
 	if !errors.Is(err, probeErr) {
 		t.Fatalf("waitForCollectionLoad error = %v, want the probe failure", err)
 	}
@@ -138,28 +171,26 @@ func TestWaitForCollectionLoadHonorsCallerCancellation(t *testing.T) {
 		t.Error("re-issued the load after the caller cancelled")
 		return nil
 	}
-	err := waitForCollectionLoad(ctx, "hybrid_code_chunks_cancelled", time.Minute, stuckProbe, reissue)
+	err := waitForCollectionLoad(
+		ctx,
+		"hybrid_code_chunks_cancelled",
+		time.Minute,
+		stuckProbe,
+		reissue,
+	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("waitForCollectionLoad error = %v, want context.Canceled", err)
 	}
 }
 
 func TestCollectionLoadPollRecognizesElapsedBoundBeforeTimerCancellation(t *testing.T) {
-	if !collectionLoadPollBoundExpired(
-		context.Background(),
-		context.Background(),
-		0,
-	) {
+	if !collectionLoadPollBoundExpired(context.Background(), context.Background(), 0) {
 		t.Fatal("elapsed poll bound was not recognized before context cancellation became visible")
 	}
 
 	parent, cancelParent := context.WithCancel(context.Background())
 	cancelParent()
-	if collectionLoadPollBoundExpired(
-		parent,
-		context.Background(),
-		0,
-	) {
+	if collectionLoadPollBoundExpired(parent, context.Background(), 0) {
 		t.Fatal("caller cancellation was mistaken for poll-bound exhaustion")
 	}
 }
@@ -188,6 +219,7 @@ func TestCollectionLoadCoordinatorCollapsesConcurrentWaiters(t *testing.T) {
 			recoveryLoads.Add(1)
 			return nil
 		}
+
 		return waitForCollectionLoad(
 			ctx,
 			"hybrid_code_chunks_shared",
@@ -196,6 +228,7 @@ func TestCollectionLoadCoordinatorCollapsesConcurrentWaiters(t *testing.T) {
 			reissue,
 		)
 	}
+
 	for range waiterCount {
 		go func() {
 			ready.Done()
@@ -208,11 +241,13 @@ func TestCollectionLoadCoordinatorCollapsesConcurrentWaiters(t *testing.T) {
 			)
 		}()
 	}
+
 	ready.Wait()
 	close(start)
 
 	deadline := time.NewTimer(time.Second)
 	defer deadline.Stop()
+
 	for operationCalls.Load() == 0 {
 		select {
 		case <-deadline.C:
@@ -221,6 +256,7 @@ func TestCollectionLoadCoordinatorCollapsesConcurrentWaiters(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 	}
+
 	time.Sleep(100 * time.Millisecond)
 	close(release)
 
@@ -230,12 +266,15 @@ func TestCollectionLoadCoordinatorCollapsesConcurrentWaiters(t *testing.T) {
 			t.Fatalf("shared load error = %v, want ErrCollectionNotReady", err)
 		}
 	}
+
 	if got := operationCalls.Load(); got != 1 {
 		t.Fatalf("collection load operations = %d, want 1 shared flight", got)
 	}
+
 	if got := initialLoads.Load(); got != 1 {
 		t.Fatalf("initial collection loads = %d, want 1 shared request", got)
 	}
+
 	if got := recoveryLoads.Load(); got != 1 {
 		t.Fatalf("recovery collection loads = %d, want 1 shared request", got)
 	}
@@ -257,10 +296,12 @@ func TestCollectionLoadOutlivesTheCallerThatStartedIt(t *testing.T) {
 		if operationCalls.Add(1) == 1 {
 			close(operationRunning)
 		}
+
 		<-release
 		if err := loadCtx.Err(); err != nil {
 			return err
 		}
+
 		return loadOutcome
 	}
 
@@ -291,6 +332,7 @@ func TestCollectionLoadOutlivesTheCallerThatStartedIt(t *testing.T) {
 	if !errors.Is(joinedErr, loadOutcome) {
 		t.Fatalf("joined caller error = %v, want the load's own outcome %v", joinedErr, loadOutcome)
 	}
+
 	if got := operationCalls.Load(); got != 1 {
 		t.Fatalf("collection load operations = %d, want 1 shared load across both callers", got)
 	}
@@ -313,6 +355,10 @@ func TestCollectionLoadBoundReadsConfig(t *testing.T) {
 
 	rejected := &Service{cfg: config.Config{MilvusCollectionLoadTimeoutMS: -1}}
 	if got := rejected.collectionLoadBound(); got != defaultCollectionLoadBound {
-		t.Fatalf("collectionLoadBound = %s for a rejected count, want the built-in %s", got, defaultCollectionLoadBound)
+		t.Fatalf(
+			"collectionLoadBound = %s for a rejected count, want the built-in %s",
+			got,
+			defaultCollectionLoadBound,
+		)
 	}
 }

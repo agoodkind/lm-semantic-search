@@ -81,38 +81,61 @@ func NewBackgroundSync(cfg config.Config, manager *Manager) *BackgroundSync {
 // loops.
 func (syncer *BackgroundSync) Start(ctx context.Context) {
 	if syncer.cfg.FileWatcherEnabled {
-		syncer.queue = NewEventQueue(defaultTriggerDebounce, func(codebaseID string, relativePaths []string) {
-			syncer.convergeViaWatcher(ctx, codebaseID, relativePaths)
-		})
+		syncer.queue = NewEventQueue(
+			defaultTriggerDebounce,
+			func(codebaseID string, relativePaths []string) {
+				syncer.convergeViaWatcher(ctx, codebaseID, relativePaths)
+			},
+		)
 		syncer.watcher = NewWatcher(syncer.manager, syncer.queue)
 		syncer.manager.SetCodebaseLifecycleHook(syncer)
 		syncer.manager.SetWatcherActivityReporter(syncer)
 		go func() {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					slog.ErrorContext(ctx, "background sync loop panic", "loop", "watcher", "err", recovered)
+					slog.ErrorContext(
+						ctx,
+						"background sync loop panic",
+						"loop",
+						"watcher",
+						"err",
+						recovered,
+					)
 				}
 			}()
 			syncer.watcher.Run(ctx)
 		}()
 	}
+
 	if syncer.cfg.TriggerWatcherEnabled {
 		go func() {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					slog.ErrorContext(ctx, "background sync loop panic", "loop", "watchTrigger", "err", recovered)
+					slog.ErrorContext(
+						ctx,
+						"background sync loop panic",
+						"loop",
+						"watchTrigger",
+						"err",
+						recovered,
+					)
 				}
 			}()
 			syncer.watchTrigger(ctx)
 		}()
 	}
+
 	if syncer.cfg.BackgroundSyncEnabled {
 		syncer.startLoop(ctx, "runPeriodicSync", syncer.runPeriodicSync)
 		syncer.startLoop(ctx, "runPeriodicMaintenance", syncer.runPeriodicMaintenance)
 	}
 }
 
-func (syncer *BackgroundSync) startLoop(ctx context.Context, name string, loop func(context.Context)) {
+func (syncer *BackgroundSync) startLoop(
+	ctx context.Context,
+	name string,
+	loop func(context.Context),
+) {
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -129,6 +152,7 @@ func (syncer *BackgroundSync) AddCodebase(ctx context.Context, codebase model.Co
 	if syncer.watcher == nil {
 		return
 	}
+
 	syncer.watcher.AddCodebase(ctx, codebase)
 }
 
@@ -139,6 +163,7 @@ func (syncer *BackgroundSync) RemoveCodebase(ctx context.Context, codebaseID str
 	if syncer.watcher == nil {
 		return
 	}
+
 	syncer.watcher.RemoveCodebase(ctx, codebaseID)
 }
 
@@ -150,11 +175,19 @@ func (syncer *BackgroundSync) IndexReady(ctx context.Context, codebase model.Cod
 	if len(relativePaths) == 0 {
 		return
 	}
+
 	flushCtx := context.WithoutCancel(ctx)
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(flushCtx, "background sync loop panic", "loop", "indexReadyFlush", "err", recovered)
+				slog.ErrorContext(
+					flushCtx,
+					"background sync loop panic",
+					"loop",
+					"indexReadyFlush",
+					"err",
+					recovered,
+				)
 			}
 		}()
 		syncer.convergeViaWatcher(flushCtx, codebase.ID, relativePaths)
@@ -184,8 +217,10 @@ func (syncer *BackgroundSync) runPeriodicLoop(ctx context.Context, action func()
 	if syncer.cfg.SyncIntervalMS < minimumSyncIntervalMS {
 		interval = time.Duration(minimumSyncIntervalMS) * time.Millisecond
 	}
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -208,12 +243,21 @@ func (syncer *BackgroundSync) ensureMmapEnabled(ctx context.Context) {
 	if syncer.manager == nil || syncer.manager.semantic == nil {
 		return
 	}
+
 	syncer.manager.semantic.EnsureMmapEnabledAllCollections(ctx)
 }
 
 func (syncer *BackgroundSync) watchTrigger(ctx context.Context) {
 	if err := store.EnsureDir(syncer.cfg.ContextRoot); err != nil {
-		slog.ErrorContext(ctx, "ensure legacy context directory failed", "path", syncer.cfg.ContextRoot, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"ensure legacy context directory failed",
+			"path",
+			syncer.cfg.ContextRoot,
+			"err",
+			err,
+		)
+
 		return
 	}
 
@@ -233,13 +277,23 @@ func (syncer *BackgroundSync) watchTrigger(ctx context.Context) {
 			info, err := os.Stat(triggerPath)
 			if err != nil {
 				if !errors.Is(err, os.ErrNotExist) {
-					slog.ErrorContext(ctx, "stat sync trigger failed", "path", triggerPath, "err", err)
+					slog.ErrorContext(
+						ctx,
+						"stat sync trigger failed",
+						"path",
+						triggerPath,
+						"err",
+						err,
+					)
 				}
+
 				continue
 			}
+
 			if !info.ModTime().After(syncer.lastTrigger) {
 				continue
 			}
+
 			syncer.lastTrigger = info.ModTime()
 			syncer.scheduleTriggerSync(ctx)
 		}
@@ -253,9 +307,13 @@ func (syncer *BackgroundSync) scheduleTriggerSync(ctx context.Context) {
 	if syncer.triggerTimer != nil {
 		syncer.triggerTimer.Stop()
 	}
-	syncer.triggerTimer = time.AfterFunc(defaultTriggerDebounce, func() {
-		syncer.runSyncAll(ctx, "trigger")
-	})
+
+	syncer.triggerTimer = time.AfterFunc(
+		defaultTriggerDebounce,
+		func() {
+			syncer.runSyncAll(ctx, "trigger")
+		},
+	)
 }
 
 func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
@@ -263,14 +321,18 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 		return
 	}
 
-	rootCorr := correlation.New("").WithIdentityAttributes(
-		correlation.IdentityAttribute{Key: "origin", Value: "sync-" + source},
-	)
+	rootCorr := correlation.New("").WithIdentityAttributes(correlation.IdentityAttribute{
+		Key:   "origin",
+		Value: "sync-" + source,
+	})
 	ctx = correlation.WithContext(ctx, rootCorr)
 
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			_, _ = adapterr.Respond(ctx, adapterr.NewInternal("background sync panic", fmt.Errorf("panic: %v", recovered)))
+			_, _ = adapterr.Respond(
+				ctx,
+				adapterr.NewInternal("background sync panic", fmt.Errorf("panic: %v", recovered)),
+			)
 		}
 	}()
 
@@ -286,6 +348,7 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 	if syncer.manager.DependencyHealth().Mode == dependencyEmbedderUnreachable {
 		return
 	}
+
 	if syncer.manager.skipForMaintenance(ctx, "sync-"+source) {
 		return
 	}
@@ -297,44 +360,65 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 		if codebase.Kind == model.CodebaseKindDocument {
 			continue
 		}
+
 		if codebase.Status == model.CodebaseStatusQuarantined {
 			syncer.handleQuarantinedCodebase(ctx, codebase)
 			continue
 		}
+
 		if _, err := os.Stat(codebase.CanonicalPath); errors.Is(err, os.ErrNotExist) {
 			continue
 		}
+
 		hasActiveJob := syncer.hasActiveJob(codebase)
 		if shouldSkipForActiveFirstBuildStaging(codebase, hasActiveJob) {
 			continue
 		}
+
 		// A discovered worktree whose deferred build never ran (for example the
 		// daemon restarted before the short timer fired) is built here as the
 		// backstop. StartIndex deduplicates, so this never double-starts a build
 		// that the timer already kicked off.
 		if codebase.Status == model.CodebaseStatusDiscovered {
-			discoverCtx := correlation.WithContext(ctx, correlation.FromContext(ctx).Child().WithIdentityAttributes(
-				correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID},
-			))
+			discoverCtx := correlation.WithContext(
+				ctx,
+				correlation.FromContext(ctx).Child().WithIdentityAttributes(
+					correlation.IdentityAttribute{
+						Key:   "codebase_id",
+						Value: codebase.ID,
+					},
+				),
+			)
 			syncer.manager.startDeferredBuild(discoverCtx, codebase.CanonicalPath)
 			continue
 		}
+
 		if codebase.Status == model.CodebaseStatusFailed {
-			retryCtx := correlation.WithContext(ctx, correlation.FromContext(ctx).Child().WithIdentityAttributes(
-				correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID},
-			))
+			retryCtx := correlation.WithContext(
+				ctx,
+				correlation.FromContext(ctx).Child().WithIdentityAttributes(
+					correlation.IdentityAttribute{
+						Key:   "codebase_id",
+						Value: codebase.ID,
+					},
+				),
+			)
 			syncer.manager.retryFailedBuild(retryCtx, codebase)
 			continue
 		}
+
 		if codebase.Status != model.CodebaseStatusIndexed {
 			continue
 		}
 
 		syntheticJobID := fmt.Sprintf("sync-%s-%d", codebase.ID, clock.Now().Unix())
-		iterCtx := correlation.WithContext(ctx, correlation.FromContext(ctx).Child().WithIdentityAttributes(
-			correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID},
-			correlation.IdentityAttribute{Key: "job_id", Value: syntheticJobID},
-		))
+		iterCtx := correlation.WithContext(
+			ctx,
+			correlation.FromContext(ctx).Child().WithIdentityAttributes(
+				correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID},
+				correlation.IdentityAttribute{Key: "job_id", Value: syntheticJobID},
+			),
+		)
 
 		// Keep this codebase's ignore rules fresh independent of the file watcher.
 		// CheckSources stats the codebase's ignore sources and invalidates the
@@ -345,13 +429,22 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 
 		changed, err := syncer.codebaseChanged(iterCtx, codebase)
 		if err != nil {
-			slog.ErrorContext(iterCtx, "check sync state failed", "path", codebase.CanonicalPath, "err", err)
+			slog.ErrorContext(
+				iterCtx,
+				"check sync state failed",
+				"path",
+				codebase.CanonicalPath,
+				"err",
+				err,
+			)
 			continue
 		}
+
 		metrics.SweepRan(changed)
 		if !changed {
 			continue
 		}
+
 		// Skip this codebase while its watcher converge waits or runs. After the
 		// converge ends, a later sweep starts a sync if the codebase still differs
 		// from its snapshot.
@@ -364,7 +457,10 @@ func (syncer *BackgroundSync) runSyncAll(ctx context.Context, source string) {
 	}
 }
 
-func (syncer *BackgroundSync) handleQuarantinedCodebase(ctx context.Context, codebase model.Codebase) {
+func (syncer *BackgroundSync) handleQuarantinedCodebase(
+	ctx context.Context,
+	codebase model.Codebase,
+) {
 	if sourceDirMissing(codebase.CanonicalPath) {
 		syncer.manager.markCodebaseMissing(ctx, codebase.ID)
 		return
@@ -375,16 +471,45 @@ func (syncer *BackgroundSync) handleQuarantinedCodebase(ctx context.Context, cod
 	// checkout, rebase, or merge and reappear when it finishes. Hold the
 	// quarantine and re-evaluate on a later sweep once the tree settles.
 	if vcsOperationInProgress(codebase.CanonicalPath) {
-		slog.WarnContext(ctx, "quarantine held during vcs operation", "codebase_id", codebase.ID, "path", codebase.CanonicalPath)
+		slog.WarnContext(
+			ctx,
+			"quarantine held during vcs operation",
+			"codebase_id",
+			codebase.ID,
+			"path",
+			codebase.CanonicalPath,
+		)
+
 		return
 	}
 
-	snapshot := syncer.manager.loadLiveCheckpoint(ctx, codebase, codebase.EffectiveConfig.IgnoreDigest).snapshot
-	currentSnapshot, err := merkle.Capture(ctx, syncer.manager.indexability, codebase.ID, codebase.CanonicalPath, codebase.EffectiveConfig)
+	snapshot := syncer.manager.loadLiveCheckpoint(
+		ctx,
+		codebase,
+		codebase.EffectiveConfig.IgnoreDigest,
+	).snapshot
+	currentSnapshot, err := merkle.Capture(
+		ctx,
+		syncer.manager.indexability,
+		codebase.ID,
+		codebase.CanonicalPath,
+		codebase.EffectiveConfig,
+	)
 	if err != nil {
-		slog.ErrorContext(ctx, "quarantine capture failed", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"quarantine capture failed",
+			"codebase_id",
+			codebase.ID,
+			"path",
+			codebase.CanonicalPath,
+			"err",
+			err,
+		)
+
 		return
 	}
+
 	diff := merkle.DiffSnapshots(snapshot, currentSnapshot)
 	signal, suspicious := assessDeltaDeleteWave(codebase, diff, snapshot, codebase.CanonicalPath)
 	if !suspicious {
@@ -392,20 +517,43 @@ func (syncer *BackgroundSync) handleQuarantinedCodebase(ctx context.Context, cod
 		if diff.Empty() {
 			return
 		}
+
 		_, _, _, err = syncer.manager.SyncIndex(
 			ctx,
 			codebase.CanonicalPath,
 			model.ClientInfo{Name: "daemon-quarantine-release", PID: 0},
 		)
 		if err != nil && !syncConflictError(err) {
-			slog.ErrorContext(ctx, "start sync job after clearing quarantine failed", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)
+			slog.ErrorContext(
+				ctx,
+				"start sync job after clearing quarantine failed",
+				"codebase_id",
+				codebase.ID,
+				"path",
+				codebase.CanonicalPath,
+				"err",
+				err,
+			)
 		}
+
 		return
 	}
 
 	observations := syncer.manager.quarantineCodebase(ctx, codebase.ID, signal)
 	if observations < quarantineConfirmationObservations {
-		slog.WarnContext(ctx, "quarantine held after corroborating full scan", "codebase_id", codebase.ID, "missing_count", signal.missingCount, "total_count", signal.totalCount, "observations", observations)
+		slog.WarnContext(
+			ctx,
+			"quarantine held after corroborating full scan",
+			"codebase_id",
+			codebase.ID,
+			"missing_count",
+			signal.missingCount,
+			"total_count",
+			signal.totalCount,
+			"observations",
+			observations,
+		)
+
 		return
 	}
 
@@ -418,14 +566,27 @@ func (syncer *BackgroundSync) handleQuarantinedCodebase(ctx context.Context, cod
 	_ = codebase
 	_ = deduplicated
 	if err != nil && !syncConflictError(err) {
-		slog.ErrorContext(ctx, "start destructive sync after quarantine confirmation failed", "codebase_id", codebase.ID, "path", codebase.CanonicalPath, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"start destructive sync after quarantine confirmation failed",
+			"codebase_id",
+			codebase.ID,
+			"path",
+			codebase.CanonicalPath,
+			"err",
+			err,
+		)
 	}
 }
 
 // convergeViaWatcher registers the debounced path set before scheduler
 // admission. A second converge of the same codebase requeues its paths. External
 // sync-lock contention yields scheduler capacity and waits on the same job.
-func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID string, relativePaths []string) {
+func (syncer *BackgroundSync) convergeViaWatcher(
+	ctx context.Context,
+	codebaseID string,
+	relativePaths []string,
+) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -440,18 +601,23 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 	if !found {
 		return
 	}
+
 	if syncer.manager.skipForMaintenance(ctx, "watcher-converge") {
 		return
 	}
+
 	if shouldDeferWatcherConvergeForFirstBuild(codebase) {
 		syncer.deferWatcherPaths(codebaseID, relativePaths)
 		return
 	}
+
 	if syncer.hasActiveJob(codebase) {
 		metrics.SyncSkippedInflight()
 		syncer.requeuePaths(codebaseID, relativePaths)
+
 		return
 	}
+
 	if syncer.startBuildAfterEmptyRun(ctx, codebase) {
 		return
 	}
@@ -461,22 +627,27 @@ func (syncer *BackgroundSync) convergeViaWatcher(ctx context.Context, codebaseID
 	if !syncer.beginConverge(codebaseID) {
 		metrics.SyncSkippedInflight()
 		syncer.requeuePaths(codebaseID, relativePaths)
+
 		return
 	}
+
 	defer syncer.endConverge(codebaseID)
 
 	registration, registrationCtx, err := syncer.registerConvergeJob(ctx, codebase, relativePaths)
 	if err != nil {
-		slog.ErrorContext(ctx, "register converge job failed", "codebase_id", codebaseID, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"register converge job failed",
+			"codebase_id",
+			codebaseID,
+			"err",
+			err,
+		)
+
 		return
 	}
 	defer registration.release()
-	syncer.runWatcherConverge(
-		registrationCtx,
-		registration,
-		codebaseID,
-		relativePaths,
-	)
+	syncer.runWatcherConverge(registrationCtx, registration, codebaseID, relativePaths)
 }
 
 func (syncer *BackgroundSync) runWatcherConverge(
@@ -487,9 +658,14 @@ func (syncer *BackgroundSync) runWatcherConverge(
 ) {
 	if !syncer.manager.awaitEmbeddingModel(registrationCtx, registration.job.ID) {
 		syncer.requeuePaths(codebaseID, relativePaths)
-		syncer.manager.updateDetachedJobCancelled(context.WithoutCancel(registrationCtx), registration.job.ID)
+		syncer.manager.updateDetachedJobCancelled(
+			context.WithoutCancel(registrationCtx),
+			registration.job.ID,
+		)
+
 		return
 	}
+
 	holdSyncLock := syncer.manager.semantic != nil && syncer.manager.semantic.Available()
 	capacity, outcome, capacityErr := syncer.manager.acquireJobCapacity(
 		registrationCtx,
@@ -500,24 +676,40 @@ func (syncer *BackgroundSync) runWatcherConverge(
 		terminalCtx := context.WithoutCancel(registrationCtx)
 		if outcome == syncLockFailed {
 			syncer.manager.updateDetachedJobFailed(terminalCtx, registration.job.ID, capacityErr)
-			slog.ErrorContext(registrationCtx, "watcher.sync_lock_failed", "component", "daemon", "subcomponent", "watcher", "codebase_id", codebaseID, "err", capacityErr)
+			slog.ErrorContext(
+				registrationCtx,
+				"watcher.sync_lock_failed",
+				"component",
+				"daemon",
+				"subcomponent",
+				"watcher",
+				"codebase_id",
+				codebaseID,
+				"err",
+				capacityErr,
+			)
 		} else {
 			syncer.requeuePaths(codebaseID, relativePaths)
 			syncer.manager.updateDetachedJobCancelled(terminalCtx, registration.job.ID)
 		}
+
 		return
 	}
+
 	defer capacity.release(context.WithoutCancel(registrationCtx))
 
 	codebase, found := syncer.watcherCodebase(codebaseID)
-	if !found || shouldDeferWatcherConvergeForFirstBuild(codebase) || syncer.hasActiveJob(codebase) {
+	if !found || shouldDeferWatcherConvergeForFirstBuild(codebase) ||
+		syncer.hasActiveJob(codebase) {
 		syncer.requeuePaths(codebaseID, relativePaths)
 		syncer.manager.updateDetachedJobCancelled(
 			context.WithoutCancel(registrationCtx),
 			registration.job.ID,
 		)
+
 		return
 	}
+
 	if err := syncer.manager.startDetachedJob(registration.job.ID); err != nil {
 		syncer.requeuePaths(codebaseID, relativePaths)
 		syncer.manager.updateDetachedJobFailed(
@@ -525,8 +717,10 @@ func (syncer *BackgroundSync) runWatcherConverge(
 			registration.job.ID,
 			err,
 		)
+
 		return
 	}
+
 	syncer.markConvergeRunning(codebaseID)
 
 	runCtx := withJobCapacity(registrationCtx, capacity)
@@ -554,48 +748,59 @@ func (syncer *BackgroundSync) executeWatcherConverge(
 	case runErr != nil:
 		syncer.manager.updateDetachedJobFailed(terminalCtx, registration.job.ID, runErr)
 	default:
-		syncer.manager.updateDetachedJobCompleted(terminalCtx, registration.job.ID, indexer.Result{
-			IndexedFiles:      outcome.PathsConverged,
-			TotalChunks:       0,
-			TotalBytes:        0,
-			Chunks:            nil,
-			FileHashes:        nil,
-			FileInodes:        nil,
-			SkippedFiles:      nil,
-			SkippedOversize:   0,
-			SkippedUnreadable: 0,
-			SkippedPending:    0,
-		})
+		syncer.manager.updateDetachedJobCompleted(
+			terminalCtx,
+			registration.job.ID,
+			indexer.Result{
+				IndexedFiles:      outcome.PathsConverged,
+				TotalChunks:       0,
+				TotalBytes:        0,
+				Chunks:            nil,
+				FileHashes:        nil,
+				FileInodes:        nil,
+				SkippedFiles:      nil,
+				SkippedOversize:   0,
+				SkippedUnreadable: 0,
+				SkippedPending:    0,
+			},
+		)
 	}
 }
 
 func (syncer *BackgroundSync) convergeProgressReporter(jobID string) func(ConvergeOutcome) {
 	lastReportedPaths := int32(-1)
+
 	return func(progress ConvergeOutcome) {
 		if progress.PathsProcessed == lastReportedPaths {
 			syncer.manager.updateDetachedJobHeartbeat(jobID)
 			return
 		}
+
 		percent := 100.0
 		if progress.PathsGiven > 0 {
 			percent = float64(progress.PathsProcessed) / float64(progress.PathsGiven) * 100
 		}
-		syncer.manager.updateDetachedJobProgress(jobID, indexer.Progress{
-			Phase:                  "Converging changed paths...",
-			OverallPercent:         percent,
-			FilesTotal:             progress.PathsGiven,
-			FilesProcessed:         progress.PathsProcessed,
-			FilesEmbedded:          0,
-			FilesSkippedOversize:   0,
-			FilesSkippedUnreadable: 0,
-			FilesPending:           0,
-			ChunksProcessed:        0,
-			ChunksReused:           0,
-			ChunksEmbedded:         0,
-			ChunksGenerated:        0,
-			ChunksDropped:          0,
-			ReuseVectorsLoaded:     0,
-		}, "path")
+
+		syncer.manager.updateDetachedJobProgress(
+			jobID,
+			indexer.Progress{
+				Phase:                  "Converging changed paths...",
+				OverallPercent:         percent,
+				FilesTotal:             progress.PathsGiven,
+				FilesProcessed:         progress.PathsProcessed,
+				FilesEmbedded:          0,
+				FilesSkippedOversize:   0,
+				FilesSkippedUnreadable: 0,
+				FilesPending:           0,
+				ChunksProcessed:        0,
+				ChunksReused:           0,
+				ChunksEmbedded:         0,
+				ChunksGenerated:        0,
+				ChunksDropped:          0,
+				ReuseVectorsLoaded:     0,
+			},
+			"path",
+		)
 		lastReportedPaths = progress.PathsProcessed
 	}
 }
@@ -628,36 +833,57 @@ func (syncer *BackgroundSync) registerConvergeJob(
 	job.Progress.FilesTotal = safeInt32(len(relativePaths))
 	job.Progress.Unit = "path"
 
-	jobCorr := correlation.FromContext(ctx).WithIdentityAttributes(
-		correlation.IdentityAttribute{Key: "job_id", Value: job.ID},
-	)
+	jobCorr := correlation.FromContext(ctx).WithIdentityAttributes(correlation.IdentityAttribute{
+		Key:   "job_id",
+		Value: job.ID,
+	})
 	jobCtx, cancel := context.WithCancel(correlation.WithContext(ctx, jobCorr))
 	done := make(chan struct{})
 	releaseOnce := sync.Once{}
 
 	syncer.manager.mu.Lock()
 	current, found := syncer.manager.codebases[codebase.ID]
-	if !found || current.ActiveJobID != "" || current.Status != codebase.Status || current.ActiveJobID != codebase.ActiveJobID || !current.UpdatedAt.Equal(codebase.UpdatedAt) {
+	if !found || current.ActiveJobID != "" || current.Status != codebase.Status ||
+		current.ActiveJobID != codebase.ActiveJobID ||
+		!current.UpdatedAt.Equal(codebase.UpdatedAt) {
 		syncer.manager.mu.Unlock()
 		cancel()
 		syncer.requeuePaths(codebase.ID, relativePaths)
-		return convergeJobRegistration{}, nil, fmt.Errorf("start converge job: codebase ownership changed")
+
+		return convergeJobRegistration{}, nil, fmt.Errorf(
+			"start converge job: codebase ownership changed",
+		)
 	}
+
 	syncer.manager.cancels[job.ID] = cancel
 	syncer.manager.done[job.ID] = done
-	_, effectivePolicy, policyErr := syncer.manager.resolveIndexPolicyLocked(current, indexPolicyIntent{
-		Patch:      model.SchedulingPolicyPatch{Priority: nil, Quiet: nil, IdleAfterSeconds: nil},
-		Initialize: false,
-	})
+	_, effectivePolicy, policyErr := syncer.manager.resolveIndexPolicyLocked(
+		current,
+		indexPolicyIntent{
+			Patch: model.SchedulingPolicyPatch{
+				Priority:         nil,
+				Quiet:            nil,
+				IdleAfterSeconds: nil,
+			},
+			Initialize: false,
+		},
+	)
 	if policyErr != nil {
 		delete(syncer.manager.cancels, job.ID)
 		delete(syncer.manager.done, job.ID)
 		syncer.manager.mu.Unlock()
 		cancel()
 		syncer.requeuePaths(codebase.ID, relativePaths)
+
 		return convergeJobRegistration{}, nil, policyErr
 	}
-	applyJobSchedulingPolicy(&job, effectivePolicy, model.SchedulingPolicyPatch{Priority: nil, Quiet: nil, IdleAfterSeconds: nil}, syncer.manager.nextQueueSequenceLocked())
+
+	applyJobSchedulingPolicy(
+		&job,
+		effectivePolicy,
+		model.SchedulingPolicyPatch{Priority: nil, Quiet: nil, IdleAfterSeconds: nil},
+		syncer.manager.nextQueueSequenceLocked(),
+	)
 	if err := syncer.manager.appendJobLocked("converge_queued", job); err != nil {
 		delete(syncer.manager.jobs, job.ID)
 		delete(syncer.manager.cancels, job.ID)
@@ -666,9 +892,18 @@ func (syncer *BackgroundSync) registerConvergeJob(
 		cancel()
 		syncer.requeuePaths(codebase.ID, relativePaths)
 		wrapped := fmt.Errorf("append queued converge job event: %w", err)
-		slog.ErrorContext(jobCtx, "append queued converge job event failed", "job_id", job.ID, "err", wrapped)
+		slog.ErrorContext(
+			jobCtx,
+			"append queued converge job event failed",
+			"job_id",
+			job.ID,
+			"err",
+			wrapped,
+		)
+
 		return convergeJobRegistration{}, nil, wrapped
 	}
+
 	syncer.manager.mu.Unlock()
 
 	return convergeJobRegistration{
@@ -696,12 +931,14 @@ func (manager *Manager) startDetachedJob(jobID string) error {
 		manager.mu.Unlock()
 		return fmt.Errorf("start converge job: job state changed")
 	}
+
 	codebase, found := manager.codebases[job.CodebaseID]
 	if !found || codebase.ActiveJobID != "" ||
 		codebase.Status != model.CodebaseStatusIndexed {
 		manager.mu.Unlock()
 		return fmt.Errorf("start converge job: codebase ownership changed")
 	}
+
 	previousCodebase := codebase
 	codebase.ActiveJobID = jobID
 	codebase.Status = model.CodebaseStatusIndexing
@@ -710,8 +947,10 @@ func (manager *Manager) startDetachedJob(jobID string) error {
 	if err := manager.saveLocked(); err != nil {
 		manager.codebases[previousCodebase.ID] = previousCodebase
 		manager.mu.Unlock()
+
 		return fmt.Errorf("persist converge ownership: %w", err)
 	}
+
 	manager.mu.Unlock()
 
 	_, transitioned, err := manager.serializeJobTransitionLocked(
@@ -721,6 +960,7 @@ func (manager *Manager) startDetachedJob(jobID string) error {
 			if job.State != model.JobStateQueued {
 				return false
 			}
+
 			now := clock.Now()
 			job.State = model.JobStateRunning
 			job.SchedulingReason = ""
@@ -730,6 +970,7 @@ func (manager *Manager) startDetachedJob(jobID string) error {
 			job.Progress.LastEventAt = now
 			job.Progress.HeartbeatAt = now
 			job.Progress.OverallPercent = 0
+
 			return true
 		},
 	)
@@ -742,23 +983,35 @@ func (manager *Manager) startDetachedJob(jobID string) error {
 				slog.Error("restore converge ownership failed", "job_id", jobID, "err", saveErr)
 			}
 		}
+
 		manager.mu.Unlock()
 		wrappedErr := fmt.Errorf("append running converge job event: %w", err)
 		slog.Error("append running converge job event failed", "job_id", jobID, "err", wrappedErr)
+
 		return wrappedErr
 	}
+
 	if !transitioned {
 		manager.mu.Lock()
 		currentCodebase, found := manager.codebases[previousCodebase.ID]
 		if found && currentCodebase.ActiveJobID == jobID {
 			manager.codebases[previousCodebase.ID] = previousCodebase
 			if saveErr := manager.saveLocked(); saveErr != nil {
-				slog.Error("restore declined converge ownership failed", "job_id", jobID, "err", saveErr)
+				slog.Error(
+					"restore declined converge ownership failed",
+					"job_id",
+					jobID,
+					"err",
+					saveErr,
+				)
 			}
 		}
+
 		manager.mu.Unlock()
+
 		return fmt.Errorf("start converge job: job state changed")
 	}
+
 	return nil
 }
 
@@ -766,6 +1019,7 @@ func (syncer *BackgroundSync) watcherCodebase(codebaseID string) (model.Codebase
 	syncer.manager.mu.Lock()
 	defer syncer.manager.mu.Unlock()
 	codebase, found := syncer.manager.codebases[codebaseID]
+
 	return codebase, found
 }
 
@@ -776,6 +1030,7 @@ func (syncer *BackgroundSync) hasActiveJob(codebase model.Codebase) bool {
 	if !found {
 		return false
 	}
+
 	return syncer.manager.activeJobSnapshotLocked(current) != nil
 }
 
@@ -783,6 +1038,7 @@ func (syncer *BackgroundSync) deferWatcherPaths(codebaseID string, relativePaths
 	if len(relativePaths) == 0 {
 		return
 	}
+
 	syncer.deferredWatcherMu.Lock()
 	defer syncer.deferredWatcherMu.Unlock()
 	buffered, found := syncer.deferredWatcherPaths[codebaseID]
@@ -790,6 +1046,7 @@ func (syncer *BackgroundSync) deferWatcherPaths(codebaseID string, relativePaths
 		buffered = make(map[string]struct{}, len(relativePaths))
 		syncer.deferredWatcherPaths[codebaseID] = buffered
 	}
+
 	for _, relativePath := range relativePaths {
 		buffered[relativePath] = struct{}{}
 	}
@@ -807,6 +1064,7 @@ func (syncer *BackgroundSync) deferredPathCounts() map[string]int {
 	for codebaseID, paths := range syncer.deferredWatcherPaths {
 		counts[codebaseID] = len(paths)
 	}
+
 	return counts
 }
 
@@ -817,12 +1075,15 @@ func (syncer *BackgroundSync) takeDeferredWatcherPaths(codebaseID string) []stri
 	if len(buffered) == 0 {
 		return nil
 	}
+
 	relativePaths := make([]string, 0, len(buffered))
 	for relativePath := range buffered {
 		relativePaths = append(relativePaths, relativePath)
 	}
+
 	sort.Strings(relativePaths)
 	delete(syncer.deferredWatcherPaths, codebaseID)
+
 	return relativePaths
 }
 
@@ -834,11 +1095,13 @@ func (syncer *BackgroundSync) beginConverge(codebaseID string) bool {
 	if _, admitted := syncer.converging[codebaseID]; admitted {
 		return false
 	}
+
 	// A zero start time means admitted but not yet running: the converge still
 	// has to win an index slot and the shared advisory lock. markConvergeRunning
 	// stamps the real time once both waits are behind it, so a status read never
 	// reports a queued converge as running work whose age keeps growing.
 	syncer.converging[codebaseID] = time.Time{}
+
 	return true
 }
 
@@ -851,6 +1114,7 @@ func (syncer *BackgroundSync) markConvergeRunning(codebaseID string) {
 	if _, admitted := syncer.converging[codebaseID]; !admitted {
 		return
 	}
+
 	syncer.converging[codebaseID] = clock.Now()
 }
 
@@ -869,7 +1133,10 @@ func (syncer *BackgroundSync) requeuePaths(codebaseID string, relativePaths []st
 	}
 }
 
-func (syncer *BackgroundSync) codebaseChanged(ctx context.Context, codebase model.Codebase) (bool, error) {
+func (syncer *BackgroundSync) codebaseChanged(
+	ctx context.Context,
+	codebase model.Codebase,
+) (bool, error) {
 	if codebase.Kind == model.CodebaseKindDocument {
 		return false, nil
 	}
@@ -882,7 +1149,11 @@ func (syncer *BackgroundSync) codebaseChanged(ctx context.Context, codebase mode
 	// that did index files and lost its checkpoint still reports the loss, and
 	// its empty snapshot differs from a non-empty capture, so the resync it
 	// needs still starts.
-	existingSnapshot := syncer.manager.loadLiveCheckpoint(ctx, codebase, codebase.EffectiveConfig.IgnoreDigest).snapshot
+	existingSnapshot := syncer.manager.loadLiveCheckpoint(
+		ctx,
+		codebase,
+		codebase.EffectiveConfig.IgnoreDigest,
+	).snapshot
 
 	currentSnapshot, err := merkle.Capture(
 		ctx,
@@ -892,14 +1163,32 @@ func (syncer *BackgroundSync) codebaseChanged(ctx context.Context, codebase mode
 		codebase.EffectiveConfig,
 	)
 	if err != nil {
-		slog.ErrorContext(ctx, "capture Merkle snapshot failed", "path", codebase.CanonicalPath, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"capture Merkle snapshot failed",
+			"path",
+			codebase.CanonicalPath,
+			"err",
+			err,
+		)
+
 		return false, fmt.Errorf("capture Merkle snapshot for %s: %w", codebase.CanonicalPath, err)
 	}
+
 	if !merkle.Equal(existingSnapshot, currentSnapshot) {
 		return true, nil
 	}
-	presence := syncer.manager.probeCollectionEvidence(ctx, codebase.CanonicalPath, "backgroundSync").presence
-	currentSnapshotHash := snapshotHashForGraph(currentSnapshot, codebase.EffectiveConfig.IgnoreDigest)
+
+	presence := syncer.manager.probeCollectionEvidence(
+		ctx,
+		codebase.CanonicalPath,
+		"backgroundSync",
+	).presence
+	currentSnapshotHash := snapshotHashForGraph(
+		currentSnapshot,
+		codebase.EffectiveConfig.IgnoreDigest,
+	)
+
 	return syncer.manager.shouldReconcileGraph(codebase.ID, currentSnapshotHash, presence), nil
 }
 
@@ -907,7 +1196,9 @@ func syncConflictError(err error) bool {
 	if err == nil {
 		return false
 	}
+
 	message := err.Error()
+
 	return strings.Contains(message, "conflicting active job") ||
 		strings.Contains(message, "codebase not tracked")
 }
@@ -958,6 +1249,7 @@ func (syncer *BackgroundSync) WatcherActivity() []WatcherActivity {
 	if syncer.queue != nil {
 		pending = syncer.queue.PendingCounts()
 	}
+
 	for codebaseID, count := range syncer.deferredPathCounts() {
 		pending[codebaseID] += count
 	}
@@ -968,26 +1260,40 @@ func (syncer *BackgroundSync) WatcherActivity() []WatcherActivity {
 		if startedAt.IsZero() {
 			state = WatcherStateQueued
 		}
-		activity = append(activity, WatcherActivity{
-			CodebaseID:   codebaseID,
-			State:        state,
-			PendingPaths: pending[codebaseID],
-			StartedAt:    startedAt,
-		})
+
+		activity = append(
+			activity,
+			WatcherActivity{
+				CodebaseID:   codebaseID,
+				State:        state,
+				PendingPaths: pending[codebaseID],
+				StartedAt:    startedAt,
+			},
+		)
 	}
+
 	for codebaseID, count := range pending {
 		if _, alreadyAdmitted := admitted[codebaseID]; alreadyAdmitted {
 			continue
 		}
-		activity = append(activity, WatcherActivity{
-			CodebaseID:   codebaseID,
-			State:        WatcherStateQueued,
-			PendingPaths: count,
-			StartedAt:    time.Time{},
-		})
+
+		activity = append(
+			activity,
+			WatcherActivity{
+				CodebaseID:   codebaseID,
+				State:        WatcherStateQueued,
+				PendingPaths: count,
+				StartedAt:    time.Time{},
+			},
+		)
 	}
-	sort.Slice(activity, func(first int, second int) bool {
-		return activity[first].CodebaseID < activity[second].CodebaseID
-	})
+
+	sort.Slice(
+		activity,
+		func(first int, second int) bool {
+			return activity[first].CodebaseID < activity[second].CodebaseID
+		},
+	)
+
 	return activity
 }

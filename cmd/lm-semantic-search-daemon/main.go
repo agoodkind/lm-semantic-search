@@ -37,8 +37,10 @@ func main() {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+
 		return
 	}
+
 	// The subcommand is consumed here rather than through the flag package,
 	// which treats a bare word as the end of the flags it will parse.
 	if len(os.Args) > 1 && os.Args[1] == sandboxCommandName {
@@ -48,8 +50,10 @@ func main() {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+
 		return
 	}
+
 	rootContext := installCorrelationLogger("daemon-boot")
 	if err := run(rootContext); err != nil {
 		slog.ErrorContext(rootContext, "daemon failed", "err", err)
@@ -65,15 +69,23 @@ func runVersion(writer io.Writer) error {
 		slog.Error("open ONNX Runtime for version failed", "err", err)
 		return fmt.Errorf("open ONNX Runtime: %w", err)
 	}
+
 	return writeVersion(writer)
 }
 
 func writeVersion(writer io.Writer) error {
-	_, err := fmt.Fprintf(writer, "version: %s commit=%s build_time=%s\n", version.String(), version.Commit, version.BuildTime)
+	_, err := fmt.Fprintf(
+		writer,
+		"version: %s commit=%s build_time=%s\n",
+		version.String(),
+		version.Commit,
+		version.BuildTime,
+	)
 	if err != nil {
 		slog.Error("write version output failed", "err", err)
 		return fmt.Errorf("write version output: %w", err)
 	}
+
 	return nil
 }
 
@@ -92,9 +104,11 @@ func correlationHandlerOptions() correlation.HandlerOptions {
 func installCorrelationLogger(origin string) context.Context {
 	jsonHandler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})
 	slog.SetDefault(slog.New(correlation.SlogHandler(jsonHandler, correlationHandlerOptions())))
-	rootCorrelation := correlation.New("").WithIdentityAttributes(
-		correlation.IdentityAttribute{Key: "origin", Value: origin},
-	)
+	rootCorrelation := correlation.New("").WithIdentityAttributes(correlation.IdentityAttribute{
+		Key:   "origin",
+		Value: origin,
+	})
+
 	return correlation.WithContext(context.Background(), rootCorrelation)
 }
 
@@ -121,7 +135,12 @@ func rotationConfig(cfg config.Config) gklog.RotationConfig {
 // the daemon concern catches anything without a dot.
 func installConcernRouter(logsDir string, logPath string, rot gklog.RotationConfig) {
 	combined := gklog.FileJSON(logPath, slog.LevelInfo, rot)
-	router := gklog.NewRouter(logsDir, slog.LevelInfo, combined, gklog.RouterOptions{FallbackConcern: "daemon", Rotation: rot})
+	router := gklog.NewRouter(
+		logsDir,
+		slog.LevelInfo,
+		combined,
+		gklog.RouterOptions{FallbackConcern: "daemon", Rotation: rot},
+	)
 	slog.SetDefault(slog.New(correlation.SlogHandler(router, correlationHandlerOptions())))
 }
 
@@ -139,6 +158,7 @@ func parseCommandLineConfig(cfg config.Config) config.Config {
 	cfg.Profile = *profile
 	cfg.OfflineEmbeddingModel = *offlineEmbeddingModel
 	cfg = config.ApplyProfile(cfg)
+
 	return applyStatePaths(cfg, *stateRoot, *socketPath)
 }
 
@@ -153,9 +173,24 @@ func run(rootContext context.Context) error {
 
 	cfg = parseCommandLineConfig(cfg)
 
-	for _, path := range []string{cfg.StateRoot, cfg.SocketsDir, cfg.LogsDir, cfg.MerkleDir, cfg.LocksDir, cfg.ChunksDir} {
+	for _, path := range []string{
+		cfg.StateRoot,
+		cfg.SocketsDir,
+		cfg.LogsDir,
+		cfg.MerkleDir,
+		cfg.LocksDir,
+		cfg.ChunksDir,
+	} {
 		if err := store.EnsureDir(path); err != nil {
-			slog.ErrorContext(rootContext, "ensure state directory failed", "path", path, "err", err)
+			slog.ErrorContext(
+				rootContext,
+				"ensure state directory failed",
+				"path",
+				path,
+				"err",
+				err,
+			)
+
 			return fmt.Errorf("ensure state directory %s: %w", path, err)
 		}
 	}
@@ -183,7 +218,11 @@ const (
 // is split from run so a throwaway daemon runs the same serving path rather
 // than a reduced copy of it. The configuration root and the update scheduler
 // policy are the differences between an installed daemon and a sandbox.
-func serve(rootContext context.Context, cfg config.Config, updatePolicy updateSchedulerPolicy) error {
+func serve(
+	rootContext context.Context,
+	cfg config.Config,
+	updatePolicy updateSchedulerPolicy,
+) error {
 	var err error
 	installConcernRouter(cfg.LogsDir, cfg.LogPath, rotationConfig(cfg))
 	metrics.Register()
@@ -193,17 +232,35 @@ func serve(rootContext context.Context, cfg config.Config, updatePolicy updateSc
 	if err := refuseIfDaemonAlreadyServing(rootContext, cfg.SocketPath); err != nil {
 		return err
 	}
+
 	if err := os.RemoveAll(cfg.SocketPath); err != nil {
-		slog.ErrorContext(rootContext, "remove stale socket failed", "path", cfg.SocketPath, "err", err)
+		slog.ErrorContext(
+			rootContext,
+			"remove stale socket failed",
+			"path",
+			cfg.SocketPath,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("remove stale socket %s: %w", cfg.SocketPath, err)
 	}
 
 	listenConfig := net.ListenConfig{}
 	listener, err := listenConfig.Listen(rootContext, "unix", cfg.SocketPath)
 	if err != nil {
-		slog.ErrorContext(rootContext, "listen on unix socket failed", "path", cfg.SocketPath, "err", err)
+		slog.ErrorContext(
+			rootContext,
+			"listen on unix socket failed",
+			"path",
+			cfg.SocketPath,
+			"err",
+			err,
+		)
+
 		return fmt.Errorf("listen on unix socket %s: %w", cfg.SocketPath, err)
 	}
+
 	defer func() { _ = listener.Close() }()
 
 	manager, err := daemon.NewManager(rootContext, cfg)
@@ -211,6 +268,7 @@ func serve(rootContext context.Context, cfg config.Config, updatePolicy updateSc
 		slog.ErrorContext(rootContext, "create manager failed", "err", err)
 		return fmt.Errorf("create manager: %w", err)
 	}
+
 	defer func() {
 		closeContext, cancelClose := context.WithTimeout(
 			context.WithoutCancel(rootContext),
@@ -233,12 +291,16 @@ func serve(rootContext context.Context, cfg config.Config, updatePolicy updateSc
 	manager.StartBootSelfCheck(runtimeContext)
 	startLogRetentionSweep(runtimeContext, cfg)
 
-	metrics.StartReporter(runtimeContext, time.Duration(cfg.PerfCountersIntervalMS)*time.Millisecond)
+	metrics.StartReporter(
+		runtimeContext,
+		time.Duration(cfg.PerfCountersIntervalMS)*time.Millisecond,
+	)
 	var debugSrv *debugserver.Server
 	if cfg.DebugListenerEnabled {
 		if debugSrv, err = startDebugServer(runtimeContext, cfg, manager); err != nil {
 			return err
 		}
+
 		defer stopDebugServer(rootContext, debugSrv)
 	}
 
@@ -247,12 +309,18 @@ func serve(rootContext context.Context, cfg config.Config, updatePolicy updateSc
 		grpc.MaxSendMsgSize(grpcutil.MaxMessageBytes),
 	)
 	shutdownCh := make(chan struct{}, 1)
-	pb.RegisterSemanticSearchDaemonServiceServer(server, daemon.NewGRPCServer(manager, func() {
-		select {
-		case shutdownCh <- struct{}{}:
-		default:
-		}
-	}))
+	pb.RegisterSemanticSearchDaemonServiceServer(
+		server,
+		daemon.NewGRPCServer(
+			manager,
+			func() {
+				select {
+				case shutdownCh <- struct{}{}:
+				default:
+				}
+			},
+		),
+	)
 	if updatePolicy == updateSchedulerByBuild {
 		startUpdateScheduler(runtimeContext, cfg, shutdownCh)
 	} else {
@@ -260,11 +328,14 @@ func serve(rootContext context.Context, cfg config.Config, updatePolicy updateSc
 	}
 
 	serveErrCh := make(chan error, 1)
-	goSafe(rootContext, func() {
-		if serveErr := server.Serve(listener); serveErr != nil {
-			serveErrCh <- fmt.Errorf("serve gRPC on %s: %w", cfg.SocketPath, serveErr)
-		}
-	})
+	goSafe(
+		rootContext,
+		func() {
+			if serveErr := server.Serve(listener); serveErr != nil {
+				serveErrCh <- fmt.Errorf("serve gRPC on %s: %w", cfg.SocketPath, serveErr)
+			}
+		},
+	)
 
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM)
@@ -273,6 +344,7 @@ func serve(rootContext context.Context, cfg config.Config, updatePolicy updateSc
 	case err := <-serveErrCh:
 		cancelRuntime()
 		server.Stop()
+
 		return err
 	case <-signalCh:
 	case <-shutdownCh:
@@ -284,6 +356,7 @@ func serve(rootContext context.Context, cfg config.Config, updatePolicy updateSc
 
 	cancelRuntime()
 	server.GracefulStop()
+
 	return nil
 }
 
@@ -291,11 +364,16 @@ func logDaemonIdentity(ctx context.Context, cfg config.Config) {
 	slog.InfoContext(
 		ctx,
 		"daemon identity",
-		"build", version.String(),
-		"commit", version.Commit,
-		"socket", cfg.SocketPath,
-		"state_root", cfg.StateRoot,
-		"pid", os.Getpid(),
+		"build",
+		version.String(),
+		"commit",
+		version.Commit,
+		"socket",
+		cfg.SocketPath,
+		"state_root",
+		cfg.StateRoot,
+		"pid",
+		os.Getpid(),
 		"milvus_collection_load_wait_timeout_ms",
 		cfg.MilvusCollectionLoadWaitTimeoutMS,
 		"milvus_collection_idle_timeout_ms",
@@ -319,24 +397,36 @@ func startLogRetentionSweep(ctx context.Context, cfg config.Config) {
 		filepath.Dir(cfg.LogPath): {},
 	}
 	for root := range roots {
-		logcleanup.Start(ctx, logcleanup.Policy{
-			Root:           root,
-			RetentionBytes: cfg.LogRetentionBytes,
-			Enabled:        cfg.LogCleanupEnabled,
-		}, interval)
+		logcleanup.Start(
+			ctx,
+			logcleanup.Policy{
+				Root:           root,
+				RetentionBytes: cfg.LogRetentionBytes,
+				Enabled:        cfg.LogCleanupEnabled,
+			},
+			interval,
+		)
 	}
 }
 
 func startUpdateScheduler(ctx context.Context, cfg config.Config, shutdownCh chan<- struct{}) {
 	if !updateopts.AutomaticUpdatesEnabled() {
-		slog.InfoContext(ctx, "update scheduler disabled; binary is not a release artifact", "version", version.Version)
+		slog.InfoContext(
+			ctx,
+			"update scheduler disabled; binary is not a release artifact",
+			"version",
+			version.Version,
+		)
+
 		return
 	}
+
 	executablePath, err := os.Executable()
 	if err != nil {
 		slog.WarnContext(ctx, "update scheduler disabled; executable path unavailable", "err", err)
 		return
 	}
+
 	overrides := updateopts.Overrides{
 		Client:     nil,
 		InstallDir: filepath.Dir(executablePath),
@@ -345,14 +435,21 @@ func startUpdateScheduler(ctx context.Context, cfg config.Config, shutdownCh cha
 		DryRun:     false,
 		Log:        slog.Default(),
 	}
-	goSafe(ctx, func() {
-		updateopts.RunApplyScheduler(ctx, overrides, func() {
-			select {
-			case shutdownCh <- struct{}{}:
-			default:
-			}
-		})
-	})
+	goSafe(
+		ctx,
+		func() {
+			updateopts.RunApplyScheduler(
+				ctx,
+				overrides,
+				func() {
+					select {
+					case shutdownCh <- struct{}{}:
+					default:
+					}
+				},
+			)
+		},
+	)
 }
 
 // applyStatePaths derives every state-relative path from the resolved state
@@ -369,6 +466,7 @@ func applyStatePaths(cfg config.Config, stateRoot string, socketPath string) con
 	cfg.MerkleDir = filepath.Join(cfg.StateRoot, "merkle")
 	cfg.LocksDir = filepath.Join(cfg.StateRoot, "locks")
 	cfg.ChunksDir = filepath.Join(cfg.StateRoot, "chunks")
+
 	return cfg
 }
 
@@ -393,11 +491,24 @@ func refuseIfDaemonAlreadyServing(ctx context.Context, socketPath string) error 
 	if err != nil {
 		return nil
 	}
+
 	if closeErr := conn.Close(); closeErr != nil {
 		slog.WarnContext(ctx, "close probe connection failed", "path", socketPath, "err", closeErr)
 	}
-	conflict := fmt.Errorf("another lm-semantic-search-daemon is already listening on %s", socketPath)
-	slog.ErrorContext(ctx, "another lm-semantic-search-daemon is already serving this socket; refusing to start", "path", socketPath, "err", conflict)
+
+	conflict := fmt.Errorf(
+		"another lm-semantic-search-daemon is already listening on %s",
+		socketPath,
+	)
+	slog.ErrorContext(
+		ctx,
+		"another lm-semantic-search-daemon is already serving this socket; refusing to start",
+		"path",
+		socketPath,
+		"err",
+		conflict,
+	)
+
 	return conflict
 }
 
@@ -413,18 +524,38 @@ func startDebugServer(
 			if marshalErr != nil {
 				return nil, fmt.Errorf("marshal residency snapshot: %w", marshalErr)
 			}
+
 			return payload, nil
 		},
 	)
 	if err != nil {
-		slog.ErrorContext(ctx, "create debug listener failed", "addr", cfg.DebugListenAddr, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"create debug listener failed",
+			"addr",
+			cfg.DebugListenAddr,
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("create debug listener on %s: %w", cfg.DebugListenAddr, err)
 	}
+
 	if err := srv.Start(ctx); err != nil {
-		slog.ErrorContext(ctx, "start debug listener failed", "addr", cfg.DebugListenAddr, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"start debug listener failed",
+			"addr",
+			cfg.DebugListenAddr,
+			"err",
+			err,
+		)
+
 		return nil, fmt.Errorf("start debug listener on %s: %w", cfg.DebugListenAddr, err)
 	}
+
 	slog.InfoContext(ctx, "debug listener started", "addr", srv.Addr())
+
 	return srv, nil
 }
 
@@ -434,6 +565,7 @@ func stopDebugServer(ctx context.Context, srv *debugserver.Server) {
 	if srv == nil {
 		return
 	}
+
 	shutdownCtx, cancel := context.WithTimeout(ctx, debugShutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {

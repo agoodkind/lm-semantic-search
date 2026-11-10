@@ -64,6 +64,7 @@ func TestSuccessfulBuildCompletionClearsFailedBuildRetryCounter(t *testing.T) {
 		syncer.runSyncAll(context.Background(), "test")
 		waitForFailedBuildRetryJobs(t, manager, codebase.ID, attempt)
 	}
+
 	syncer.runSyncAll(context.Background(), "test")
 	if got := len(manager.ListJobs(codebase.ID)); got != failedBuildRetryTestCap {
 		t.Fatalf("retry jobs before completion reset = %d, want %d", got, failedBuildRetryTestCap)
@@ -81,7 +82,10 @@ func failedBuildRetryRunner() fakeRunner {
 	return fakeRunner{
 		index:      nil,
 		indexFiles: nil,
-		indexOne: func(context.Context, string, string, model.IndexConfig) (indexer.OneFileResult, error) {
+		indexOne: func(context.Context, string, string, model.IndexConfig) (
+			indexer.OneFileResult,
+			error,
+		) {
 			return indexer.OneFileResult{
 				Chunks:   nil,
 				FileHash: "",
@@ -99,10 +103,15 @@ func registerFailedBuildCodebase(t *testing.T, manager *Manager, repoPath string
 	if err != nil {
 		t.Fatalf("EvalSymlinks returned error: %v", err)
 	}
+
 	return registerFailedBuildCodebaseAtPath(manager, "cb-failed-retry", canonicalPath)
 }
 
-func registerFailedBuildCodebaseAtPath(manager *Manager, codebaseID string, canonicalPath string) model.Codebase {
+func registerFailedBuildCodebaseAtPath(
+	manager *Manager,
+	codebaseID string,
+	canonicalPath string,
+) model.Codebase {
 	indexConfig := defaultIndexConfig()
 	indexConfig.IgnoreDigest = digestIndexConfig(indexConfig)
 	codebase := newCodebaseRecord(canonicalPath)
@@ -114,6 +123,7 @@ func registerFailedBuildCodebaseAtPath(manager *Manager, codebaseID string, cano
 	manager.mu.Lock()
 	manager.codebases[codebase.ID] = codebase
 	manager.mu.Unlock()
+
 	return codebase
 }
 
@@ -135,17 +145,26 @@ func waitForFailedBuildRetryJobs(t *testing.T, manager *Manager, codebaseID stri
 	for time.Now().Before(deadline) {
 		jobs := manager.ListJobs(codebaseID)
 		failedJobs := 0
+
 		for _, job := range jobs {
 			if job.State == model.JobStateFailed {
 				failedJobs++
 			}
 		}
+
 		if len(jobs) == want && failedJobs == want {
 			return
 		}
+
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("failed retry jobs for %s did not reach %d; got %d", codebaseID, want, len(manager.ListJobs(codebaseID)))
+
+	t.Fatalf(
+		"failed retry jobs for %s did not reach %d; got %d",
+		codebaseID,
+		want,
+		len(manager.ListJobs(codebaseID)),
+	)
 }
 
 func waitForBuildRetryJobs(t *testing.T, manager *Manager, codebaseID string, want int) {
@@ -155,33 +174,46 @@ func waitForBuildRetryJobs(t *testing.T, manager *Manager, codebaseID string, wa
 	for time.Now().Before(deadline) {
 		jobs := manager.ListJobs(codebaseID)
 		terminalJobs := 0
+
 		for _, job := range jobs {
-			if job.State == model.JobStateCompleted || job.State == model.JobStateFailed || job.State == model.JobStateCancelled {
+			if job.State == model.JobStateCompleted || job.State == model.JobStateFailed ||
+				job.State == model.JobStateCancelled {
 				terminalJobs++
 			}
 		}
+
 		if len(jobs) == want && terminalJobs == want {
 			return
 		}
+
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("retry jobs for %s did not reach %d; got %d", codebaseID, want, len(manager.ListJobs(codebaseID)))
+
+	t.Fatalf(
+		"retry jobs for %s did not reach %d; got %d",
+		codebaseID,
+		want,
+		len(manager.ListJobs(codebaseID)),
+	)
 }
 
 func successfulFailedBuildRetryResult() indexer.Result {
 	content := "package main\n"
+
 	return indexer.Result{
 		IndexedFiles: 1,
 		TotalChunks:  1,
-		Chunks: []model.StoredChunk{{
-			Content:       content,
-			RelativePath:  "main.go",
-			StartLine:     1,
-			EndLine:       1,
-			Language:      "go",
-			FileExtension: ".go",
-			Score:         0,
-		}},
+		Chunks: []model.StoredChunk{
+			{
+				Content:       content,
+				RelativePath:  "main.go",
+				StartLine:     1,
+				EndLine:       1,
+				Language:      "go",
+				FileExtension: ".go",
+				Score:         0,
+			},
+		},
 		FileHashes:        map[string]string{"main.go": hashText(content)},
 		SkippedFiles:      nil,
 		SkippedOversize:   0,

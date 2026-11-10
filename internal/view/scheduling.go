@@ -48,6 +48,7 @@ func ResolveScheduling(
 	if resolvedState == "queued" || resolvedState == "paused" {
 		resolvedReason = canonicalSchedulingReason(reason)
 	}
+
 	return SchedulingView{
 		Priority:  strings.ToLower(strings.TrimSpace(priority)),
 		Quiet:     quiet,
@@ -72,12 +73,15 @@ func schedulingIdleLabel(idleAfterSeconds int32) string {
 	if idleAfterSeconds <= 0 {
 		return ""
 	}
+
 	if idleAfterSeconds%3600 == 0 {
 		return strconv.FormatInt(int64(idleAfterSeconds/3600), 10) + "h"
 	}
+
 	if idleAfterSeconds%60 == 0 {
 		return strconv.FormatInt(int64(idleAfterSeconds/60), 10) + "m"
 	}
+
 	return (time.Duration(idleAfterSeconds) * time.Second).String()
 }
 

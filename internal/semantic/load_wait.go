@@ -77,6 +77,7 @@ func (coordinator *collectionLoadCoordinator) Do(
 	if starting {
 		coordinator.runFlight(ctx, collectionName, ceiling, flight, operation)
 	}
+
 	return waitForCollectionLoadFlight(ctx, collectionName, flight)
 }
 
@@ -90,11 +91,14 @@ func (coordinator *collectionLoadCoordinator) joinOrStart(
 	if flight, found := coordinator.flights[collectionName]; found {
 		return flight, false
 	}
+
 	if coordinator.flights == nil {
 		coordinator.flights = make(map[string]*collectionLoadFlight)
 	}
+
 	flight := &collectionLoadFlight{done: make(chan struct{}), err: nil}
 	coordinator.flights[collectionName] = flight
+
 	return flight, true
 }
 
@@ -128,13 +132,20 @@ func (coordinator *collectionLoadCoordinator) runFlight(
 					collectionName,
 					recovered,
 				)
-				slog.ErrorContext(loadCtx, "semantic.collection_load_panic",
-					"component", "semantic",
-					"subcomponent", "load",
-					"collection", collectionName,
-					"err", operationErr,
+				slog.ErrorContext(
+					loadCtx,
+					"semantic.collection_load_panic",
+					"component",
+					"semantic",
+					"subcomponent",
+					"load",
+					"collection",
+					collectionName,
+					"err",
+					operationErr,
 				)
 			}
+
 			coordinator.finishFlight(collectionName, flight, operationErr)
 		}()
 		operationErr = operation(loadCtx)
@@ -162,17 +173,20 @@ func waitForCollectionLoadFlight(
 ) error {
 	select {
 	case <-ctx.Done():
-		slog.WarnContext(ctx, "semantic.collection_load_shared_wait_cancelled",
-			"component", "semantic",
-			"subcomponent", "load",
-			"collection", collectionName,
-			"err", ctx.Err(),
-		)
-		return fmt.Errorf(
-			"wait for shared collection load %s: %w",
+		slog.WarnContext(
+			ctx,
+			"semantic.collection_load_shared_wait_cancelled",
+			"component",
+			"semantic",
+			"subcomponent",
+			"load",
+			"collection",
 			collectionName,
+			"err",
 			ctx.Err(),
 		)
+
+		return fmt.Errorf("wait for shared collection load %s: %w", collectionName, ctx.Err())
 	case <-flight.done:
 		return flight.err
 	}
@@ -203,50 +217,84 @@ func waitForCollectionLoad(
 	if err != nil {
 		return err
 	}
+
 	if state.Loaded {
 		return nil
 	}
-	slog.ErrorContext(ctx, "semantic.collection_load_stuck",
-		"component", "semantic",
-		"subcomponent", "load",
-		"collection", collectionName,
-		"waited_ms", clock.Now().Sub(startedAt).Milliseconds(),
-		"bound_ms", bound.Milliseconds(),
-		"load_progress", loadProgressField(state),
-		"err", ErrCollectionNotReady,
+
+	slog.ErrorContext(
+		ctx,
+		"semantic.collection_load_stuck",
+		"component",
+		"semantic",
+		"subcomponent",
+		"load",
+		"collection",
+		collectionName,
+		"waited_ms",
+		clock.Now().Sub(startedAt).Milliseconds(),
+		"bound_ms",
+		bound.Milliseconds(),
+		"load_progress",
+		loadProgressField(state),
+		"err",
+		ErrCollectionNotReady,
 	)
 
 	if err := reissueWithin(ctx, bound, reissue); err != nil {
 		return err
 	}
+
 	state, err = pollCollectionLoad(ctx, bound, probe)
 	if err != nil {
 		return err
 	}
+
 	waited := clock.Now().Sub(startedAt)
 	if state.Loaded {
-		slog.WarnContext(ctx, "semantic.collection_load_recovered",
-			"component", "semantic",
-			"subcomponent", "load",
-			"collection", collectionName,
-			"waited_ms", waited.Milliseconds(),
+		slog.WarnContext(
+			ctx,
+			"semantic.collection_load_recovered",
+			"component",
+			"semantic",
+			"subcomponent",
+			"load",
+			"collection",
+			collectionName,
+			"waited_ms",
+			waited.Milliseconds(),
 		)
+
 		return nil
 	}
 
 	stuck := fmt.Errorf(
 		"collection %s did not become queryable within %s after a re-issued load (load progress %s): %w: %w",
-		collectionName, waited, loadProgressField(state), errCollectionLoadUnrecovered, ErrCollectionNotReady,
+		collectionName,
+		waited,
+		loadProgressField(state),
+		errCollectionLoadUnrecovered,
+		ErrCollectionNotReady,
 	)
-	slog.ErrorContext(ctx, "semantic.collection_load_unrecovered",
-		"component", "semantic",
-		"subcomponent", "load",
-		"collection", collectionName,
-		"waited_ms", waited.Milliseconds(),
-		"bound_ms", bound.Milliseconds(),
-		"load_progress", loadProgressField(state),
-		"err", stuck,
+	slog.ErrorContext(
+		ctx,
+		"semantic.collection_load_unrecovered",
+		"component",
+		"semantic",
+		"subcomponent",
+		"load",
+		"collection",
+		collectionName,
+		"waited_ms",
+		waited.Milliseconds(),
+		"bound_ms",
+		bound.Milliseconds(),
+		"load_progress",
+		loadProgressField(state),
+		"err",
+		stuck,
 	)
+
 	return stuck
 }
 
@@ -256,6 +304,7 @@ func waitForCollectionLoad(
 func reissueWithin(ctx context.Context, bound time.Duration, reissue collectionLoadRequest) error {
 	boundedCtx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
+
 	return reissue(boundedCtx)
 }
 
@@ -279,32 +328,39 @@ func pollCollectionLoad(
 	defer ticker.Stop()
 
 	last := collectionLoadState{Loaded: false, Progress: 0, ProgressKnown: false}
+
 	for {
 		state, err := probe(boundedCtx)
 		if err != nil {
-			if collectionLoadPollBoundExpired(
-				ctx,
-				boundedCtx,
-				clock.Until(pollDeadline),
-			) {
+			if collectionLoadPollBoundExpired(ctx, boundedCtx, clock.Until(pollDeadline)) {
 				return last, nil
 			}
+
 			return last, err
 		}
+
 		last = state
 		if state.Loaded {
 			return state, nil
 		}
+
 		select {
 		case <-boundedCtx.Done():
 			if cancelled := ctx.Err(); cancelled != nil {
-				slog.WarnContext(ctx, "semantic.collection_load_wait_cancelled",
-					"component", "semantic",
-					"subcomponent", "load",
-					"err", cancelled,
+				slog.WarnContext(
+					ctx,
+					"semantic.collection_load_wait_cancelled",
+					"component",
+					"semantic",
+					"subcomponent",
+					"load",
+					"err",
+					cancelled,
 				)
+
 				return last, fmt.Errorf("wait for collection load: %w", cancelled)
 			}
+
 			return last, nil
 		case <-ticker.C:
 		}
@@ -322,6 +378,7 @@ func collectionLoadPollBoundExpired(
 	if callerCtx.Err() != nil {
 		return false
 	}
+
 	return pollCtx.Err() != nil || pollTimeRemaining <= 0
 }
 
@@ -332,6 +389,7 @@ func loadProgressField(state collectionLoadState) string {
 	if !state.ProgressKnown {
 		return "unknown"
 	}
+
 	return fmt.Sprintf("%d%%", state.Progress)
 }
 
@@ -339,9 +397,12 @@ func loadProgressField(state collectionLoadState) string {
 // falling back to the built-in bound when the operator set none or set a value
 // the conversion rejected.
 func (service *Service) collectionLoadBound() time.Duration {
-	if bound := config.MilvusCollectionLoadTimeout(service.cfg.MilvusCollectionLoadTimeoutMS); bound > 0 {
+	if bound := config.MilvusCollectionLoadTimeout(
+		service.cfg.MilvusCollectionLoadTimeoutMS,
+	); bound > 0 {
 		return bound
 	}
+
 	return defaultCollectionLoadBound
 }
 
@@ -366,11 +427,15 @@ func (service *Service) sharedCollectionLoadCeiling() time.Duration {
 // diagnosable.
 func (service *Service) awaitCollectionLoaded(ctx context.Context, collectionName string) error {
 	probe := func(probeCtx context.Context) (collectionLoadState, error) {
-		state, err := service.milvus.GetLoadState(probeCtx, milvusclient.NewGetLoadStateOption(collectionName))
+		state, err := service.milvus.GetLoadState(
+			probeCtx,
+			milvusclient.NewGetLoadStateOption(collectionName),
+		)
 		if err != nil {
 			return collectionLoadState{Loaded: false, Progress: 0, ProgressKnown: false},
 				wrapStoreError(ctx, err, "get load state for "+collectionName)
 		}
+
 		return collectionLoadState{
 			Loaded:        state.State == entity.LoadStateLoaded,
 			Progress:      state.Progress,
@@ -378,10 +443,15 @@ func (service *Service) awaitCollectionLoaded(ctx context.Context, collectionNam
 		}, nil
 	}
 	reissue := func(reissueCtx context.Context) error {
-		if _, err := service.milvus.LoadCollection(reissueCtx, milvusclient.NewLoadCollectionOption(collectionName)); err != nil {
+		if _, err := service.milvus.LoadCollection(
+			reissueCtx,
+			milvusclient.NewLoadCollectionOption(collectionName),
+		); err != nil {
 			return wrapStoreError(ctx, err, "re-issue load of Milvus collection "+collectionName)
 		}
+
 		return nil
 	}
+
 	return waitForCollectionLoad(ctx, collectionName, service.collectionLoadBound(), probe, reissue)
 }

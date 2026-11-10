@@ -21,6 +21,7 @@ func estimatedTokenCount(content string) int {
 	if count < 1 {
 		return 1
 	}
+
 	return count
 }
 
@@ -47,9 +48,11 @@ func packChunksByEstimatedTokens(
 	if maxRows < 1 {
 		maxRows = 1
 	}
+
 	if tokenBudget < 1 {
 		tokenBudget = 1
 	}
+
 	// Reserve nothing and let append grow each group, matching
 	// packChunksByEstimatedInsertBytes. How many rows a group holds depends on the
 	// token budget and the content, so it cannot be known when the group opens,
@@ -62,6 +65,7 @@ func packChunksByEstimatedTokens(
 	groups := make([][]model.StoredChunk, 0)
 	current := make([]model.StoredChunk, 0)
 	currentTokens := 0
+
 	for _, chunk := range chunks {
 		tokens := embeddedTokenCount(chunk, reuse)
 		overBudget := currentTokens+tokens > tokenBudget
@@ -71,12 +75,15 @@ func packChunksByEstimatedTokens(
 			current = make([]model.StoredChunk, 0)
 			currentTokens = 0
 		}
+
 		current = append(current, chunk)
 		currentTokens += tokens
 	}
+
 	if len(current) > 0 {
 		groups = append(groups, current)
 	}
+
 	return groups
 }
 
@@ -90,6 +97,7 @@ func embeddedTokenCount(chunk model.StoredChunk, reuse map[string]model.ReuseVec
 			return 0
 		}
 	}
+
 	return estimatedTokenCount(chunk.Content)
 }
 
@@ -108,6 +116,7 @@ func packChunksByEstimatedInsertBytes(
 	if vectorDimension < 0 {
 		vectorDimension = 0
 	}
+
 	if byteBudget < 1 {
 		byteBudget = 1
 	}
@@ -115,6 +124,7 @@ func packChunksByEstimatedInsertBytes(
 	groups := make([][]model.StoredChunk, 0)
 	current := make([]model.StoredChunk, 0)
 	currentBytes := 0
+
 	for _, chunk := range chunks {
 		rowBytes := estimatedInsertRowBytes(chunk, vectorDimension, columnSet, embeddingModel)
 		overBudget := currentBytes+rowBytes > byteBudget
@@ -123,12 +133,15 @@ func packChunksByEstimatedInsertBytes(
 			current = make([]model.StoredChunk, 0)
 			currentBytes = 0
 		}
+
 		current = append(current, chunk)
 		currentBytes += rowBytes
 	}
+
 	if len(current) > 0 {
 		groups = append(groups, current)
 	}
+
 	return groups
 }
 
@@ -164,5 +177,6 @@ func estimatedInsertRowBytes(
 		vectorDimension*float32Bytes +
 		insertRowProtobufFramingAllowance
 	rowBytes += milvusstore.ScalarRowBytes(columnSet.DeclaredScalars(), chunk.Scalars)
+
 	return rowBytes
 }

@@ -24,6 +24,7 @@ func (handler *residencyLogHandler) Handle(_ context.Context, record slog.Record
 	handler.mutex.Lock()
 	defer handler.mutex.Unlock()
 	handler.records = append(handler.records, record.Clone())
+
 	return nil
 }
 
@@ -38,11 +39,13 @@ func (handler *residencyLogHandler) WithGroup(string) slog.Handler {
 func (handler *residencyLogHandler) record(message string) (slog.Record, bool) {
 	handler.mutex.Lock()
 	defer handler.mutex.Unlock()
+
 	for _, record := range handler.records {
 		if record.Message == message {
 			return record, true
 		}
 	}
+
 	return slog.Record{}, false
 }
 
@@ -54,6 +57,7 @@ func captureResidencyLogs(t *testing.T) *residencyLogHandler {
 	t.Cleanup(func() {
 		slog.SetDefault(previous)
 	})
+
 	return handler
 }
 
@@ -72,8 +76,10 @@ func requireResidencyEventFields(t *testing.T, record slog.Record) {
 		if _, found := want[attribute.Key]; found {
 			want[attribute.Key] = true
 		}
+
 		return true
 	})
+
 	for name, found := range want {
 		if !found {
 			t.Errorf("%s missing %q", record.Message, name)
@@ -107,6 +113,7 @@ func requireResidencyEventValues(
 				wantValue,
 			)
 		}
+
 		return true
 	})
 }
@@ -127,6 +134,7 @@ func TestResidencyEmitsLoadAndUnloadMetricsAndEvents(t *testing.T) {
 		unload: func(context.Context, string) error {
 			clock.Advance(250 * time.Millisecond)
 			unloaded <- struct{}{}
+
 			return nil
 		},
 	})
@@ -138,6 +146,7 @@ func TestResidencyEmitsLoadAndUnloadMetricsAndEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acquire returned error: %v", err)
 	}
+
 	lease.Release()
 	clock.Advance(75 * time.Second)
 	select {
@@ -147,26 +156,42 @@ func TestResidencyEmitsLoadAndUnloadMetricsAndEvents(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(time.Second)
+
 	for {
 		if _, found := handler.record("semantic.collection_unloaded"); found {
 			break
 		}
+
 		if time.Now().After(deadline) {
 			t.Fatal("unload completion event was not emitted")
 		}
+
 		time.Sleep(time.Millisecond)
 	}
 
 	after := metrics.Read()
 	if after.MilvusCollectionLoadsTotal-before.MilvusCollectionLoadsTotal != 1 {
-		t.Fatalf("load delta = %d, want 1", after.MilvusCollectionLoadsTotal-before.MilvusCollectionLoadsTotal)
+		t.Fatalf(
+			"load delta = %d, want 1",
+			after.MilvusCollectionLoadsTotal-before.MilvusCollectionLoadsTotal,
+		)
 	}
+
 	if after.MilvusCollectionUnloadsTotal-before.MilvusCollectionUnloadsTotal != 1 {
-		t.Fatalf("unload delta = %d, want 1", after.MilvusCollectionUnloadsTotal-before.MilvusCollectionUnloadsTotal)
+		t.Fatalf(
+			"unload delta = %d, want 1",
+			after.MilvusCollectionUnloadsTotal-before.MilvusCollectionUnloadsTotal,
+		)
 	}
+
 	if after.MilvusCollectionLeasesActive != before.MilvusCollectionLeasesActive {
-		t.Fatalf("active leases = %d, want %d", after.MilvusCollectionLeasesActive, before.MilvusCollectionLeasesActive)
+		t.Fatalf(
+			"active leases = %d, want %d",
+			after.MilvusCollectionLeasesActive,
+			before.MilvusCollectionLeasesActive,
+		)
 	}
+
 	wantEvents := map[string][4]int64{
 		"semantic.collection_load_started":   {0, 0, 1, 0},
 		"semantic.collection_load_ready":     {100, 0, 1, 0},
@@ -179,6 +204,7 @@ func TestResidencyEmitsLoadAndUnloadMetricsAndEvents(t *testing.T) {
 			t.Errorf("missing event %q", message)
 			continue
 		}
+
 		requireResidencyEventFields(t, record)
 		requireResidencyEventValues(t, record, want[0], want[1], want[2], want[3])
 	}
@@ -214,14 +240,20 @@ func TestResidencyReportsLoadWaitTimeout(t *testing.T) {
 	if err := <-result; !errors.Is(err, ErrCollectionLoadWaitTimeout) {
 		t.Fatalf("Acquire error = %v, want ErrCollectionLoadWaitTimeout", err)
 	}
+
 	after := metrics.Read()
 	if after.MilvusCollectionLoadWaitTimeoutsTotal-before.MilvusCollectionLoadWaitTimeoutsTotal != 1 {
-		t.Fatalf("wait timeout delta = %d, want 1", after.MilvusCollectionLoadWaitTimeoutsTotal-before.MilvusCollectionLoadWaitTimeoutsTotal)
+		t.Fatalf(
+			"wait timeout delta = %d, want 1",
+			after.MilvusCollectionLoadWaitTimeoutsTotal-before.MilvusCollectionLoadWaitTimeoutsTotal,
+		)
 	}
+
 	record, found := handler.record("semantic.collection_load_wait_timeout")
 	if !found {
 		t.Fatal("load wait timeout event was not emitted")
 	}
+
 	requireResidencyEventFields(t, record)
 	requireResidencyEventValues(t, record, 0, 15000, 1, 0)
 }
@@ -250,6 +282,7 @@ func TestResidencyCountsTimerLeaseRaceAsSkippedInUse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Acquire returned error: %v", err)
 	}
+
 	firstLease.Release()
 	staleTimer := clock.LastTimer()
 	activeLease, err := controller.Acquire(context.Background(), "live")
@@ -265,6 +298,7 @@ func TestResidencyCountsTimerLeaseRaceAsSkippedInUse(t *testing.T) {
 		before.MilvusCollectionUnloadSkippedInUseTotal; delta != 1 {
 		t.Fatalf("skipped unload delta = %d want 1", delta)
 	}
+
 	select {
 	case <-unloaded:
 		t.Fatal("timer and lease race unloaded an active collection")
@@ -296,12 +330,14 @@ func TestResidencyDoesNotCountUnrelatedStaleTimerAsSkippedInUse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Acquire returned error: %v", err)
 	}
+
 	firstLease.Release()
 	staleTimer := clock.LastTimer()
 	secondLease, err := controller.Acquire(context.Background(), "live")
 	if err != nil {
 		t.Fatalf("second Acquire returned error: %v", err)
 	}
+
 	secondLease.Release()
 
 	before := metrics.Read()
@@ -311,6 +347,7 @@ func TestResidencyDoesNotCountUnrelatedStaleTimerAsSkippedInUse(t *testing.T) {
 		before.MilvusCollectionUnloadSkippedInUseTotal; delta != 0 {
 		t.Fatalf("skipped unload delta = %d want 0", delta)
 	}
+
 	select {
 	case <-unloaded:
 		t.Fatal("unrelated stale timer unloaded a collection")
@@ -335,13 +372,12 @@ func TestResidencyStateGaugesExcludeStagingCollections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire live: %v", err)
 	}
-	stagingLease, err := controller.Acquire(
-		context.Background(),
-		"live"+stagingCollectionSuffix,
-	)
+
+	stagingLease, err := controller.Acquire(context.Background(), "live"+stagingCollectionSuffix)
 	if err != nil {
 		t.Fatalf("acquire staging: %v", err)
 	}
+
 	liveLease.Release()
 	stagingLease.Release()
 
@@ -366,6 +402,7 @@ func TestResidencyReportsLoadAndUnloadFailures(t *testing.T) {
 	if loadErr == nil {
 		t.Fatal("Acquire returned nil error for failed load")
 	}
+
 	if err := loadController.Close(context.Background()); err != nil {
 		t.Fatalf("close load controller: %v", err)
 	}
@@ -383,6 +420,7 @@ func TestResidencyReportsLoadAndUnloadFailures(t *testing.T) {
 		unload: func(context.Context, string) error {
 			clock.Advance(500 * time.Millisecond)
 			unloadAttempted <- struct{}{}
+
 			return ErrCollectionNotReady
 		},
 	})
@@ -393,6 +431,7 @@ func TestResidencyReportsLoadAndUnloadFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acquire returned error: %v", err)
 	}
+
 	lease.Release()
 	clock.Advance(75 * time.Second)
 	select {
@@ -400,28 +439,41 @@ func TestResidencyReportsLoadAndUnloadFailures(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("unload was not attempted")
 	}
+
 	deadline := time.Now().Add(time.Second)
+
 	for {
 		if _, found := handler.record("semantic.collection_unload_failed"); found {
 			break
 		}
+
 		if time.Now().After(deadline) {
 			t.Fatal("unload failure event was not emitted")
 		}
+
 		time.Sleep(time.Millisecond)
 	}
 
 	after := metrics.Read()
 	if after.MilvusCollectionLoadFailuresTotal-before.MilvusCollectionLoadFailuresTotal != 1 {
-		t.Fatalf("load failure delta = %d, want 1", after.MilvusCollectionLoadFailuresTotal-before.MilvusCollectionLoadFailuresTotal)
+		t.Fatalf(
+			"load failure delta = %d, want 1",
+			after.MilvusCollectionLoadFailuresTotal-before.MilvusCollectionLoadFailuresTotal,
+		)
 	}
+
 	if after.MilvusCollectionUnloadFailuresTotal-before.MilvusCollectionUnloadFailuresTotal != 1 {
-		t.Fatalf("unload failure delta = %d, want 1", after.MilvusCollectionUnloadFailuresTotal-before.MilvusCollectionUnloadFailuresTotal)
+		t.Fatalf(
+			"unload failure delta = %d, want 1",
+			after.MilvusCollectionUnloadFailuresTotal-before.MilvusCollectionUnloadFailuresTotal,
+		)
 	}
+
 	record, found := handler.record("semantic.collection_unload_failed")
 	if !found {
 		t.Fatal("unload failure event missing")
 	}
+
 	requireResidencyEventFields(t, record)
 	requireResidencyEventValues(t, record, 0, 500, 0, 75000)
 	errorClass := ""
@@ -429,6 +481,7 @@ func TestResidencyReportsLoadAndUnloadFailures(t *testing.T) {
 		if attribute.Key == "error_class" {
 			errorClass = attribute.Value.String()
 		}
+
 		return true
 	})
 	if errorClass != "collection_not_ready" {

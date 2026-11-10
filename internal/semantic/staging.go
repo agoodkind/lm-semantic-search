@@ -24,12 +24,22 @@ func (service *Service) PinStaging(
 	peerInfo, _ := peer.FromContext(ctx)
 	if err := ctx.Err(); err != nil {
 		wrappedErr := fmt.Errorf("pin staging collection: %w", err)
-		slog.WarnContext(ctx, "pin staging collection cancelled", "peer", peerInfo.String(), "error", wrappedErr)
+		slog.WarnContext(
+			ctx,
+			"pin staging collection cancelled",
+			"peer",
+			peerInfo.String(),
+			"error",
+			wrappedErr,
+		)
+
 		return nil, wrappedErr
 	}
+
 	if !service.Available() {
 		return nil, ErrUnavailable
 	}
+
 	return service.residency.Pin(stagingCollectionName(service.CollectionName(codebasePath)))
 }
 
@@ -46,7 +56,15 @@ func (service *Service) PinStaging(
 // item's insert and its checkpoint, the resumed run re-embeds that one item and
 // its prior staging rows are removed before the fresh rows land. A nil chunk
 // slice with an empty removal is a no-op.
-func (service *Service) StageReindex(ctx context.Context, codebasePath string, chunks []model.StoredChunk, removal Removal, progress func(Progress), reuse map[string]model.ReuseVector, columnSet StoreColumnSet) (err error) {
+func (service *Service) StageReindex(
+	ctx context.Context,
+	codebasePath string,
+	chunks []model.StoredChunk,
+	removal Removal,
+	progress func(Progress),
+	reuse map[string]model.ReuseVector,
+	columnSet StoreColumnSet,
+) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.stageReindex")
 	defer done(&err)
 
@@ -55,19 +73,26 @@ func (service *Service) StageReindex(ctx context.Context, codebasePath string, c
 	}
 
 	stagingName := stagingCollectionName(service.CollectionName(codebasePath))
-	hasStaging, err := service.hasCollection(ctx, stagingName, "check staging collection "+stagingName)
+	hasStaging, err := service.hasCollection(
+		ctx,
+		stagingName,
+		"check staging collection "+stagingName,
+	)
 	if err != nil {
 		return err
 	}
+
 	var lease CollectionLease
 	if hasStaging && len(chunks) > 0 {
 		if err := service.ensureCreatedCollectionMmapForWrite(ctx, stagingName); err != nil {
 			return err
 		}
+
 		if err := service.PrepareCollection(ctx, stagingName); err != nil {
 			return err
 		}
 	}
+
 	if hasStaging {
 		lease, err = service.AcquireCollection(ctx, stagingName)
 		if err != nil {
@@ -81,11 +106,23 @@ func (service *Service) StageReindex(ctx context.Context, codebasePath string, c
 			return err
 		}
 	}
+
 	if len(chunks) == 0 {
 		return nil
 	}
+
 	chunks = service.guardrailExpand(ctx, codebasePath, chunks, "stage")
-	return service.insertChunksBatched(ctx, stagingName, chunks, hasStaging, "Generating embeddings and writing to Milvus...", progress, reuse, columnSet)
+
+	return service.insertChunksBatched(
+		ctx,
+		stagingName,
+		chunks,
+		hasStaging,
+		"Generating embeddings and writing to Milvus...",
+		progress,
+		reuse,
+		columnSet,
+	)
 }
 
 const recoveryCollectionSuffix = "_swap_previous"
@@ -99,6 +136,7 @@ func recoveryCollectionName(collectionName string) (string, error) {
 			maxBase,
 		)
 	}
+
 	return collectionName + recoveryCollectionSuffix, nil
 }
 
@@ -121,13 +159,9 @@ func (service *Service) PromoteStaging(ctx context.Context, codebasePath string)
 	if err != nil {
 		return err
 	}
+
 	stagingName := stagingCollectionName(collectionName)
-	maintenance, err := service.residency.Maintain(
-		ctx,
-		collectionName,
-		stagingName,
-		recoveryName,
-	)
+	maintenance, err := service.residency.Maintain(ctx, collectionName, stagingName, recoveryName)
 	if err != nil {
 		return err
 	}
@@ -141,44 +175,64 @@ func (service *Service) PromoteStaging(ctx context.Context, codebasePath string)
 	if err != nil {
 		return err
 	}
+
 	if hasRecovery {
 		if err := service.recoverPromotionNames(ctx, collectionName, recoveryName); err != nil {
 			return err
 		}
 	}
 
-	hasStaging, err := service.hasCollection(ctx, stagingName, "check staging collection "+stagingName)
+	hasStaging, err := service.hasCollection(
+		ctx,
+		stagingName,
+		"check staging collection "+stagingName,
+	)
 	if err != nil {
 		return err
 	}
+
 	if !hasStaging {
 		return ErrCollectionMissing
 	}
 
-	hasLive, err := service.hasCollection(ctx, collectionName, "check live collection "+collectionName)
+	hasLive, err := service.hasCollection(
+		ctx,
+		collectionName,
+		"check live collection "+collectionName,
+	)
 	if err != nil {
 		return err
 	}
+
 	if hasLive {
 		if err := service.renameCollection(ctx, collectionName, recoveryName); err != nil {
 			return err
 		}
 	}
+
 	if err := service.renameCollection(ctx, stagingName, collectionName); err != nil {
 		if !hasLive {
 			return err
 		}
+
 		restoreErr := service.renameCollection(ctx, recoveryName, collectionName)
 		if restoreErr != nil {
-			joinedErr := errors.Join(err, fmt.Errorf("restore prior live collection: %w", restoreErr))
+			joinedErr := errors.Join(
+				err,
+				fmt.Errorf("restore prior live collection: %w", restoreErr),
+			)
 			slog.ErrorContext(ctx, "restore prior live collection failed", "error", joinedErr)
+
 			return joinedErr
 		}
+
 		return err
 	}
+
 	if !hasLive {
 		return nil
 	}
+
 	return service.dropIfExists(ctx, recoveryName)
 }
 
@@ -191,11 +245,17 @@ func (service *Service) HasStaging(ctx context.Context, codebasePath string) (bo
 	if !service.Available() {
 		return false, nil
 	}
+
 	stagingName := stagingCollectionName(service.CollectionName(codebasePath))
-	hasStaging, err := service.hasCollection(ctx, stagingName, "check staging collection "+stagingName)
+	hasStaging, err := service.hasCollection(
+		ctx,
+		stagingName,
+		"check staging collection "+stagingName,
+	)
 	if err != nil {
 		return false, err
 	}
+
 	return hasStaging, nil
 }
 
@@ -206,12 +266,14 @@ func (service *Service) DropStaging(ctx context.Context, codebasePath string) er
 	if !service.Available() {
 		return nil
 	}
+
 	stagingName := stagingCollectionName(service.CollectionName(codebasePath))
 	maintenance, err := service.residency.Maintain(ctx, stagingName)
 	if err != nil {
 		return err
 	}
 	defer maintenance.ReleaseContext(ctx)
+
 	return service.dropIfExists(ctx, stagingName)
 }
 
@@ -229,9 +291,11 @@ func NewChunkPacker(batchRows int, tokenBudget int) ChunkPackFunc {
 	if batchRows <= 0 {
 		batchRows = defaultEmbeddingBatchRows
 	}
+
 	if tokenBudget <= 0 {
 		tokenBudget = defaultEmbeddingBatchTokenBudget
 	}
+
 	return func(chunks []model.StoredChunk) [][]model.StoredChunk {
 		return packChunksByEstimatedTokens(chunks, batchRows, tokenBudget, nil)
 	}
@@ -241,15 +305,20 @@ func NewChunkPacker(batchRows int, tokenBudget int) ChunkPackFunc {
 // row ceiling and estimated-token budget. reuse is the same map embedChunkBatch
 // consults, so the packer charges the token budget only for the chunks that will
 // actually be sent to the embedder.
-func (service *Service) packForEmbedding(chunks []model.StoredChunk, reuse map[string]model.ReuseVector) [][]model.StoredChunk {
+func (service *Service) packForEmbedding(
+	chunks []model.StoredChunk,
+	reuse map[string]model.ReuseVector,
+) [][]model.StoredChunk {
 	batchRows := service.cfg.EmbeddingBatchSize
 	if batchRows <= 0 {
 		batchRows = defaultEmbeddingBatchRows
 	}
+
 	tokenBudget := service.cfg.EmbeddingBatchTokenBudget
 	if tokenBudget <= 0 {
 		tokenBudget = defaultEmbeddingBatchTokenBudget
 	}
+
 	return packChunksByEstimatedTokens(chunks, batchRows, tokenBudget, reuse)
 }
 
@@ -267,7 +336,16 @@ func (service *Service) packForEmbedding(chunks []model.StoredChunk, reuse map[s
 // separate the embedder round trip from the Milvus write, and
 // semantic.chunks_written closes the loop with the totals that make those
 // durations a rate.
-func (service *Service) insertChunksBatched(ctx context.Context, collectionName string, chunks []model.StoredChunk, collectionReady bool, phase string, progress func(Progress), reuse map[string]model.ReuseVector, columnSet StoreColumnSet) (err error) {
+func (service *Service) insertChunksBatched(
+	ctx context.Context,
+	collectionName string,
+	chunks []model.StoredChunk,
+	collectionReady bool,
+	phase string,
+	progress func(Progress),
+	reuse map[string]model.ReuseVector,
+	columnSet StoreColumnSet,
+) (err error) {
 	ctx, done := spans.Open(ctx, "semantic.insertChunksBatched")
 	defer done(&err)
 	embeddingCalls := &embeddingCallCounter{completed: 0}
@@ -296,13 +374,16 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 		if err != nil {
 			return err
 		}
+
 		reused := embedded.reused
 
 		keptChunks, keptVectors := filterEmbeddedChunks(embeddingBatch, embedded.vectors)
 		keptModels := embeddedRowModels(embedded)
 		catalogVectors := newlyEmbeddedReuseCatalog(keptChunks, keptVectors, reuse)
 
-		if emptyRefused := collectEmptyRefusedChunks(embeddingBatch, embedded); len(emptyRefused) > 0 {
+		if emptyRefused := collectEmptyRefusedChunks(embeddingBatch, embedded); len(
+			emptyRefused,
+		) > 0 {
 			logEmptyContentRefused(ctx, collectionName, emptyRefused)
 			refusedEmptyInputs += safeInt32FromInt(len(emptyRefused))
 		}
@@ -316,20 +397,27 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 				ctx,
 				oversized,
 				config.ActiveEmbedTokenLimit(service.cfg),
-				NewChunkPacker(service.cfg.EmbeddingBatchSize, service.cfg.EmbeddingBatchTokenBudget),
+				NewChunkPacker(
+					service.cfg.EmbeddingBatchSize,
+					service.cfg.EmbeddingBatchTokenBudget,
+				),
 				service.embedBatchWithProgress,
 			)
 			if retryErr != nil {
 				return retryErr
 			}
+
 			keptChunks = append(keptChunks, retryChunks...)
 			keptVectors = append(keptVectors, retryVectors...)
+
 			for range retryChunks {
 				keptModels = append(keptModels, service.cfg.EmbeddingModel)
 			}
+
 			addReuseCatalogVectors(catalogVectors, retryChunks, retryVectors)
 			current.ChunksDropped += safeInt32FromInt(dropped)
 		}
+
 		writeResult, writeErr := service.writeEmbeddedChunkBatch(
 			ctx,
 			collectionName,
@@ -343,26 +431,48 @@ func (service *Service) insertChunksBatched(ctx context.Context, collectionName 
 		if writeResult.lease != nil {
 			newCollectionLease = writeResult.lease
 		}
+
 		totalInsertBatches += writeResult.insertBatches
 		current.CollectionRowsWritten += writeResult.writtenRows
 		current.ChunksProcessed = current.CollectionRowsWritten
 		if writeErr != nil {
 			return writeErr
 		}
+
 		collectionReady = writeResult.collectionReady
 		current.EmbeddingBatchesCompleted = safeInt32FromInt(embeddingBatchIndex + 1)
 		current.EmbeddingCallsCompleted = embeddingCalls.completed
-		current.OverallPercent = 90 + (float64(embeddingBatchIndex+1)/float64(totalEmbeddingBatches))*10
+		current.OverallPercent = 90 + (float64(
+			embeddingBatchIndex+1,
+		)/float64(totalEmbeddingBatches))*10
 		if writeResult.writtenRows > 0 {
 			current.ChunksReused += safeInt32FromInt(reused)
 			current.ChunksEmbedded += safeInt32FromInt(len(keptChunks) - reused)
 		}
+
 		if progress != nil {
 			progress(current)
 		}
 	}
+
 	logEmbedRunExceptions(ctx, collectionName, current.ChunksDropped, refusedEmptyInputs)
-	slog.InfoContext(ctx, "semantic.chunks_written", "collection", collectionName, "embedding_batches", totalEmbeddingBatches, "insert_batches", totalInsertBatches, "chunks", current.CollectionRowsWritten, "embedded", current.ChunksEmbedded, "reused", current.ChunksReused)
+	slog.InfoContext(
+		ctx,
+		"semantic.chunks_written",
+		"collection",
+		collectionName,
+		"embedding_batches",
+		totalEmbeddingBatches,
+		"insert_batches",
+		totalInsertBatches,
+		"chunks",
+		current.CollectionRowsWritten,
+		"embedded",
+		current.ChunksEmbedded,
+		"reused",
+		current.ChunksReused,
+	)
+
 	return nil
 }
 
@@ -407,9 +517,11 @@ func (service *Service) writeEmbeddedChunkBatch(
 	if len(chunks) == 0 {
 		return result, nil
 	}
+
 	if err := service.appendReuseCatalog(ctx, catalogVectors); err != nil {
 		return result, err
 	}
+
 	dimension := len(vectors[0])
 	if !result.collectionReady {
 		lease, err := service.createCollection(
@@ -421,6 +533,7 @@ func (service *Service) writeEmbeddedChunkBatch(
 		if err != nil {
 			return result, err
 		}
+
 		result.lease = lease
 		result.collectionReady = true
 	}
@@ -433,6 +546,7 @@ func (service *Service) writeEmbeddedChunkBatch(
 		service.cfg.EmbeddingModel,
 	)
 	vectorStart := 0
+
 	for _, insertBatch := range insertPacks {
 		vectorEnd := vectorStart + len(insertBatch)
 		if err := service.insertBatch(
@@ -445,10 +559,12 @@ func (service *Service) writeEmbeddedChunkBatch(
 		); err != nil {
 			return result, err
 		}
+
 		vectorStart = vectorEnd
 		result.insertBatches++
 		result.writtenRows += safeInt32FromInt(len(insertBatch))
 	}
+
 	return result, nil
 }
 
@@ -468,12 +584,15 @@ func newlyEmbeddedReuseCatalog(
 	reuse map[string]model.ReuseVector,
 ) reuseCatalogVectors {
 	catalog := make(reuseCatalogVectors)
+
 	for chunkIndex, chunk := range chunks {
 		if _, found := reuse[contentVectorKey(chunk.Content)]; found {
 			continue
 		}
+
 		catalog[chunk.Content] = vectors[chunkIndex]
 	}
+
 	return catalog
 }
 
@@ -501,11 +620,16 @@ type chunkBatchEmbedding struct {
 // hash) that vector is taken directly; only the remaining misses are embedded in
 // a single batch. A nil or empty reuse map makes this embed every chunk, which
 // is the ordinary first-index behavior, and reports zero reused.
-func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.StoredChunk, reuse map[string]model.ReuseVector) (chunkBatchEmbedding, error) {
+func (service *Service) embedChunkBatch(
+	ctx context.Context,
+	chunkBatch []model.StoredChunk,
+	reuse map[string]model.ReuseVector,
+) (chunkBatchEmbedding, error) {
 	vectors := make([][]float32, len(chunkBatch))
 	embeddingModels := make([]string, len(chunkBatch))
 	refusedEmpty := make([]bool, len(chunkBatch))
 	missTexts := make([]string, 0, len(chunkBatch))
+
 	missIndexes := make([]int, 0, len(chunkBatch))
 	for index, chunk := range chunkBatch {
 		embeddingModels[index] = service.cfg.EmbeddingModel
@@ -515,12 +639,15 @@ func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.
 				if !reused.SourceModelKnown {
 					embeddingModels[index] = ""
 				}
+
 				continue
 			}
 		}
+
 		missTexts = append(missTexts, chunk.Content)
 		missIndexes = append(missIndexes, index)
 	}
+
 	reused := len(chunkBatch) - len(missTexts)
 	// Counted here rather than at the insert, because the hit is decided here
 	// and a caller that never inserts still avoided the embed. It is the same
@@ -528,29 +655,44 @@ func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.
 	// together report what a batch cost and what it skipped.
 	metrics.ChunksReused(reused)
 	if len(missTexts) == 0 {
-		return chunkBatchEmbedding{vectors: vectors, embeddingModels: embeddingModels, reused: reused, refusedEmpty: refusedEmpty}, nil
+		return chunkBatchEmbedding{
+			vectors:         vectors,
+			embeddingModels: embeddingModels,
+			reused:          reused,
+			refusedEmpty:    refusedEmpty,
+		}, nil
 	}
 
 	result, err := service.embedMissedTexts(ctx, missTexts, reused)
 	if err != nil {
 		return chunkBatchEmbedding{}, err
 	}
+
 	for position, vectorIndex := range missIndexes {
 		// A skipped input carries a nil vector; the caller re-splits and retries that
 		// chunk through EmbedChunksSplittingOversize instead of dropping it, so an
 		// oversized input is divided and indexed rather than lost.
 		vectors[vectorIndex] = result.Vectors[position]
 	}
+
 	for _, skip := range result.Skipped {
 		if skip.Reason != adapterr.EmbedRejectionEmptyContent {
 			continue
 		}
+
 		if skip.Index < 0 || skip.Index >= len(missIndexes) {
 			continue
 		}
+
 		refusedEmpty[missIndexes[skip.Index]] = true
 	}
-	return chunkBatchEmbedding{vectors: vectors, embeddingModels: embeddingModels, reused: reused, refusedEmpty: refusedEmpty}, nil
+
+	return chunkBatchEmbedding{
+		vectors:         vectors,
+		embeddingModels: embeddingModels,
+		reused:          reused,
+		refusedEmpty:    refusedEmpty,
+	}, nil
 }
 
 // collectOversizedChunks returns the chunks whose vector is nil because the
@@ -563,13 +705,18 @@ func (service *Service) embedChunkBatch(ctx context.Context, chunkBatch []model.
 // would end in the drop accounting, which counts content the index lost. Letting
 // it land there would spend the drop counters on inputs that were never content
 // and hide the real losses they exist to surface.
-func collectOversizedChunks(chunks []model.StoredChunk, embedded chunkBatchEmbedding) []model.StoredChunk {
+func collectOversizedChunks(
+	chunks []model.StoredChunk,
+	embedded chunkBatchEmbedding,
+) []model.StoredChunk {
 	oversized := make([]model.StoredChunk, 0)
+
 	for index, vector := range embedded.vectors {
 		if vector == nil && !embedded.refusedEmpty[index] {
 			oversized = append(oversized, chunks[index])
 		}
 	}
+
 	return oversized
 }
 
@@ -579,21 +726,31 @@ func collectOversizedChunks(chunks []model.StoredChunk, embedded chunkBatchEmbed
 // content the index no longer holds, while refused inputs never carried content
 // at all. Summing them would produce a number that answers neither "what did we
 // lose" nor "who is sending us nothing".
-func logEmbedRunExceptions(ctx context.Context, collectionName string, droppedInputs int32, refusedEmptyInputs int32) {
+func logEmbedRunExceptions(
+	ctx context.Context,
+	collectionName string,
+	droppedInputs int32,
+	refusedEmptyInputs int32,
+) {
 	if droppedInputs > 0 {
 		slog.WarnContext(
 			ctx,
 			"semantic.embed_inputs_dropped_summary",
-			"collection", collectionName,
-			"dropped_inputs", droppedInputs,
+			"collection",
+			collectionName,
+			"dropped_inputs",
+			droppedInputs,
 		)
 	}
+
 	if refusedEmptyInputs > 0 {
 		slog.WarnContext(
 			ctx,
 			"semantic.embed_inputs_refused_empty_summary",
-			"collection", collectionName,
-			"refused_inputs", refusedEmptyInputs,
+			"collection",
+			collectionName,
+			"refused_inputs",
+			refusedEmptyInputs,
 		)
 	}
 }
@@ -604,26 +761,38 @@ func logEmbedRunExceptions(ctx context.Context, collectionName string, droppedIn
 // that caller rather than a condition the index is expected to meet. The count
 // says how bad it is and the first chunk's identity says where to look; naming
 // every chunk would print a line per row and bury the signal in its own volume.
-func logEmptyContentRefused(ctx context.Context, collectionName string, refused []model.StoredChunk) {
+func logEmptyContentRefused(
+	ctx context.Context,
+	collectionName string,
+	refused []model.StoredChunk,
+) {
 	first := refused[0]
 	slog.WarnContext(
 		ctx,
 		"semantic.embed_inputs_refused_empty",
-		"collection", collectionName,
-		"refused_inputs", len(refused),
-		"relative_path", first.RelativePath,
+		"collection",
+		collectionName,
+		"refused_inputs",
+		len(refused),
+		"relative_path",
+		first.RelativePath,
 	)
 }
 
 // collectEmptyRefusedChunks returns the chunks a provider refused as carrying
 // nothing to embed, so the caller can report them apart from lost content.
-func collectEmptyRefusedChunks(chunks []model.StoredChunk, embedded chunkBatchEmbedding) []model.StoredChunk {
+func collectEmptyRefusedChunks(
+	chunks []model.StoredChunk,
+	embedded chunkBatchEmbedding,
+) []model.StoredChunk {
 	refused := make([]model.StoredChunk, 0)
+
 	for index, wasRefused := range embedded.refusedEmpty {
 		if wasRefused {
 			refused = append(refused, chunks[index])
 		}
 	}
+
 	return refused
 }
 
@@ -638,11 +807,26 @@ func collectEmptyRefusedChunks(chunks []model.StoredChunk, embedded chunkBatchEm
 // batch stays silent instead of logging an empty phase.
 // semantic.embed_batch_started carries the input and estimated-token counts
 // under the same span id, which is what turns duration_ms into a rate.
-func (service *Service) embedMissedTexts(ctx context.Context, missTexts []string, reusedCount int) (result embedding.BatchResult, err error) {
+func (service *Service) embedMissedTexts(
+	ctx context.Context,
+	missTexts []string,
+	reusedCount int,
+) (result embedding.BatchResult, err error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	ctx, done := spans.Open(ctx, "semantic.embedBatch")
 	defer done(&err)
-	slog.InfoContext(ctx, "semantic.embed_batch_started", "inputs", len(missTexts), "estimated_tokens", estimatedBatchTokenCount(missTexts), "reused", reusedCount, "peer", peerInfo.String())
+	slog.InfoContext(
+		ctx,
+		"semantic.embed_batch_started",
+		"inputs",
+		len(missTexts),
+		"estimated_tokens",
+		estimatedBatchTokenCount(missTexts),
+		"reused",
+		reusedCount,
+		"peer",
+		peerInfo.String(),
+	)
 
 	result, err = service.embedBatchWithProgress(ctx, missTexts)
 	if err != nil {
@@ -651,10 +835,28 @@ func (service *Service) embedMissedTexts(ctx context.Context, missTexts []string
 		// failure the same way.
 		return embedding.BatchResult{}, fmt.Errorf("embed chunk batch: %w", err)
 	}
+
 	if len(result.Vectors) != len(missTexts) {
-		slog.ErrorContext(ctx, "embedding batch returned unexpected vector count", "want", len(missTexts), "got", len(result.Vectors), "peer", peerInfo.String(), "err", errors.New("vector count mismatch"))
-		return embedding.BatchResult{}, fmt.Errorf("embedding batch returned %d vectors for %d chunks", len(result.Vectors), len(missTexts))
+		slog.ErrorContext(
+			ctx,
+			"embedding batch returned unexpected vector count",
+			"want",
+			len(missTexts),
+			"got",
+			len(result.Vectors),
+			"peer",
+			peerInfo.String(),
+			"err",
+			errors.New("vector count mismatch"),
+		)
+
+		return embedding.BatchResult{}, fmt.Errorf(
+			"embedding batch returned %d vectors for %d chunks",
+			len(result.Vectors),
+			len(missTexts),
+		)
 	}
+
 	return result, nil
 }
 
@@ -662,9 +864,11 @@ func (service *Service) embedMissedTexts(ctx context.Context, missTexts []string
 // embedding request, so the embed span reports the size of what it sent.
 func estimatedBatchTokenCount(texts []string) int {
 	total := 0
+
 	for _, text := range texts {
 		total += estimatedTokenCount(text)
 	}
+
 	return total
 }
 
@@ -672,16 +876,22 @@ func estimatedBatchTokenCount(texts []string) int {
 // each kept chunk with its vector in the original order. A nil vector marks an
 // input the embedding endpoint skipped as un-embeddable, which is dropped here so
 // it is never inserted.
-func filterEmbeddedChunks(chunks []model.StoredChunk, vectors [][]float32) ([]model.StoredChunk, [][]float32) {
+func filterEmbeddedChunks(
+	chunks []model.StoredChunk,
+	vectors [][]float32,
+) ([]model.StoredChunk, [][]float32) {
 	keptChunks := make([]model.StoredChunk, 0, len(chunks))
 	keptVectors := make([][]float32, 0, len(chunks))
+
 	for index, vector := range vectors {
 		if vector == nil {
 			continue
 		}
+
 		keptChunks = append(keptChunks, chunks[index])
 		keptVectors = append(keptVectors, vector)
 	}
+
 	return keptChunks, keptVectors
 }
 
@@ -691,8 +901,10 @@ func embeddedRowModels(embedded chunkBatchEmbedding) []string {
 		if vector == nil {
 			continue
 		}
+
 		keptModels = append(keptModels, embedded.embeddingModels[index])
 	}
+
 	return keptModels
 }
 
@@ -703,5 +915,6 @@ func stagingCollectionName(collectionName string) string {
 	if len(collectionName) > maxBase {
 		collectionName = collectionName[:maxBase]
 	}
+
 	return collectionName + stagingCollectionSuffix
 }

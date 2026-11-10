@@ -36,12 +36,15 @@ func (reporter *progressReporter) Write(chunk []byte) (int, error) {
 	if reporter.progress == nil {
 		return len(chunk), nil
 	}
+
 	now := clock.Now()
 	if now.Sub(reporter.lastReport) < progressInterval {
 		return len(chunk), nil
 	}
+
 	reporter.lastReport = now
 	reporter.progress(reporter.artifact, reporter.downloadedBytes, reporter.totalBytes)
+
 	return len(chunk), nil
 }
 
@@ -49,5 +52,6 @@ func (reporter *progressReporter) finish() {
 	if reporter.progress == nil {
 		return
 	}
+
 	reporter.progress(reporter.artifact, reporter.downloadedBytes, reporter.totalBytes)
 }

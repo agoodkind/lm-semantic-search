@@ -11,10 +11,12 @@ func (manager *Manager) ResidencySnapshot() semantic.ResidencySnapshot {
 	if manager == nil {
 		return emptyManagerResidencySnapshot()
 	}
+
 	snapshotter, ok := manager.semantic.(semanticResidencySnapshotter)
 	if !ok {
 		return emptyManagerResidencySnapshot()
 	}
+
 	return snapshotter.ResidencySnapshot()
 }
 

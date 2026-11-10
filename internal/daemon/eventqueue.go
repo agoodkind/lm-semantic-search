@@ -23,7 +23,10 @@ type EventQueue struct {
 
 // NewEventQueue returns a queue that calls drain with the coalesced path set
 // for a codebase once debounce elapses with no further events for it.
-func NewEventQueue(debounce time.Duration, drain func(codebaseID string, relativePaths []string)) *EventQueue {
+func NewEventQueue(
+	debounce time.Duration,
+	drain func(codebaseID string, relativePaths []string),
+) *EventQueue {
 	return &EventQueue{
 		debounce: debounce,
 		drain:    drain,
@@ -44,14 +47,19 @@ func (queue *EventQueue) Enqueue(codebaseID string, relativePath string) {
 		paths = make(map[string]struct{})
 		queue.pending[codebaseID] = paths
 	}
+
 	paths[relativePath] = struct{}{}
 
 	if timer, found := queue.timers[codebaseID]; found {
 		timer.Stop()
 	}
-	queue.timers[codebaseID] = time.AfterFunc(queue.debounce, func() {
-		queue.flush(codebaseID)
-	})
+
+	queue.timers[codebaseID] = time.AfterFunc(
+		queue.debounce,
+		func() {
+			queue.flush(codebaseID)
+		},
+	)
 }
 
 // PendingCounts reports how many coalesced paths each codebase has waiting for
@@ -66,6 +74,7 @@ func (queue *EventQueue) PendingCounts() map[string]int {
 	for codebaseID, paths := range queue.pending {
 		counts[codebaseID] = len(paths)
 	}
+
 	return counts
 }
 
@@ -79,9 +88,11 @@ func (queue *EventQueue) flush(codebaseID string) {
 	if len(paths) == 0 {
 		return
 	}
+
 	relativePaths := make([]string, 0, len(paths))
 	for relativePath := range paths {
 		relativePaths = append(relativePaths, relativePath)
 	}
+
 	queue.drain(codebaseID, relativePaths)
 }

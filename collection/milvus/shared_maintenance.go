@@ -24,42 +24,68 @@ const (
 // mmapTargets lists the fields and indexes of a collection that do not have
 // mmap enabled. Every field except the primary key and the BM25 sparse vector
 // supports mmap, and so does every index.
-func (store *SharedStore) mmapTargets(ctx context.Context, collectionName string) ([]string, []string, error) {
+func (store *SharedStore) mmapTargets(
+	ctx context.Context,
+	collectionName string,
+) ([]string, []string, error) {
 	client := store.inner.client
-	described, err := client.DescribeCollection(ctx, milvusclient.NewDescribeCollectionOption(collectionName))
+	described, err := client.DescribeCollection(
+		ctx,
+		milvusclient.NewDescribeCollectionOption(collectionName),
+	)
 	if err != nil {
 		return nil, nil, WrapError(ctx, err, "describe Milvus collection "+collectionName)
 	}
+
 	if described.Schema == nil {
 		return nil, nil, fmt.Errorf("describe Milvus collection %s: missing schema", collectionName)
 	}
+
 	fields := make([]string, 0, len(described.Schema.Fields))
 	for _, field := range described.Schema.Fields {
 		if field.PrimaryKey || field.Name == SparseVectorField {
 			continue
 		}
+
 		if field.DataType.IsVectorType() && field.Name != DenseVectorField {
 			continue
 		}
+
 		if field.TypeParams[mmapEnabledKey] != mmapEnabledValue {
 			fields = append(fields, field.Name)
 		}
 	}
-	indexNames, err := store.listIndexes(ctx, milvusclient.NewListIndexOption(collectionName), collectionName)
+
+	indexNames, err := store.listIndexes(
+		ctx,
+		milvusclient.NewListIndexOption(collectionName),
+		collectionName,
+	)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	slices.Sort(indexNames)
+
 	indexes := make([]string, 0, len(indexNames))
 	for _, indexName := range indexNames {
-		description, describeErr := client.DescribeIndex(ctx, milvusclient.NewDescribeIndexOption(collectionName, indexName))
+		description, describeErr := client.DescribeIndex(
+			ctx,
+			milvusclient.NewDescribeIndexOption(collectionName, indexName),
+		)
 		if describeErr != nil {
-			return nil, nil, WrapError(ctx, describeErr, "describe Milvus index "+indexName+" of "+collectionName)
+			return nil, nil, WrapError(
+				ctx,
+				describeErr,
+				"describe Milvus index "+indexName+" of "+collectionName,
+			)
 		}
+
 		if description.Params()[mmapEnabledKey] != mmapEnabledValue {
 			indexes = append(indexes, indexName)
 		}
 	}
+
 	return fields, indexes, nil
 }
 
@@ -70,19 +96,35 @@ func (store *SharedStore) enableMmap(ctx context.Context, collectionName string)
 	if err != nil {
 		return err
 	}
+
 	client := store.inner.client
+
 	for _, field := range fields {
-		option := milvusclient.NewAlterCollectionFieldPropertiesOption(collectionName, field).WithProperty(mmapEnabledKey, mmapEnabledValue)
+		option := milvusclient.NewAlterCollectionFieldPropertiesOption(
+			collectionName,
+			field,
+		).WithProperty(
+			mmapEnabledKey,
+			mmapEnabledValue,
+		)
 		if err := client.AlterCollectionFieldProperty(ctx, option); err != nil {
 			return WrapError(ctx, err, "enable mmap on field "+field+" of "+collectionName)
 		}
 	}
+
 	for _, indexName := range indexes {
-		option := milvusclient.NewAlterIndexPropertiesOption(collectionName, indexName).WithProperty(mmapEnabledKey, mmapEnabledValue)
+		option := milvusclient.NewAlterIndexPropertiesOption(
+			collectionName,
+			indexName,
+		).WithProperty(
+			mmapEnabledKey,
+			mmapEnabledValue,
+		)
 		if err := client.AlterIndexProperties(ctx, option); err != nil {
 			return WrapError(ctx, err, "enable mmap on index "+indexName+" of "+collectionName)
 		}
 	}
+
 	return nil
 }
 
@@ -94,47 +136,71 @@ func (store *SharedStore) EnsureMmap(ctx context.Context, collectionName string)
 	occurrences := strings.TrimSpace(collectionName)
 	client := store.inner.client
 	changed := make([]string, 0, 2)
+
 	for _, name := range []string{occurrences, VectorCollectionName(occurrences)} {
 		fields, indexes, err := store.mmapTargets(ctx, name)
 		if err != nil {
 			return changed, err
 		}
+
 		if len(fields) == 0 && len(indexes) == 0 {
 			continue
 		}
+
 		state, err := client.GetLoadState(ctx, milvusclient.NewGetLoadStateOption(name))
 		if err != nil {
 			return changed, WrapError(ctx, err, "read load state of "+name)
 		}
+
 		loaded := state.State == entity.LoadStateLoaded
 		if loaded {
-			if err := client.ReleaseCollection(ctx, milvusclient.NewReleaseCollectionOption(name)); err != nil {
+			if err := client.ReleaseCollection(
+				ctx,
+				milvusclient.NewReleaseCollectionOption(name),
+			); err != nil {
 				return changed, WrapError(ctx, err, "release Milvus collection "+name)
 			}
 		}
+
 		alterErr := store.enableMmap(ctx, name)
 		if loaded {
 			if err := store.loadAndWait(ctx, name); err != nil {
 				return changed, err
 			}
 		}
+
 		if alterErr != nil {
 			return changed, alterErr
 		}
+
 		changed = append(changed, name)
 	}
-	slog.InfoContext(ctx, "collection.shared_mmap_enabled", "collection", occurrences, "changed", changed)
+
+	slog.InfoContext(
+		ctx,
+		"collection.shared_mmap_enabled",
+		"collection",
+		occurrences,
+		"changed",
+		changed,
+	)
+
 	return changed, nil
 }
 
 func (store *SharedStore) loadAndWait(ctx context.Context, collectionName string) error {
-	task, err := store.inner.client.LoadCollection(ctx, milvusclient.NewLoadCollectionOption(collectionName))
+	task, err := store.inner.client.LoadCollection(
+		ctx,
+		milvusclient.NewLoadCollectionOption(collectionName),
+	)
 	if err != nil {
 		return WrapError(ctx, err, "load Milvus collection "+collectionName)
 	}
+
 	if err := task.Await(ctx); err != nil {
 		return WrapError(ctx, err, "await load of Milvus collection "+collectionName)
 	}
+
 	return nil
 }
 
@@ -147,27 +213,68 @@ type denseIndexDefinition struct {
 	params     string
 }
 
-func (store *SharedStore) denseIndexDefinition(ctx context.Context, collectionName string) (denseIndexDefinition, error) {
-	description, err := store.inner.client.DescribeIndex(ctx, milvusclient.NewDescribeIndexOption(collectionName, DenseVectorField))
+func (store *SharedStore) denseIndexDefinition(
+	ctx context.Context,
+	collectionName string,
+) (denseIndexDefinition, error) {
+	description, err := store.inner.client.DescribeIndex(
+		ctx,
+		milvusclient.NewDescribeIndexOption(collectionName, DenseVectorField),
+	)
 	if err != nil {
-		return denseIndexDefinition{}, WrapError(ctx, err, "describe dense index of "+collectionName)
+		return denseIndexDefinition{}, WrapError(
+			ctx,
+			err,
+			"describe dense index of "+collectionName,
+		)
 	}
+
 	values := description.Params()
 	build := map[string]json.RawMessage{}
 	if raw := values["params"]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &build); err != nil {
-			slog.ErrorContext(ctx, "decode dense index parameters failed", "collection", collectionName, "err", err)
-			return denseIndexDefinition{}, fmt.Errorf("decode dense index parameters of %s: %w", collectionName, err)
+			slog.ErrorContext(
+				ctx,
+				"decode dense index parameters failed",
+				"collection",
+				collectionName,
+				"err",
+				err,
+			)
+
+			return denseIndexDefinition{}, fmt.Errorf(
+				"decode dense index parameters of %s: %w",
+				collectionName,
+				err,
+			)
 		}
 	}
+
 	delete(build, mmapEnabledKey)
 	delete(build, "index_type")
 	encoded, err := json.Marshal(build)
 	if err != nil {
-		slog.ErrorContext(ctx, "encode dense index parameters failed", "collection", collectionName, "err", err)
-		return denseIndexDefinition{}, fmt.Errorf("encode dense index parameters of %s: %w", collectionName, err)
+		slog.ErrorContext(
+			ctx,
+			"encode dense index parameters failed",
+			"collection",
+			collectionName,
+			"err",
+			err,
+		)
+
+		return denseIndexDefinition{}, fmt.Errorf(
+			"encode dense index parameters of %s: %w",
+			collectionName,
+			err,
+		)
 	}
-	return denseIndexDefinition{indexType: values["index_type"], metricType: values["metric_type"], params: string(encoded)}, nil
+
+	return denseIndexDefinition{
+		indexType:  values["index_type"],
+		metricType: values["metric_type"],
+		params:     string(encoded),
+	}, nil
 }
 
 // milvusErrorCode reads the error code of a Milvus client RPC error through
@@ -179,25 +286,36 @@ type milvusErrorCode interface {
 // listIndexes runs ListIndexes with option. Milvus answers ListIndexes on a
 // collection without a matching index with the index-not-found error code, and
 // listIndexes returns an empty list for that code.
-func (store *SharedStore) listIndexes(ctx context.Context, option milvusclient.ListIndexOption, collectionName string) ([]string, error) {
+func (store *SharedStore) listIndexes(
+	ctx context.Context,
+	option milvusclient.ListIndexOption,
+	collectionName string,
+) ([]string, error) {
 	indexNames, err := store.inner.client.ListIndexes(ctx, option)
 	var coded milvusErrorCode
 	if errors.As(err, &coded) && coded.Code() == milvusIndexNotFoundCode {
 		return nil, nil
 	}
+
 	if err != nil {
 		return nil, WrapError(ctx, err, "list Milvus indexes of "+collectionName)
 	}
+
 	return indexNames, nil
 }
 
 // hasDenseIndex reports whether a collection has an index on the dense vector
 // field.
 func (store *SharedStore) hasDenseIndex(ctx context.Context, collectionName string) (bool, error) {
-	indexNames, err := store.listIndexes(ctx, milvusclient.NewListIndexOption(collectionName).WithFieldName(DenseVectorField), collectionName)
+	indexNames, err := store.listIndexes(
+		ctx,
+		milvusclient.NewListIndexOption(collectionName).WithFieldName(DenseVectorField),
+		collectionName,
+	)
 	if err != nil {
 		return false, err
 	}
+
 	return len(indexNames) > 0, nil
 }
 
@@ -206,37 +324,50 @@ func (store *SharedStore) hasDenseIndex(ctx context.Context, collectionName stri
 // dense index. A missing or different target index is released, dropped when
 // present, built again with the source definition and mmap, and loaded again
 // when it was loaded. It reports whether it built the index.
-func (store *SharedStore) MatchDenseIndex(ctx context.Context, source string, target string) (bool, error) {
+func (store *SharedStore) MatchDenseIndex(
+	ctx context.Context,
+	source string,
+	target string,
+) (bool, error) {
 	vectors := VectorCollectionName(strings.TrimSpace(target))
 	want, err := store.denseIndexDefinition(ctx, strings.TrimSpace(source))
 	if err != nil {
 		return false, err
 	}
+
 	present, err := store.hasDenseIndex(ctx, vectors)
 	if err != nil {
 		return false, err
 	}
+
 	have := denseIndexDefinition{indexType: "", metricType: "", params: ""}
 	if present {
 		have, err = store.denseIndexDefinition(ctx, vectors)
 		if err != nil {
 			return false, err
 		}
+
 		if have == want {
 			return false, nil
 		}
 	}
+
 	client := store.inner.client
 	state, err := client.GetLoadState(ctx, milvusclient.NewGetLoadStateOption(vectors))
 	if err != nil {
 		return false, WrapError(ctx, err, "read load state of "+vectors)
 	}
+
 	loaded := state.State == entity.LoadStateLoaded
 	if loaded {
-		if err := client.ReleaseCollection(ctx, milvusclient.NewReleaseCollectionOption(vectors)); err != nil {
+		if err := client.ReleaseCollection(
+			ctx,
+			milvusclient.NewReleaseCollectionOption(vectors),
+		); err != nil {
 			return false, WrapError(ctx, err, "release Milvus collection "+vectors)
 		}
 	}
+
 	rebuildErr := store.rebuildDenseIndex(ctx, vectors, present, want)
 	if loaded {
 		// The collection loads again even after a failed rebuild. A load
@@ -244,34 +375,79 @@ func (store *SharedStore) MatchDenseIndex(ctx context.Context, source string, ta
 		// both failures.
 		if loadErr := store.loadAndWait(ctx, vectors); loadErr != nil {
 			joined := errors.Join(rebuildErr, loadErr)
-			slog.ErrorContext(ctx, "collection.shared_dense_index_reload_failed", "collection", vectors, "err", joined)
+			slog.ErrorContext(
+				ctx,
+				"collection.shared_dense_index_reload_failed",
+				"collection",
+				vectors,
+				"err",
+				joined,
+			)
+
 			return false, joined
 		}
 	}
+
 	if rebuildErr != nil {
 		return false, rebuildErr
 	}
-	slog.InfoContext(ctx, "collection.shared_dense_index_replaced", "collection", vectors, "from", have.indexType, "to", want.indexType, "params", want.params)
+
+	slog.InfoContext(
+		ctx,
+		"collection.shared_dense_index_replaced",
+		"collection",
+		vectors,
+		"from",
+		have.indexType,
+		"to",
+		want.indexType,
+		"params",
+		want.params,
+	)
+
 	return true, nil
 }
 
 // rebuildDenseIndex drops the dense index of a released vector collection when
 // present, builds it with the given definition, and enables mmap on it.
-func (store *SharedStore) rebuildDenseIndex(ctx context.Context, vectors string, present bool, want denseIndexDefinition) error {
+func (store *SharedStore) rebuildDenseIndex(
+	ctx context.Context,
+	vectors string,
+	present bool,
+	want denseIndexDefinition,
+) error {
 	client := store.inner.client
 	if present {
-		if err := client.DropIndex(ctx, milvusclient.NewDropIndexOption(vectors, DenseVectorField)); err != nil {
+		if err := client.DropIndex(
+			ctx,
+			milvusclient.NewDropIndexOption(vectors, DenseVectorField),
+		); err != nil {
 			return WrapError(ctx, err, "drop dense index of "+vectors)
 		}
 	}
-	definition := index.NewGenericIndex(DenseVectorField, map[string]string{"index_type": want.indexType, "metric_type": want.metricType, "params": want.params})
-	task, err := client.CreateIndex(ctx, milvusclient.NewCreateIndexOption(vectors, DenseVectorField, definition).WithIndexName(DenseVectorField))
+
+	definition := index.NewGenericIndex(
+		DenseVectorField,
+		map[string]string{
+			"index_type":  want.indexType,
+			"metric_type": want.metricType,
+			"params":      want.params,
+		},
+	)
+	task, err := client.CreateIndex(
+		ctx,
+		milvusclient.NewCreateIndexOption(vectors, DenseVectorField, definition).WithIndexName(
+			DenseVectorField,
+		),
+	)
 	if err != nil {
 		return WrapError(ctx, err, "create dense index of "+vectors)
 	}
+
 	if err := task.Await(ctx); err != nil {
 		return WrapError(ctx, err, "await dense index of "+vectors)
 	}
+
 	return store.enableMmap(ctx, vectors)
 }
 
@@ -279,7 +455,10 @@ func (store *SharedStore) rebuildDenseIndex(ctx context.Context, vectors string,
 // references and returns the number of deleted vector rows. A write that
 // stopped after its vector upsert and before its occurrence upsert leaves such
 // rows.
-func (store *SharedStore) RemoveUnreferencedVectors(ctx context.Context, collectionName string) (int64, error) {
+func (store *SharedStore) RemoveUnreferencedVectors(
+	ctx context.Context,
+	collectionName string,
+) (int64, error) {
 	return store.removeUnreferencedVectors(ctx, collectionName, nil)
 }
 
@@ -290,7 +469,11 @@ func (store *SharedStore) RemoveUnreferencedVectors(ctx context.Context, collect
 // before the first page. After each page, it calls pageDone with the number of
 // vector rows checked so far and the count. If pageDone is nil, it does not
 // call it. The caller chooses the progress phase.
-func (store *SharedStore) removeUnreferencedVectors(ctx context.Context, collectionName string, pageDone func(done int64, total int64)) (int64, error) {
+func (store *SharedStore) removeUnreferencedVectors(
+	ctx context.Context,
+	collectionName string,
+	pageDone func(done int64, total int64),
+) (int64, error) {
 	store.write.Lock()
 	defer store.write.Unlock()
 	occurrences := strings.TrimSpace(collectionName)
@@ -299,6 +482,7 @@ func (store *SharedStore) removeUnreferencedVectors(ctx context.Context, collect
 	if err != nil {
 		return 0, err
 	}
+
 	report := func(done int64) {
 		if pageDone != nil {
 			pageDone(done, total)
@@ -307,23 +491,35 @@ func (store *SharedStore) removeUnreferencedVectors(ctx context.Context, collect
 	report(0)
 	var checked int64
 	var removed int64
-	err = store.iterateBatch(ctx, vectors, VectorKeyField+` != ""`, []string{VectorKeyField}, vectorKeyBatchSize, func(resultSet milvusclient.ResultSet) error {
-		keys := make([]string, 0, resultSet.ResultCount)
-		for rowIndex := range resultSet.ResultCount {
-			key, keyErr := requiredString(resultSet, VectorKeyField, rowIndex)
-			if keyErr != nil {
-				return keyErr
+	err = store.iterateBatch(
+		ctx,
+		vectors,
+		VectorKeyField+` != ""`,
+		[]string{VectorKeyField},
+		vectorKeyBatchSize,
+		func(resultSet milvusclient.ResultSet) error {
+			keys := make([]string, 0, resultSet.ResultCount)
+			for rowIndex := range resultSet.ResultCount {
+				key, keyErr := requiredString(resultSet, VectorKeyField, rowIndex)
+				if keyErr != nil {
+					return keyErr
+				}
+
+				keys = append(keys, key)
 			}
-			keys = append(keys, key)
-		}
-		pageRemoved, removeErr := store.removeUnreferencedKeys(ctx, occurrences, vectors, keys)
-		removed += pageRemoved
-		if removeErr != nil {
-			return removeErr
-		}
-		checked += int64(len(keys))
-		report(min(checked, total))
-		return nil
-	})
+
+			pageRemoved, removeErr := store.removeUnreferencedKeys(ctx, occurrences, vectors, keys)
+			removed += pageRemoved
+			if removeErr != nil {
+				return removeErr
+			}
+
+			checked += int64(len(keys))
+			report(min(checked, total))
+
+			return nil
+		},
+	)
+
 	return removed, err
 }

@@ -21,6 +21,7 @@ func TestEnsureSerializesConcurrentCallsForOneDestination(t *testing.T) {
 			results <- modeldownload.Ensure(context.Background(), request)
 		}()
 	}
+
 	for range concurrentCalls {
 		if err := <-results; err != nil {
 			t.Fatalf("Ensure: %v", err)
@@ -47,10 +48,12 @@ func TestEnsureStopsOnCancellationAndLeavesPartialFile(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Ensure err = %v, want context.Canceled", err)
 	}
+
 	readPartial(t, run, fixture)
 	if requestCount := len(fixture.ranges()); requestCount != 1 {
 		t.Fatalf("requests = %d, want 1", requestCount)
 	}
+
 	if len(run.sleeps) != 0 {
 		t.Fatalf("sleeps = %v, want none", run.sleeps)
 	}

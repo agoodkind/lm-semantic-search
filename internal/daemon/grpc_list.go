@@ -11,7 +11,10 @@ import (
 )
 
 // ListIndexes returns all tracked codebases.
-func (server *GRPCServer) ListIndexes(ctx context.Context, request *pb.ListIndexesRequest) (resp *pb.ListIndexesResponse, err error) {
+func (server *GRPCServer) ListIndexes(
+	ctx context.Context,
+	request *pb.ListIndexesRequest,
+) (resp *pb.ListIndexesResponse, err error) {
 	ctx, done := beginRPC(ctx, "ListIndexes")
 	defer done(&err)
 	_ = request
@@ -24,28 +27,34 @@ func (server *GRPCServer) ListIndexes(ctx context.Context, request *pb.ListIndex
 	response := &pb.ListIndexesResponse{
 		Indexes: make([]*pb.Codebase, 0, len(views)),
 	}
+
 	rows := make([]view.CodebaseRowView, 0, len(views))
 	for _, codebaseView := range views {
 		wire := server.codebaseWireView(ctx, codebaseView.Codebase)
 		response.Indexes = append(response.Indexes, wire.codebase)
-		rows = append(rows, view.CodebaseRowView{
-			ID:            codebaseView.Codebase.ID,
-			CanonicalPath: codebaseView.Codebase.CanonicalPath,
-			Display:       view.Display(wire.display),
-			Scheduling: pbconv.SchedulingFromProto(
-				wire.codebase.GetSchedulingPolicy(),
-				"",
-				pb.SchedulingReason_SCHEDULING_REASON_UNSPECIFIED,
-			),
-			WorktreeSourcePath:     wire.reuse.sourcePath,
-			ReuseUnavailableReason: wire.reuse.unavailable,
-			Active:                 wire.active,
-			Breakdown:              wire.breakdown,
-		})
+		rows = append(
+			rows,
+			view.CodebaseRowView{
+				ID:            codebaseView.Codebase.ID,
+				CanonicalPath: codebaseView.Codebase.CanonicalPath,
+				Display:       view.Display(wire.display),
+				Scheduling: pbconv.SchedulingFromProto(
+					wire.codebase.GetSchedulingPolicy(),
+					"",
+					pb.SchedulingReason_SCHEDULING_REASON_UNSPECIFIED,
+				),
+				WorktreeSourcePath:     wire.reuse.sourcePath,
+				ReuseUnavailableReason: wire.reuse.unavailable,
+				Active:                 wire.active,
+				Breakdown:              wire.breakdown,
+			},
+		)
 	}
+
 	health := server.manager.DependencyHealth()
 	response.DependencyHealth = toDependencyHealth(health)
 	response.DisplayText = server.envelopeText(health, render.ListIndexes(rows))
+
 	return response, nil
 }
 
@@ -81,6 +90,7 @@ func (server *GRPCServer) codebaseWireView(
 			active = len(breakdown.FileRows) > 0 || len(breakdown.ChunkRows) > 0
 		}
 	}
+
 	return resolvedCodebaseWireView{
 		codebase:  pbCodebase,
 		display:   display,

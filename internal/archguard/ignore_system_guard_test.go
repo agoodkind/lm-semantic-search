@@ -46,15 +46,20 @@ func TestNoBespokeIgnoreSystemOutsideIndexability(t *testing.T) {
 		if strings.HasPrefix(rel, indexabilityPackageDir) {
 			continue
 		}
+
 		parsed, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", rel, err)
 		}
+
 		violations = append(violations, ignoreSystemViolations(rel, parsed)...)
 	}
 
 	if len(violations) > 0 {
-		t.Fatalf("ignore rules, the content denylist, and the file-size cap must live only in internal/indexability:\n%s", strings.Join(violations, "\n"))
+		t.Fatalf(
+			"ignore rules, the content denylist, and the file-size cap must live only in internal/indexability:\n%s",
+			strings.Join(violations, "\n"),
+		)
 	}
 }
 
@@ -62,27 +67,42 @@ func TestNoBespokeIgnoreSystemOutsideIndexability(t *testing.T) {
 // parsed production file.
 func ignoreSystemViolations(rel string, file *ast.File) []string {
 	var violations []string
+
 	for _, decl := range file.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
 		if !ok {
 			continue
 		}
+
 		violations = append(violations, declIgnoreViolations(rel, genDecl)...)
 	}
 
-	ast.Inspect(file, func(node ast.Node) bool {
-		switch typed := node.(type) {
-		case *ast.CompositeLit:
-			if compositeIsIgnoreRules(typed) {
-				violations = append(violations, rel+": constructs an ignore-rules value outside internal/indexability")
+	ast.Inspect(
+		file,
+		func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.CompositeLit:
+				if compositeIsIgnoreRules(typed) {
+					violations = append(
+						violations,
+						rel+": constructs an ignore-rules value outside internal/indexability",
+					)
+				}
+			case *ast.CallExpr:
+				if rawIgnoreEvaluators[calledFunctionName(typed.Fun)] {
+					violations = append(
+						violations,
+						rel+": calls raw path-ignore evaluator "+calledFunctionName(
+							typed.Fun,
+						)+" outside internal/indexability",
+					)
+				}
 			}
-		case *ast.CallExpr:
-			if rawIgnoreEvaluators[calledFunctionName(typed.Fun)] {
-				violations = append(violations, rel+": calls raw path-ignore evaluator "+calledFunctionName(typed.Fun)+" outside internal/indexability")
-			}
-		}
-		return true
-	})
+
+			return true
+		},
+	)
+
 	return violations
 }
 
@@ -90,25 +110,39 @@ func ignoreSystemViolations(rel string, file *ast.File) []string {
 // ignore-pattern list declared in one const or var block.
 func declIgnoreViolations(rel string, genDecl *ast.GenDecl) []string {
 	var violations []string
+
 	for _, spec := range genDecl.Specs {
 		valueSpec, ok := spec.(*ast.ValueSpec)
 		if !ok {
 			continue
 		}
+
 		if genDecl.Tok == token.CONST {
 			if maxFileBytesConstNames(valueSpec) {
-				violations = append(violations, rel+": declares a max-file-bytes const outside internal/indexability")
+				violations = append(
+					violations,
+					rel+": declares a max-file-bytes const outside internal/indexability",
+				)
 			}
+
 			if constDeclContainsTwoMiBLiteral(valueSpec) {
-				violations = append(violations, rel+": declares the 2 MiB file cap literal outside internal/indexability")
+				violations = append(
+					violations,
+					rel+": declares the 2 MiB file cap literal outside internal/indexability",
+				)
 			}
 		}
+
 		for _, value := range valueSpec.Values {
 			if compositeIsHardcodedIgnoreList(value) {
-				violations = append(violations, rel+": declares a hardcoded ignore-pattern or binary-extension list outside internal/indexability")
+				violations = append(
+					violations,
+					rel+": declares a hardcoded ignore-pattern or binary-extension list outside internal/indexability",
+				)
 			}
 		}
 	}
+
 	return violations
 }
 
@@ -135,20 +169,25 @@ func compositeIsHardcodedIgnoreList(expr ast.Expr) bool {
 	if !ok {
 		return false
 	}
+
 	patternLike := 0
+
 	for _, element := range lit.Elts {
 		basicLit, ok := element.(*ast.BasicLit)
 		if !ok || basicLit.Kind != token.STRING {
 			continue
 		}
+
 		value, err := strconv.Unquote(basicLit.Value)
 		if err != nil {
 			continue
 		}
+
 		if ignorePatternLike(value) {
 			patternLike++
 		}
 	}
+
 	return patternLike >= hardcodedIgnoreListThreshold
 }
 
@@ -159,11 +198,14 @@ func ignorePatternLike(value string) bool {
 	if strings.HasPrefix(value, "*.") {
 		return true
 	}
+
 	if strings.HasSuffix(value, "/") {
 		return true
 	}
+
 	if strings.HasPrefix(value, ".") && len(value) > 1 {
 		return true
 	}
+
 	return false
 }

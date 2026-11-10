@@ -36,16 +36,21 @@ const (
 // the piped, JSON, and single-line paths stay on callAndPrint. An empty registry
 // prints the daemon's plain text instead of launching an empty table.
 func runCodebaseListTUI(options cliOptions) error {
-	result, err := callDaemon(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
-		return client.ListIndexes(ctx, &pb.ListIndexesRequest{})
-	})
+	result, err := callDaemon(
+		options,
+		func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
+			return client.ListIndexes(ctx, &pb.ListIndexesRequest{})
+		},
+	)
 	if err != nil {
 		return err
 	}
+
 	listResponse, ok := result.(*pb.ListIndexesResponse)
 	if !ok {
 		return errors.New("unexpected response type from ListIndexes")
 	}
+
 	codebases := listResponse.GetIndexes()
 	if len(codebases) == 0 {
 		_, writeErr := fmt.Fprintln(os.Stdout, strings.TrimSpace(listResponse.GetDisplayText()))
@@ -53,6 +58,7 @@ func runCodebaseListTUI(options cliOptions) error {
 			slog.Error("write empty codebase list failed", "err", writeErr)
 			return fmt.Errorf("write empty list output: %w", writeErr)
 		}
+
 		return nil
 	}
 
@@ -61,6 +67,7 @@ func runCodebaseListTUI(options cliOptions) error {
 		slog.Error("run codebase list TUI failed", "err", runErr)
 		return fmt.Errorf("run codebase list: %w", runErr)
 	}
+
 	return nil
 }
 
@@ -97,7 +104,11 @@ type refreshedMsg struct {
 
 type tickMsg struct{}
 
-func newListModel(options cliOptions, codebases []*pb.Codebase, health *pb.DependencyHealth) listModel {
+func newListModel(
+	options cliOptions,
+	codebases []*pb.Codebase,
+	health *pb.DependencyHealth,
+) listModel {
 	return listModel{
 		options:       options,
 		codebases:     codebases,
@@ -125,6 +136,7 @@ func (m listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = typed.Width
 		m.height = typed.Height
 		m = m.clampOffset()
+
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(typed)
@@ -134,15 +146,18 @@ func (m listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = typed.err
 			return m, nil
 		}
+
 		m.err = nil
 		m.detail = typed.text
 		m.showingDetail = true
+
 		return m, nil
 	case refreshedMsg:
 		return m.applyRefresh(typed), nil
 	case tickMsg:
 		return m.handleTick()
 	}
+
 	return m, nil
 }
 
@@ -154,6 +169,7 @@ func (m listModel) handleTick() (tea.Model, tea.Cmd) {
 		m.refreshing = true
 		cmds = append(cmds, refreshCmd(m.options))
 	}
+
 	return m, tea.Batch(cmds...)
 }
 
@@ -165,13 +181,16 @@ func (m listModel) applyRefresh(msg refreshedMsg) listModel {
 		m.err = msg.err
 		return m
 	}
+
 	m.err = nil
 	m.health = msg.health
 	selectedID := ""
 	if m.cursor >= 0 && m.cursor < len(m.codebases) {
 		selectedID = m.codebases[m.cursor].GetId()
 	}
+
 	m.codebases = msg.codebases
+
 	m.cursor = 0
 	for index, codebase := range m.codebases {
 		if codebase.GetId() == selectedID {
@@ -179,6 +198,7 @@ func (m listModel) applyRefresh(msg refreshedMsg) listModel {
 			break
 		}
 	}
+
 	return m.clampOffset()
 }
 
@@ -187,9 +207,11 @@ func (m listModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	}
+
 	if m.showingDetail {
 		return m.handleDetailKey(msg)
 	}
+
 	return m.handleListKey(msg)
 }
 
@@ -199,6 +221,7 @@ func (m listModel) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.detail = ""
 		m.err = nil
 	}
+
 	return m, nil
 }
 
@@ -216,14 +239,17 @@ func (m listModel) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.refreshing = true
 			return m, refreshCmd(m.options)
 		}
+
 		return m, nil
 	case keyMatches(msg, "enter", "right", "l"):
 		if len(m.codebases) == 0 {
 			return m, nil
 		}
+
 		id := m.codebases[m.cursor].GetId()
 		m.loading = true
 		m.err = nil
+
 		return m, loadDetailCmd(m.options, id)
 	default:
 		return m, nil
@@ -234,7 +260,9 @@ func (m listModel) moveCursor(delta int) listModel {
 	if len(m.codebases) == 0 {
 		return m
 	}
+
 	m.cursor = clampInt(m.cursor+delta, len(m.codebases)-1)
+
 	return m.clampOffset()
 }
 
@@ -244,11 +272,14 @@ func (m listModel) clampOffset() listModel {
 	if m.cursor < m.offset {
 		m.offset = m.cursor
 	}
+
 	if m.cursor >= m.offset+visible {
 		m.offset = m.cursor - visible + 1
 	}
+
 	maxOffset := max(len(m.codebases)-visible, 0)
 	m.offset = clampInt(m.offset, maxOffset)
+
 	return m
 }
 
@@ -258,14 +289,17 @@ func (m listModel) visibleRows() int {
 	if m.bannerLine() != "" {
 		chromeRows++
 	}
+
 	height := m.height
 	if height <= 0 {
 		height = len(m.codebases) + chromeRows
 	}
+
 	rows := height - chromeRows
 	if rows < 1 {
 		return 1
 	}
+
 	return rows
 }
 
@@ -279,6 +313,7 @@ func keyMatches(msg tea.KeyPressMsg, keys ...string) bool {
 func (m listModel) View() tea.View {
 	view := tea.NewView(m.renderContent())
 	view.AltScreen = true
+
 	return view
 }
 
@@ -286,9 +321,11 @@ func (m listModel) renderContent() string {
 	if m.quitting {
 		return ""
 	}
+
 	if m.showingDetail {
 		return m.detailView()
 	}
+
 	return m.listView()
 }
 
@@ -297,7 +334,9 @@ func (m listModel) detailView() string {
 	if m.err != nil {
 		body = errorStyle.Render(m.err.Error())
 	}
+
 	footer := faintStyle.Render("esc back · q quit")
+
 	return strings.TrimRight(body, "\n") + "\n\n" + footer + "\n"
 }
 
@@ -307,16 +346,20 @@ func (m listModel) listView() string {
 	if banner := m.bannerLine(); banner != "" {
 		lines = append(lines, banner)
 	}
+
 	lines = append(lines, m.headerLine(widths))
 	lines = append(lines, faintStyle.Render(strings.Repeat("─", lineWidth(widths))))
 
 	visible := m.visibleRows()
+
 	end := min(m.offset+visible, len(m.codebases))
 	for index := m.offset; index < end; index++ {
 		lines = append(lines, m.renderRow(m.codebases[index], index == m.cursor, widths))
 	}
+
 	lines = append(lines, m.policyLine())
 	lines = append(lines, m.footerLine())
+
 	return strings.Join(lines, "\n") + "\n"
 }
 
@@ -328,7 +371,9 @@ func (m listModel) bannerLine() string {
 	if m.health == nil || !m.health.GetDegraded() {
 		return ""
 	}
+
 	headline := status.BannerHeadlineFor(status.DependencyMode(m.health.GetMode()))
+
 	return bannerStyle.Render("🟥 " + headline)
 }
 
@@ -337,21 +382,27 @@ func (m listModel) footerLine() string {
 	if m.refreshing {
 		keys += " · updating"
 	}
+
 	position := fmt.Sprintf("  %d/%d", m.cursor+1, len(m.codebases))
 	if m.err != nil {
 		return errorStyle.Render(m.err.Error())
 	}
+
 	return faintStyle.Render(keys + position)
 }
 
 func (m listModel) headerLine(widths colWidths) string {
-	header := strings.Join([]string{
-		padTo("NAME", widths.name),
-		padTo("STATUS", widths.status),
-		padLeftTo("FILES", widths.files),
-		padTo("ID", widths.id),
-		padTo("PATH", widths.path),
-	}, columnGap)
+	header := strings.Join(
+		[]string{
+			padTo("NAME", widths.name),
+			padTo("STATUS", widths.status),
+			padLeftTo("FILES", widths.files),
+			padTo("ID", widths.id),
+			padTo("PATH", widths.path),
+		},
+		columnGap,
+	)
+
 	return "  " + headerStyle.Render(header)
 }
 
@@ -368,15 +419,19 @@ func (m listModel) renderRow(codebase *pb.Codebase, selected bool, widths colWid
 
 	var rowLine string
 	if selected {
-		rowLine = selectedStyle.Render("❯ " + strings.Join([]string{name, statusText, files, id, pathCell}, columnGap))
+		rowLine = selectedStyle.Render(
+			"❯ " + strings.Join([]string{name, statusText, files, id, pathCell}, columnGap),
+		)
 	} else {
 		statusCell := lipgloss.NewStyle().Foreground(statusColor(status)).Render(statusText)
 		rowLine = "  " + strings.Join([]string{name, statusCell, files, id, pathCell}, columnGap)
 	}
+
 	tree := activeBreakdownLines(codebase)
 	if len(tree) == 0 {
 		return rowLine
 	}
+
 	return rowLine + "\n" + strings.Join(tree, "\n")
 }
 
@@ -389,14 +444,17 @@ func activeBreakdownLines(codebase *pb.Codebase) []string {
 	if progress == nil {
 		return nil
 	}
+
 	treeLines := render.BreakdownLines(pbconv.BreakdownFromProto(progress.GetBreakdown()))
 	if len(treeLines) == 0 {
 		return nil
 	}
+
 	out := make([]string, 0, len(treeLines))
 	for _, line := range treeLines {
 		out = append(out, faintStyle.Render("      "+line))
 	}
+
 	return out
 }
 
@@ -413,27 +471,33 @@ func (m listModel) columnWidths() colWidths {
 	nameW := len("NAME")
 	filesW := len("FILES")
 	idW := len("ID")
+
 	for _, codebase := range m.codebases {
 		nameW = max(nameW, len(filepath.Base(codebase.GetCanonicalPath())))
 		filesW = max(filesW, len(fileCountCell(codebase)))
 		idW = max(idW, len(codebase.GetId()))
 	}
+
 	nameW = min(nameW, maxNameWidth)
 
 	termWidth := m.width
 	if termWidth <= 0 {
 		termWidth = defaultTermWidth
 	}
+
 	const marker = 2
 	const gaps = 4 * len(columnGap)
 	const minPath = 8
 	fixed := marker + nameW + statusWidth + filesW + idW + gaps
 	pathW := max(termWidth-fixed, minPath)
+
 	return colWidths{name: nameW, status: statusWidth, files: filesW, id: idW, path: pathW}
 }
 
 func lineWidth(widths colWidths) int {
-	return 2 + widths.name + widths.status + widths.files + widths.id + widths.path + 4*len(columnGap)
+	return 2 + widths.name + widths.status + widths.files + widths.id + widths.path + 4*len(
+		columnGap,
+	)
 }
 
 func (m listModel) policyLine() string {
@@ -443,6 +507,7 @@ func (m listModel) policyLine() string {
 			policy = resolved
 		}
 	}
+
 	return faintStyle.Render("Stored policy: " + policy)
 }
 
@@ -452,53 +517,88 @@ func schedulingPolicyCell(codebase *pb.Codebase) string {
 		"",
 		pb.SchedulingReason_SCHEDULING_REASON_UNSPECIFIED,
 	)
+
 	return render.SchedulingPolicy(scheduling)
 }
 
 func refreshCmd(options cliOptions) tea.Cmd {
 	return func() tea.Msg {
-		result, err := callDaemon(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
-			return client.ListIndexes(ctx, &pb.ListIndexesRequest{})
-		})
+		result, err := callDaemon(
+			options,
+			func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (
+				protoMessage,
+				error,
+			) {
+				return client.ListIndexes(ctx, &pb.ListIndexesRequest{})
+			},
+		)
 		if err != nil {
 			return refreshedMsg{codebases: nil, health: nil, err: err}
 		}
+
 		listResponse, ok := result.(*pb.ListIndexesResponse)
 		if !ok {
-			return refreshedMsg{codebases: nil, health: nil, err: errors.New("unexpected response type from ListIndexes")}
+			return refreshedMsg{
+				codebases: nil,
+				health:    nil,
+				err:       errors.New("unexpected response type from ListIndexes"),
+			}
 		}
-		return refreshedMsg{codebases: listResponse.GetIndexes(), health: listResponse.GetDependencyHealth(), err: nil}
+
+		return refreshedMsg{
+			codebases: listResponse.GetIndexes(),
+			health:    listResponse.GetDependencyHealth(),
+			err:       nil,
+		}
 	}
 }
 
 func loadDetailCmd(options cliOptions, id string) tea.Cmd {
 	return func() tea.Msg {
-		result, err := callDaemon(options, func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (protoMessage, error) {
-			return client.GetIndex(ctx, &pb.GetIndexRequest{Path: id})
-		})
+		result, err := callDaemon(
+			options,
+			func(ctx context.Context, client pb.SemanticSearchDaemonServiceClient) (
+				protoMessage,
+				error,
+			) {
+				return client.GetIndex(ctx, &pb.GetIndexRequest{Path: id})
+			},
+		)
 		if err != nil {
 			return detailLoadedMsg{text: "", err: err}
 		}
+
 		indexResponse, ok := result.(*pb.GetIndexResponse)
 		if !ok {
-			return detailLoadedMsg{text: "", err: errors.New("unexpected response type from GetIndex")}
+			return detailLoadedMsg{
+				text: "",
+				err:  errors.New("unexpected response type from GetIndex"),
+			}
 		}
+
 		return detailLoadedMsg{text: indexResponse.GetDisplayText(), err: nil}
 	}
 }
 
 func tickEvery() tea.Cmd {
-	return tea.Tick(refreshInterval, func(time.Time) tea.Msg {
-		return tickMsg{}
-	})
+	return tea.Tick(
+		refreshInterval,
+		func(time.Time) tea.Msg {
+			return tickMsg{}
+		},
+	)
 }
 
 var (
 	faintStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	headerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Bold(true)
-	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(lipgloss.Color("57")).Bold(true)
-	bannerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Background(
+		lipgloss.Color("57"),
+	).Bold(
+		true,
+	)
+	bannerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
 )
 
 // statusColors maps each resolved display status to a distinct foreground
@@ -520,6 +620,7 @@ func statusColor(status string) color.Color {
 	if color, ok := statusColors[status]; ok {
 		return color
 	}
+
 	return grayStatus
 }
 
@@ -532,12 +633,15 @@ func fileCountCell(codebase *pb.Codebase) string {
 		if reuse := codebase.GetReuseSiblingCount(); reuse > 0 {
 			return "♻" + strconv.Itoa(int(reuse))
 		}
+
 		return "-"
 	}
+
 	run := codebase.GetLastSuccessfulRun()
 	if run == nil {
 		return "-"
 	}
+
 	return strconv.Itoa(int(run.GetIndexedFiles()))
 }
 
@@ -549,6 +653,7 @@ func padTo(text string, width int) string {
 	if gap <= 0 {
 		return text
 	}
+
 	return text + strings.Repeat(" ", gap)
 }
 
@@ -559,6 +664,7 @@ func padLeftTo(text string, width int) string {
 	if gap <= 0 {
 		return text
 	}
+
 	return strings.Repeat(" ", gap) + text
 }
 
@@ -569,13 +675,16 @@ func fitTail(text string, width int) string {
 	if width <= 0 {
 		return ""
 	}
+
 	runes := []rune(text)
 	if len(runes) <= width {
 		return text
 	}
+
 	if width == 1 {
 		return "…"
 	}
+
 	return string(runes[:width-1]) + "…"
 }
 
@@ -585,13 +694,16 @@ func fitHead(text string, width int) string {
 	if width <= 0 {
 		return ""
 	}
+
 	runes := []rune(text)
 	if len(runes) <= width {
 		return text
 	}
+
 	if width == 1 {
 		return "…"
 	}
+
 	return "…" + string(runes[len(runes)-(width-1):])
 }
 
@@ -602,8 +714,10 @@ func clampInt(value, high int) int {
 	if value < 0 {
 		return 0
 	}
+
 	if value > high {
 		return max(high, 0)
 	}
+
 	return value
 }

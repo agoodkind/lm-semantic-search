@@ -53,19 +53,24 @@ func Resolve(absPath string) (Info, bool) {
 	if !found {
 		return empty, false
 	}
+
 	gitDirPath, linked, ok := gitDirForRoot(root)
 	if !ok {
 		return empty, false
 	}
+
 	commonDir, ok := commonDirFor(gitDirPath)
 	if !ok {
 		return empty, false
 	}
+
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return empty, false
 	}
+
 	branch, detached, head := parseHead(gitDirPath)
+
 	return Info{
 		WorktreeRoot: resolvedRoot,
 		CommonDir:    commonDir,
@@ -86,6 +91,7 @@ func CommonDirAt(dir string) (string, bool) {
 	if !ok {
 		return "", false
 	}
+
 	return commonDirFor(gitDirPath)
 }
 
@@ -99,7 +105,9 @@ func WorktreeOfRepo(dir string, commonDir string) bool {
 	if commonDir == "" {
 		return false
 	}
+
 	dirCommon, ok := CommonDirAt(dir)
+
 	return ok && dirCommon == commonDir
 }
 
@@ -114,14 +122,18 @@ func PathInsideNestedWorktree(rootPath string, rootCommonDir string, path string
 	if rootCommonDir == "" {
 		return false
 	}
+
 	rootClean := filepath.Clean(rootPath)
+
 	current := filepath.Clean(path)
 	for current != rootClean && strings.HasPrefix(current, rootClean+string(os.PathSeparator)) {
 		if WorktreeOfRepo(current, rootCommonDir) {
 			return true
 		}
+
 		current = filepath.Dir(current)
 	}
+
 	return false
 }
 
@@ -134,7 +146,9 @@ func PathInsideSubmodule(rootPath string, rootCommonDir string, path string) (st
 	if rootCommonDir == "" {
 		return "", false
 	}
+
 	rootClean := filepath.Clean(rootPath)
+
 	current := filepath.Clean(path)
 	for current != rootClean && strings.HasPrefix(current, rootClean+string(os.PathSeparator)) {
 		currentCommon, ok := CommonDirAt(current)
@@ -143,10 +157,13 @@ func PathInsideSubmodule(rootPath string, rootCommonDir string, path string) (st
 			if err != nil {
 				return "", false
 			}
+
 			return filepath.ToSlash(relativeRoot), true
 		}
+
 		current = filepath.Dir(current)
 	}
+
 	return "", false
 }
 
@@ -161,23 +178,29 @@ func WorktreeTracked(commonDir string, worktreeRoot string) bool {
 	if commonDir == "" {
 		return false
 	}
+
 	entries, err := os.ReadDir(filepath.Join(commonDir, "worktrees"))
 	if err != nil {
 		return false
 	}
+
 	wantGitDir := filepath.Clean(filepath.Join(worktreeRoot, ".git"))
+
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
+
 		target, ok := readTrimmed(filepath.Join(commonDir, "worktrees", entry.Name(), "gitdir"))
 		if !ok {
 			continue
 		}
+
 		if filepath.Clean(target) == wantGitDir {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -194,9 +217,11 @@ func SiblingWorktreeRoots(commonDir string) []string {
 		if err != nil {
 			return
 		}
+
 		if _, dup := seen[resolvedRoot]; dup {
 			return
 		}
+
 		seen[resolvedRoot] = struct{}{}
 		roots = append(roots, resolvedRoot)
 	}
@@ -212,11 +237,13 @@ func SiblingWorktreeRoots(commonDir string) []string {
 			if !entry.IsDir() {
 				continue
 			}
+
 			gitdirFile := filepath.Join(commonDir, "worktrees", entry.Name(), "gitdir")
 			target, ok := readTrimmed(gitdirFile)
 			if !ok || target == "" {
 				continue
 			}
+
 			// gitdir points at the worktree's own .git pointer; its directory is
 			// the worktree root.
 			addRoot(filepath.Dir(target))
@@ -224,6 +251,7 @@ func SiblingWorktreeRoots(commonDir string) []string {
 	}
 
 	slices.Sort(roots)
+
 	return roots
 }
 
@@ -231,14 +259,17 @@ func SiblingWorktreeRoots(commonDir string) []string {
 // entry, returning that directory. It stops at the filesystem root.
 func worktreeRootOf(start string) (string, bool) {
 	current := filepath.Clean(start)
+
 	for {
 		if _, err := os.Lstat(filepath.Join(current, ".git")); err == nil {
 			return current, true
 		}
+
 		parent := filepath.Dir(current)
 		if parent == current {
 			return "", false
 		}
+
 		current = parent
 	}
 }
@@ -254,20 +285,25 @@ func gitDirForRoot(root string) (gitDirPath string, linked bool, ok bool) {
 	if err != nil {
 		return "", false, false
 	}
+
 	if info.IsDir() {
 		return entryPath, false, true
 	}
+
 	target, ok := readTrimmed(entryPath)
 	if !ok {
 		return "", false, false
 	}
+
 	target = strings.TrimSpace(strings.TrimPrefix(target, gitdirPrefix))
 	if target == "" {
 		return "", false, false
 	}
+
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(root, target)
 	}
+
 	return filepath.Clean(target), true, true
 }
 
@@ -281,16 +317,20 @@ func commonDirFor(gitDirPath string) (string, bool) {
 		if !filepath.IsAbs(target) {
 			target = filepath.Join(gitDirPath, target)
 		}
+
 		resolved, evalErr := filepath.EvalSymlinks(filepath.Clean(target))
 		if evalErr != nil {
 			return "", false
 		}
+
 		return resolved, true
 	}
+
 	resolved, err := filepath.EvalSymlinks(gitDirPath)
 	if err != nil {
 		return "", false
 	}
+
 	return resolved, true
 }
 
@@ -301,10 +341,12 @@ func parseHead(gitDirPath string) (branch string, detached bool, head string) {
 	if !ok || content == "" {
 		return "", false, ""
 	}
+
 	if refTarget, isRef := strings.CutPrefix(content, refPrefix); isRef {
 		ref := strings.TrimSpace(refTarget)
 		return strings.TrimPrefix(ref, headsPrefix), false, ref
 	}
+
 	return "", true, content
 }
 
@@ -317,5 +359,6 @@ func readTrimmed(path string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+
 	return strings.TrimSpace(string(data)), true
 }

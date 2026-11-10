@@ -57,9 +57,11 @@ OPENAI_API_KEY='sk-fromfile'
 	if err := os.Unsetenv("EMBEDDING_PROVIDER"); err != nil {
 		t.Fatalf("Unsetenv returned error: %v", err)
 	}
+
 	if err := os.Unsetenv("EMBEDDING_MODEL"); err != nil {
 		t.Fatalf("Unsetenv returned error: %v", err)
 	}
+
 	t.Cleanup(func() {
 		_ = os.Unsetenv("EMBEDDING_PROVIDER")
 		_ = os.Unsetenv("EMBEDDING_MODEL")
@@ -71,9 +73,11 @@ OPENAI_API_KEY='sk-fromfile'
 	if got := os.Getenv("EMBEDDING_PROVIDER"); got != "OpenAI" {
 		t.Errorf("EMBEDDING_PROVIDER = %q want OpenAI", got)
 	}
+
 	if got := os.Getenv("EMBEDDING_MODEL"); got != "text-embedding-3-small" {
 		t.Errorf("EMBEDDING_MODEL = %q want text-embedding-3-small (quotes stripped)", got)
 	}
+
 	if got := os.Getenv("OPENAI_API_KEY"); got != "sk-from-process" {
 		t.Errorf("OPENAI_API_KEY = %q want sk-from-process (process env wins over .env file)", got)
 	}
@@ -90,6 +94,7 @@ func TestDefaultReadsCustomIgnoreEnvVar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Default returned error: %v", err)
 	}
+
 	if !reflect.DeepEqual(cfg.CustomIgnorePatterns, []string{"vendor/**", "third_party/**"}) {
 		t.Errorf("CustomIgnorePatterns = %#v", cfg.CustomIgnorePatterns)
 	}
@@ -124,6 +129,7 @@ func defaultWithPersistedConfigAndProfile(
 	if err != nil {
 		t.Fatalf("Marshal returned error: %v", err)
 	}
+
 	configPath := filepath.Join(configRoot, "config.json")
 	if err := os.WriteFile(configPath, data, 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
@@ -133,6 +139,7 @@ func defaultWithPersistedConfigAndProfile(
 	if err != nil {
 		t.Fatalf("Default returned error: %v", err)
 	}
+
 	return cfg
 }
 
@@ -211,27 +218,36 @@ func TestDefaultResolvesProfileFromEnvironmentAndFile(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			cfg := defaultWithPersistedConfigAndProfile(
-				t,
-				persistedConfig{Profile: testCase.fileProfile},
-				testCase.environmentProfile,
-			)
-
-			if cfg.Profile != testCase.wantProfile {
-				t.Errorf("Profile = %q want %q", cfg.Profile, testCase.wantProfile)
-			}
-			if cfg.IndexBackend != testCase.wantIndexBackend {
-				t.Errorf("IndexBackend = %q want %q", cfg.IndexBackend, testCase.wantIndexBackend)
-			}
-			if cfg.EmbeddingProvider != testCase.wantEmbeddingProvider {
-				t.Errorf(
-					"EmbeddingProvider = %q want %q",
-					cfg.EmbeddingProvider,
-					testCase.wantEmbeddingProvider,
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				cfg := defaultWithPersistedConfigAndProfile(
+					t,
+					persistedConfig{Profile: testCase.fileProfile},
+					testCase.environmentProfile,
 				)
-			}
-		})
+
+				if cfg.Profile != testCase.wantProfile {
+					t.Errorf("Profile = %q want %q", cfg.Profile, testCase.wantProfile)
+				}
+
+				if cfg.IndexBackend != testCase.wantIndexBackend {
+					t.Errorf(
+						"IndexBackend = %q want %q",
+						cfg.IndexBackend,
+						testCase.wantIndexBackend,
+					)
+				}
+
+				if cfg.EmbeddingProvider != testCase.wantEmbeddingProvider {
+					t.Errorf(
+						"EmbeddingProvider = %q want %q",
+						cfg.EmbeddingProvider,
+						testCase.wantEmbeddingProvider,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -246,15 +262,27 @@ func TestDefaultDebugAndJobControlDefaults(t *testing.T) {
 	if !cfg.DebugListenerEnabled {
 		t.Errorf("DebugListenerEnabled = false want true")
 	}
+
 	if cfg.DebugListenAddr != defaultDebugListenAddr {
 		t.Errorf("DebugListenAddr = %q want %q", cfg.DebugListenAddr, defaultDebugListenAddr)
 	}
+
 	if cfg.PerfCountersIntervalMS != defaultPerfCountersIntervalMS {
-		t.Errorf("PerfCountersIntervalMS = %d want %d", cfg.PerfCountersIntervalMS, defaultPerfCountersIntervalMS)
+		t.Errorf(
+			"PerfCountersIntervalMS = %d want %d",
+			cfg.PerfCountersIntervalMS,
+			defaultPerfCountersIntervalMS,
+		)
 	}
+
 	if cfg.MaxConcurrentIndexJobs != defaultMaxConcurrentIndexJobs {
-		t.Errorf("MaxConcurrentIndexJobs = %d want %d", cfg.MaxConcurrentIndexJobs, defaultMaxConcurrentIndexJobs)
+		t.Errorf(
+			"MaxConcurrentIndexJobs = %d want %d",
+			cfg.MaxConcurrentIndexJobs,
+			defaultMaxConcurrentIndexJobs,
+		)
 	}
+
 	if !cfg.ResumeIndexingOnBoot {
 		t.Errorf("ResumeIndexingOnBoot = false want true")
 	}
@@ -269,9 +297,12 @@ func TestDefaultEmbeddingBatchTokenBudgetDefaultsTo6000(t *testing.T) {
 }
 
 func TestDefaultQueryInstructionPrefixForNVEmbedCodeModel(t *testing.T) {
-	cfg := defaultWithPersistedConfig(t, persistedConfig{
-		EmbeddingModel: "nvidia/NV-EmbedCode-7b-v1",
-	})
+	cfg := defaultWithPersistedConfig(
+		t,
+		persistedConfig{
+			EmbeddingModel: "nvidia/NV-EmbedCode-7b-v1",
+		},
+	)
 	wantPrefix := "Instruct: Retrieve code or text relevant to the query.\nQuery: "
 
 	if cfg.QueryInstructionPrefix != wantPrefix {
@@ -280,9 +311,12 @@ func TestDefaultQueryInstructionPrefixForNVEmbedCodeModel(t *testing.T) {
 }
 
 func TestDefaultQueryInstructionPrefixEmptyForOtherModels(t *testing.T) {
-	cfg := defaultWithPersistedConfig(t, persistedConfig{
-		EmbeddingModel: "text-embedding-3-small",
-	})
+	cfg := defaultWithPersistedConfig(
+		t,
+		persistedConfig{
+			EmbeddingModel: "text-embedding-3-small",
+		},
+	)
 
 	if cfg.QueryInstructionPrefix != "" {
 		t.Errorf("QueryInstructionPrefix = %q want empty", cfg.QueryInstructionPrefix)
@@ -296,46 +330,72 @@ func intPtr(value int) *int {
 func TestDefaultEmbeddingRequestTimeoutDefaultsAndPersists(t *testing.T) {
 	defaulted := defaultWithPersistedConfig(t, persistedConfig{})
 	if defaulted.EmbeddingRequestTimeoutMS != defaultEmbeddingRequestTimeoutMS {
-		t.Errorf("omitted EmbeddingRequestTimeoutMS = %d want default %d", defaulted.EmbeddingRequestTimeoutMS, defaultEmbeddingRequestTimeoutMS)
+		t.Errorf(
+			"omitted EmbeddingRequestTimeoutMS = %d want default %d",
+			defaulted.EmbeddingRequestTimeoutMS,
+			defaultEmbeddingRequestTimeoutMS,
+		)
 	}
 
-	persisted := defaultWithPersistedConfig(t, persistedConfig{
-		EmbeddingRequestTimeoutMS: intPtr(45000),
-	})
+	persisted := defaultWithPersistedConfig(
+		t,
+		persistedConfig{
+			EmbeddingRequestTimeoutMS: intPtr(45000),
+		},
+	)
 	if persisted.EmbeddingRequestTimeoutMS != 45000 {
-		t.Errorf("persisted EmbeddingRequestTimeoutMS = %d want 45000", persisted.EmbeddingRequestTimeoutMS)
+		t.Errorf(
+			"persisted EmbeddingRequestTimeoutMS = %d want 45000",
+			persisted.EmbeddingRequestTimeoutMS,
+		)
 	}
 
 	// An explicit 0 in config.json disables the bound and must survive as 0,
 	// distinct from an omitted field that falls back to the default.
-	disabled := defaultWithPersistedConfig(t, persistedConfig{
-		EmbeddingRequestTimeoutMS: intPtr(0),
-	})
+	disabled := defaultWithPersistedConfig(
+		t,
+		persistedConfig{
+			EmbeddingRequestTimeoutMS: intPtr(0),
+		},
+	)
 	if disabled.EmbeddingRequestTimeoutMS != 0 {
-		t.Errorf("persisted zero EmbeddingRequestTimeoutMS = %d want 0 (disabled)", disabled.EmbeddingRequestTimeoutMS)
+		t.Errorf(
+			"persisted zero EmbeddingRequestTimeoutMS = %d want 0 (disabled)",
+			disabled.EmbeddingRequestTimeoutMS,
+		)
 	}
 }
 
 func TestDefaultEmbeddingRequestTimeoutEnvOverridesPersisted(t *testing.T) {
 	t.Setenv("CLAUDE_CONTEXT_EMBEDDING_REQUEST_TIMEOUT_MS", "12000")
-	cfg := defaultWithPersistedConfig(t, persistedConfig{
-		EmbeddingRequestTimeoutMS: intPtr(45000),
-	})
+	cfg := defaultWithPersistedConfig(
+		t,
+		persistedConfig{
+			EmbeddingRequestTimeoutMS: intPtr(45000),
+		},
+	)
 	if cfg.EmbeddingRequestTimeoutMS != 12000 {
-		t.Errorf("EmbeddingRequestTimeoutMS = %d want env override 12000", cfg.EmbeddingRequestTimeoutMS)
+		t.Errorf(
+			"EmbeddingRequestTimeoutMS = %d want env override 12000",
+			cfg.EmbeddingRequestTimeoutMS,
+		)
 	}
 }
 
 func TestDefaultEmbeddingBatchConfigUsesPersistedValues(t *testing.T) {
-	cfg := defaultWithPersistedConfig(t, persistedConfig{
-		EmbeddingModel:            "nvidia/NV-EmbedCode-7b-v1",
-		EmbeddingBatchTokenBudget: 4096,
-		QueryInstructionPrefix:    "custom query prefix: ",
-	})
+	cfg := defaultWithPersistedConfig(
+		t,
+		persistedConfig{
+			EmbeddingModel:            "nvidia/NV-EmbedCode-7b-v1",
+			EmbeddingBatchTokenBudget: 4096,
+			QueryInstructionPrefix:    "custom query prefix: ",
+		},
+	)
 
 	if cfg.EmbeddingBatchTokenBudget != 4096 {
 		t.Errorf("EmbeddingBatchTokenBudget = %d want 4096", cfg.EmbeddingBatchTokenBudget)
 	}
+
 	if cfg.QueryInstructionPrefix != "custom query prefix: " {
 		t.Errorf("QueryInstructionPrefix = %q want custom query prefix", cfg.QueryInstructionPrefix)
 	}
@@ -351,9 +411,12 @@ func TestDefaultOfflineEmbeddingModelDefaultsAndReadsConfig(t *testing.T) {
 		)
 	}
 
-	persisted := defaultWithPersistedConfig(t, persistedConfig{
-		OfflineEmbeddingModel: offlinemodel.BGESmall,
-	})
+	persisted := defaultWithPersistedConfig(
+		t,
+		persistedConfig{
+			OfflineEmbeddingModel: offlinemodel.BGESmall,
+		},
+	)
 	if persisted.OfflineEmbeddingModel != offlinemodel.BGESmall {
 		t.Fatalf(
 			"persisted OfflineEmbeddingModel = %q, want %q",
@@ -365,9 +428,12 @@ func TestDefaultOfflineEmbeddingModelDefaultsAndReadsConfig(t *testing.T) {
 
 func TestDefaultOfflineEmbeddingModelEnvOverridesConfig(t *testing.T) {
 	t.Setenv("OFFLINE_EMBEDDING_MODEL", offlinemodel.EmbeddingGemma)
-	cfg := defaultWithPersistedConfig(t, persistedConfig{
-		OfflineEmbeddingModel: offlinemodel.BGESmall,
-	})
+	cfg := defaultWithPersistedConfig(
+		t,
+		persistedConfig{
+			OfflineEmbeddingModel: offlinemodel.BGESmall,
+		},
+	)
 	if cfg.OfflineEmbeddingModel != offlinemodel.EmbeddingGemma {
 		t.Fatalf(
 			"OfflineEmbeddingModel = %q, want env override %q",
@@ -389,6 +455,7 @@ func TestDefaultKeepsDaemonStateAndCompatRootsSplit(t *testing.T) {
 	if err := os.Unsetenv("CLAUDE_CONTEXTD_STATE_ROOT"); err != nil {
 		t.Fatalf("Unsetenv returned error: %v", err)
 	}
+
 	if err := os.Unsetenv("CLAUDE_CONTEXTD_CONFIG_ROOT"); err != nil {
 		t.Fatalf("Unsetenv returned error: %v", err)
 	}
@@ -407,34 +474,43 @@ func TestDefaultKeepsDaemonStateAndCompatRootsSplit(t *testing.T) {
 	if cfg.ConfigRoot != wantConfigRoot {
 		t.Fatalf("ConfigRoot = %q, want %q", cfg.ConfigRoot, wantConfigRoot)
 	}
+
 	if cfg.ConfigPath != filepath.Join(wantConfigRoot, "config.json") {
 		t.Fatalf("ConfigPath = %q", cfg.ConfigPath)
 	}
+
 	wantStateRoot := filepath.Join(homeDir, ".local", "state", "lm-semantic-search")
 	if cfg.StateRoot != wantStateRoot {
 		t.Fatalf("StateRoot = %q, want %q", cfg.StateRoot, wantStateRoot)
 	}
+
 	wantContextRoot := filepath.Join(homeDir, ".context")
 	if cfg.ContextRoot != wantContextRoot {
 		t.Fatalf("ContextRoot = %q, want %q", cfg.ContextRoot, wantContextRoot)
 	}
+
 	// The model cache follows the state root unless it is named, so an
 	// installed daemon keeps its artifacts where it always did.
 	if cfg.ModelCacheRoot != wantStateRoot {
 		t.Fatalf("ModelCacheRoot = %q, want %q", cfg.ModelCacheRoot, wantStateRoot)
 	}
+
 	if cfg.RegistryPath != filepath.Join(wantStateRoot, "registry.json") {
 		t.Fatalf("RegistryPath = %q", cfg.RegistryPath)
 	}
+
 	if cfg.MerkleDir != filepath.Join(wantStateRoot, "merkle") {
 		t.Fatalf("MerkleDir = %q", cfg.MerkleDir)
 	}
+
 	if cfg.ChunksDir != filepath.Join(wantStateRoot, "chunks") {
 		t.Fatalf("ChunksDir = %q", cfg.ChunksDir)
 	}
+
 	if cfg.GraphDir != filepath.Join(wantStateRoot, "graph") {
 		t.Fatalf("GraphDir = %q", cfg.GraphDir)
 	}
+
 	if cfg.SocketPath != filepath.Join(wantStateRoot, "sockets", "lm-semantic-search-daemon.sock") {
 		t.Fatalf("SocketPath = %q", cfg.SocketPath)
 	}
@@ -473,6 +549,7 @@ func TestDefaultSeparatesTheModelCacheFromTheStateRoot(t *testing.T) {
 	if cfg.ModelCacheRoot != sharedCache {
 		t.Fatalf("ModelCacheRoot = %q, want %q", cfg.ModelCacheRoot, sharedCache)
 	}
+
 	if cfg.StateRoot == sharedCache {
 		t.Fatal("StateRoot followed the model cache; the two roots must stay independent")
 	}
@@ -488,6 +565,7 @@ func TestDefaultUsesXDGRootsWhenSet(t *testing.T) {
 	if err := os.Unsetenv("CLAUDE_CONTEXTD_STATE_ROOT"); err != nil {
 		t.Fatalf("Unsetenv returned error: %v", err)
 	}
+
 	if err := os.Unsetenv("CLAUDE_CONTEXTD_CONFIG_ROOT"); err != nil {
 		t.Fatalf("Unsetenv returned error: %v", err)
 	}
@@ -500,6 +578,7 @@ func TestDefaultUsesXDGRootsWhenSet(t *testing.T) {
 	if cfg.ConfigRoot != filepath.Join(xdgConfig, "lm-semantic-search") {
 		t.Fatalf("ConfigRoot = %q", cfg.ConfigRoot)
 	}
+
 	if cfg.StateRoot != filepath.Join(xdgState, "lm-semantic-search") {
 		t.Fatalf("StateRoot = %q", cfg.StateRoot)
 	}
@@ -522,15 +601,19 @@ func TestDefaultDebugAndJobControlEnvOverrides(t *testing.T) {
 	if cfg.DebugListenerEnabled {
 		t.Errorf("DebugListenerEnabled = true want false")
 	}
+
 	if cfg.DebugListenAddr != "127.0.0.1:7000" {
 		t.Errorf("DebugListenAddr = %q want 127.0.0.1:7000", cfg.DebugListenAddr)
 	}
+
 	if cfg.PerfCountersIntervalMS != 0 {
 		t.Errorf("PerfCountersIntervalMS = %d want 0", cfg.PerfCountersIntervalMS)
 	}
+
 	if cfg.MaxConcurrentIndexJobs != 8 {
 		t.Errorf("MaxConcurrentIndexJobs = %d want 8", cfg.MaxConcurrentIndexJobs)
 	}
+
 	if cfg.ResumeIndexingOnBoot {
 		t.Errorf("ResumeIndexingOnBoot = true want false")
 	}
@@ -545,16 +628,27 @@ func TestDefaultLogRotationAndCleanupDefaults(t *testing.T) {
 	}
 
 	if cfg.LogRotationMaxBytes != defaultLogRotationMaxBytes {
-		t.Errorf("LogRotationMaxBytes = %d want %d", cfg.LogRotationMaxBytes, defaultLogRotationMaxBytes)
+		t.Errorf(
+			"LogRotationMaxBytes = %d want %d",
+			cfg.LogRotationMaxBytes,
+			defaultLogRotationMaxBytes,
+		)
 	}
+
 	if cfg.LogRetentionBytes != defaultLogRetentionBytes {
 		t.Errorf("LogRetentionBytes = %d want %d", cfg.LogRetentionBytes, defaultLogRetentionBytes)
 	}
+
 	if !cfg.LogCleanupEnabled {
 		t.Errorf("LogCleanupEnabled = false want true")
 	}
+
 	if cfg.LogCleanupIntervalMS != defaultLogCleanupIntervalMS {
-		t.Errorf("LogCleanupIntervalMS = %d want %d", cfg.LogCleanupIntervalMS, defaultLogCleanupIntervalMS)
+		t.Errorf(
+			"LogCleanupIntervalMS = %d want %d",
+			cfg.LogCleanupIntervalMS,
+			defaultLogCleanupIntervalMS,
+		)
 	}
 }
 
@@ -574,66 +668,104 @@ func TestDefaultLogRotationAndCleanupEnvOverrides(t *testing.T) {
 	if cfg.LogRotationMaxBytes != 1048576 {
 		t.Errorf("LogRotationMaxBytes = %d want 1048576", cfg.LogRotationMaxBytes)
 	}
+
 	if cfg.LogRetentionBytes != 10485760 {
 		t.Errorf("LogRetentionBytes = %d want 10485760", cfg.LogRetentionBytes)
 	}
+
 	if cfg.LogCleanupEnabled {
 		t.Errorf("LogCleanupEnabled = true want false")
 	}
+
 	if cfg.LogCleanupIntervalMS != 60000 {
 		t.Errorf("LogCleanupIntervalMS = %d want 60000", cfg.LogCleanupIntervalMS)
 	}
 }
 
 func TestDefaultResolvesMilvusDatabase(t *testing.T) {
-	t.Run("unset keeps production default", func(t *testing.T) {
-		t.Setenv("MILVUS_DATABASE", "")
-		cfg := defaultWithPersistedConfig(t, persistedConfig{})
-		if cfg.MilvusDatabase != "" {
-			t.Fatalf("MilvusDatabase = %q, want empty", cfg.MilvusDatabase)
-		}
-	})
+	t.Run(
+		"unset keeps production default",
+		func(t *testing.T) {
+			t.Setenv("MILVUS_DATABASE", "")
+			cfg := defaultWithPersistedConfig(t, persistedConfig{})
+			if cfg.MilvusDatabase != "" {
+				t.Fatalf("MilvusDatabase = %q, want empty", cfg.MilvusDatabase)
+			}
+		},
+	)
 
-	t.Run("environment selects isolated database", func(t *testing.T) {
-		t.Setenv("MILVUS_DATABASE", "lms_live_child_config")
-		cfg := defaultWithPersistedConfig(t, persistedConfig{})
-		if cfg.MilvusDatabase != "lms_live_child_config" {
-			t.Fatalf(
-				"MilvusDatabase = %q, want %q",
-				cfg.MilvusDatabase,
-				"lms_live_child_config",
-			)
-		}
-	})
+	t.Run(
+		"environment selects isolated database",
+		func(t *testing.T) {
+			t.Setenv("MILVUS_DATABASE", "lms_live_child_config")
+			cfg := defaultWithPersistedConfig(t, persistedConfig{})
+			if cfg.MilvusDatabase != "lms_live_child_config" {
+				t.Fatalf(
+					"MilvusDatabase = %q, want %q",
+					cfg.MilvusDatabase,
+					"lms_live_child_config",
+				)
+			}
+		},
+	)
 }
 
 func TestDefaultResolvesMilvusMetadataCallTimeout(t *testing.T) {
 	const fileTimeoutMS = 12000
 	const environmentTimeoutMS = 10000
 
-	t.Run("unset", func(t *testing.T) {
-		t.Setenv("CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS", "")
-		cfg := defaultWithPersistedConfig(t, persistedConfig{})
-		if cfg.MilvusMetadataCallTimeoutMS != 0 {
-			t.Fatalf("MilvusMetadataCallTimeoutMS = %d, want 0", cfg.MilvusMetadataCallTimeoutMS)
-		}
-	})
+	t.Run(
+		"unset",
+		func(t *testing.T) {
+			t.Setenv("CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS", "")
+			cfg := defaultWithPersistedConfig(t, persistedConfig{})
+			if cfg.MilvusMetadataCallTimeoutMS != 0 {
+				t.Fatalf(
+					"MilvusMetadataCallTimeoutMS = %d, want 0",
+					cfg.MilvusMetadataCallTimeoutMS,
+				)
+			}
+		},
+	)
 
-	t.Run("config file", func(t *testing.T) {
-		t.Setenv("CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS", "")
-		cfg := defaultWithPersistedConfig(t, persistedConfig{MilvusMetadataCallTimeoutMS: fileTimeoutMS})
-		if cfg.MilvusMetadataCallTimeoutMS != fileTimeoutMS {
-			t.Fatalf("MilvusMetadataCallTimeoutMS = %d, want %d", cfg.MilvusMetadataCallTimeoutMS, fileTimeoutMS)
-		}
-	})
+	t.Run(
+		"config file",
+		func(t *testing.T) {
+			t.Setenv("CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS", "")
+			cfg := defaultWithPersistedConfig(
+				t,
+				persistedConfig{MilvusMetadataCallTimeoutMS: fileTimeoutMS},
+			)
+			if cfg.MilvusMetadataCallTimeoutMS != fileTimeoutMS {
+				t.Fatalf(
+					"MilvusMetadataCallTimeoutMS = %d, want %d",
+					cfg.MilvusMetadataCallTimeoutMS,
+					fileTimeoutMS,
+				)
+			}
+		},
+	)
 
-	t.Run("environment overrides config file", func(t *testing.T) {
-		t.Setenv("CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS", strconv.Itoa(environmentTimeoutMS))
-		cfg := defaultWithPersistedConfig(t, persistedConfig{MilvusMetadataCallTimeoutMS: fileTimeoutMS})
-		if cfg.MilvusMetadataCallTimeoutMS != environmentTimeoutMS {
-			t.Fatalf("MilvusMetadataCallTimeoutMS = %d, want %d", cfg.MilvusMetadataCallTimeoutMS, environmentTimeoutMS)
-		}
-	})
+	t.Run(
+		"environment overrides config file",
+		func(t *testing.T) {
+			t.Setenv(
+				"CLAUDE_CONTEXT_MILVUS_METADATA_CALL_TIMEOUT_MS",
+				strconv.Itoa(environmentTimeoutMS),
+			)
+			cfg := defaultWithPersistedConfig(
+				t,
+				persistedConfig{MilvusMetadataCallTimeoutMS: fileTimeoutMS},
+			)
+			if cfg.MilvusMetadataCallTimeoutMS != environmentTimeoutMS {
+				t.Fatalf(
+					"MilvusMetadataCallTimeoutMS = %d, want %d",
+					cfg.MilvusMetadataCallTimeoutMS,
+					environmentTimeoutMS,
+				)
+			}
+		},
+	)
 }
 
 // TestDefaultResolvesMilvusMutationCallTimeout pins the operator's tuning path
@@ -646,32 +778,58 @@ func TestDefaultResolvesMilvusMutationCallTimeout(t *testing.T) {
 	const fileTimeoutMS = 900000
 	const environmentTimeoutMS = 1800000
 
-	t.Run("unset", func(t *testing.T) {
-		t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", "")
-		cfg := defaultWithPersistedConfig(t, persistedConfig{})
-		if cfg.MilvusMutationCallTimeoutMS != 0 {
-			t.Errorf(
-				"MilvusMutationCallTimeoutMS = %d want 0 so the transport keeps its built-in bound",
-				cfg.MilvusMutationCallTimeoutMS,
+	t.Run(
+		"unset",
+		func(t *testing.T) {
+			t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", "")
+			cfg := defaultWithPersistedConfig(t, persistedConfig{})
+			if cfg.MilvusMutationCallTimeoutMS != 0 {
+				t.Errorf(
+					"MilvusMutationCallTimeoutMS = %d want 0 so the transport keeps its built-in bound",
+					cfg.MilvusMutationCallTimeoutMS,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"config file",
+		func(t *testing.T) {
+			t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", "")
+			cfg := defaultWithPersistedConfig(
+				t,
+				persistedConfig{MilvusMutationCallTimeoutMS: fileTimeoutMS},
 			)
-		}
-	})
+			if cfg.MilvusMutationCallTimeoutMS != fileTimeoutMS {
+				t.Errorf(
+					"MilvusMutationCallTimeoutMS = %d want %d",
+					cfg.MilvusMutationCallTimeoutMS,
+					fileTimeoutMS,
+				)
+			}
+		},
+	)
 
-	t.Run("config file", func(t *testing.T) {
-		t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", "")
-		cfg := defaultWithPersistedConfig(t, persistedConfig{MilvusMutationCallTimeoutMS: fileTimeoutMS})
-		if cfg.MilvusMutationCallTimeoutMS != fileTimeoutMS {
-			t.Errorf("MilvusMutationCallTimeoutMS = %d want %d", cfg.MilvusMutationCallTimeoutMS, fileTimeoutMS)
-		}
-	})
-
-	t.Run("environment overrides config file", func(t *testing.T) {
-		t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", strconv.Itoa(environmentTimeoutMS))
-		cfg := defaultWithPersistedConfig(t, persistedConfig{MilvusMutationCallTimeoutMS: fileTimeoutMS})
-		if cfg.MilvusMutationCallTimeoutMS != environmentTimeoutMS {
-			t.Errorf("MilvusMutationCallTimeoutMS = %d want %d", cfg.MilvusMutationCallTimeoutMS, environmentTimeoutMS)
-		}
-	})
+	t.Run(
+		"environment overrides config file",
+		func(t *testing.T) {
+			t.Setenv(
+				"CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS",
+				strconv.Itoa(environmentTimeoutMS),
+			)
+			cfg := defaultWithPersistedConfig(
+				t,
+				persistedConfig{MilvusMutationCallTimeoutMS: fileTimeoutMS},
+			)
+			if cfg.MilvusMutationCallTimeoutMS != environmentTimeoutMS {
+				t.Errorf(
+					"MilvusMutationCallTimeoutMS = %d want %d",
+					cfg.MilvusMutationCallTimeoutMS,
+					environmentTimeoutMS,
+				)
+			}
+		},
+	)
 }
 
 // TestMilvusMutationCallTimeoutRejectsUnconvertibleCounts pins the range check
@@ -693,17 +851,37 @@ func TestMilvusMutationCallTimeoutRejectsUnconvertibleCounts(t *testing.T) {
 		{name: "wrapping negative", milliseconds: -9223372036855, want: 0},
 		{name: "most negative", milliseconds: math.MinInt64, want: 0},
 		{name: "ordinary value", milliseconds: 900000, want: 15 * time.Minute},
-		{name: "largest convertible", milliseconds: int(MaxMilvusMutationCallTimeoutMS), want: time.Duration(MaxMilvusMutationCallTimeoutMS) * time.Millisecond},
-		{name: "one past the largest", milliseconds: int(MaxMilvusMutationCallTimeoutMS) + 1, want: 0},
+		{
+			name:         "largest convertible",
+			milliseconds: int(MaxMilvusMutationCallTimeoutMS),
+			want:         time.Duration(MaxMilvusMutationCallTimeoutMS) * time.Millisecond,
+		},
+		{
+			name:         "one past the largest",
+			milliseconds: int(MaxMilvusMutationCallTimeoutMS) + 1,
+			want:         0,
+		},
 		{name: "largest int", milliseconds: math.MaxInt64, want: 0},
 	}
 	for _, testCase := range cases {
 		got := MilvusMutationCallTimeout(testCase.milliseconds)
 		if got != testCase.want {
-			t.Errorf("%s: MilvusMutationCallTimeout(%d) = %s want %s", testCase.name, testCase.milliseconds, got, testCase.want)
+			t.Errorf(
+				"%s: MilvusMutationCallTimeout(%d) = %s want %s",
+				testCase.name,
+				testCase.milliseconds,
+				got,
+				testCase.want,
+			)
 		}
+
 		if got < 0 {
-			t.Errorf("%s: MilvusMutationCallTimeout(%d) = %s, a negative duration means the multiplication wrapped", testCase.name, testCase.milliseconds, got)
+			t.Errorf(
+				"%s: MilvusMutationCallTimeout(%d) = %s, a negative duration means the multiplication wrapped",
+				testCase.name,
+				testCase.milliseconds,
+				got,
+			)
 		}
 	}
 }
@@ -722,36 +900,68 @@ func TestDefaultRejectsOutOfRangeMilvusMutationCallTimeout(t *testing.T) {
 	}
 
 	for _, testCase := range outOfRange {
-		t.Run("file "+testCase.name, func(t *testing.T) {
-			t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", "")
-			cfg := defaultWithPersistedConfig(t, persistedConfig{MilvusMutationCallTimeoutMS: testCase.milliseconds})
-			if cfg.MilvusMutationCallTimeoutMS != 0 {
-				t.Errorf("MilvusMutationCallTimeoutMS = %d want 0 for an unconvertible file value", cfg.MilvusMutationCallTimeoutMS)
-			}
-		})
+		t.Run(
+			"file "+testCase.name,
+			func(t *testing.T) {
+				t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", "")
+				cfg := defaultWithPersistedConfig(
+					t,
+					persistedConfig{MilvusMutationCallTimeoutMS: testCase.milliseconds},
+				)
+				if cfg.MilvusMutationCallTimeoutMS != 0 {
+					t.Errorf(
+						"MilvusMutationCallTimeoutMS = %d want 0 for an unconvertible file value",
+						cfg.MilvusMutationCallTimeoutMS,
+					)
+				}
+			},
+		)
 
-		t.Run("environment "+testCase.name, func(t *testing.T) {
-			t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", strconv.Itoa(testCase.milliseconds))
-			cfg := defaultWithPersistedConfig(t, persistedConfig{})
-			if cfg.MilvusMutationCallTimeoutMS != 0 {
-				t.Errorf("MilvusMutationCallTimeoutMS = %d want 0 for an unconvertible environment value", cfg.MilvusMutationCallTimeoutMS)
-			}
-		})
+		t.Run(
+			"environment "+testCase.name,
+			func(t *testing.T) {
+				t.Setenv(
+					"CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS",
+					strconv.Itoa(testCase.milliseconds),
+				)
+				cfg := defaultWithPersistedConfig(t, persistedConfig{})
+				if cfg.MilvusMutationCallTimeoutMS != 0 {
+					t.Errorf(
+						"MilvusMutationCallTimeoutMS = %d want 0 for an unconvertible environment value",
+						cfg.MilvusMutationCallTimeoutMS,
+					)
+				}
+			},
+		)
 	}
 
-	t.Run("largest convertible survives both routes", func(t *testing.T) {
-		largest := int(MaxMilvusMutationCallTimeoutMS)
+	t.Run(
+		"largest convertible survives both routes",
+		func(t *testing.T) {
+			largest := int(MaxMilvusMutationCallTimeoutMS)
 
-		t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", "")
-		fromFile := defaultWithPersistedConfig(t, persistedConfig{MilvusMutationCallTimeoutMS: largest})
-		if fromFile.MilvusMutationCallTimeoutMS != largest {
-			t.Errorf("file MilvusMutationCallTimeoutMS = %d want %d", fromFile.MilvusMutationCallTimeoutMS, largest)
-		}
+			t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", "")
+			fromFile := defaultWithPersistedConfig(
+				t,
+				persistedConfig{MilvusMutationCallTimeoutMS: largest},
+			)
+			if fromFile.MilvusMutationCallTimeoutMS != largest {
+				t.Errorf(
+					"file MilvusMutationCallTimeoutMS = %d want %d",
+					fromFile.MilvusMutationCallTimeoutMS,
+					largest,
+				)
+			}
 
-		t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", strconv.Itoa(largest))
-		fromEnvironment := defaultWithPersistedConfig(t, persistedConfig{})
-		if fromEnvironment.MilvusMutationCallTimeoutMS != largest {
-			t.Errorf("environment MilvusMutationCallTimeoutMS = %d want %d", fromEnvironment.MilvusMutationCallTimeoutMS, largest)
-		}
-	})
+			t.Setenv("CLAUDE_CONTEXT_MILVUS_MUTATION_CALL_TIMEOUT_MS", strconv.Itoa(largest))
+			fromEnvironment := defaultWithPersistedConfig(t, persistedConfig{})
+			if fromEnvironment.MilvusMutationCallTimeoutMS != largest {
+				t.Errorf(
+					"environment MilvusMutationCallTimeoutMS = %d want %d",
+					fromEnvironment.MilvusMutationCallTimeoutMS,
+					largest,
+				)
+			}
+		},
+	)
 }

@@ -47,6 +47,7 @@ func New(ctx context.Context) Source {
 	if err != nil {
 		sessions = nil
 	}
+
 	return newLinuxSource(ctx, sessions, linuxThermalRoot, readMonotonicUsec)
 }
 
@@ -72,38 +73,42 @@ func (source *linuxSource) Sample(ctx context.Context) Snapshot {
 	if thermal.available {
 		snapshot.ThermalReason = ""
 	}
+
 	if snapshot.ThermalUnsafe {
 		snapshot.ThermalReason = thermalUnsafeReason
 	}
+
 	if source.sessions == nil {
 		return snapshot
 	}
+
 	sessions, err := source.sessions.Read(ctx)
 	if err != nil {
 		return snapshot
 	}
+
 	monotonicNowUsec, err := source.monotonicNow()
 	if err != nil {
 		return snapshot
 	}
+
 	currentUID, available := currentUserID()
 	if !available {
 		return snapshot
 	}
-	idleFor, active, available := selectedSessionIdleFor(
-		sessions,
-		currentUID,
-		monotonicNowUsec,
-	)
+
+	idleFor, active, available := selectedSessionIdleFor(sessions, currentUID, monotonicNowUsec)
 	if !available {
 		return snapshot
 	}
+
 	snapshot.InputAvailable = true
 	snapshot.InputIdleFor = idleFor
 	snapshot.InputReason = ""
 	if active {
 		snapshot.InputReason = inputActiveReason
 	}
+
 	return snapshot
 }
 
@@ -122,32 +127,42 @@ func selectedSessionIdleFor(
 	minimumIdleUsec := uint64(math.MaxUint64)
 	active := false
 	maximumDurationUsec := uint64(math.MaxInt64 / int64(time.Microsecond))
+
 	for _, session := range sessions {
-		if session.UID != currentUID || session.Remote || !session.Active || session.Class != "user" {
+		if session.UID != currentUID || session.Remote || !session.Active ||
+			session.Class != "user" {
 			continue
 		}
+
 		selectedCount++
 		if session.IdleSinceMonotonicUsec > monotonicNowUsec {
 			return 0, false, false
 		}
+
 		idleUsec := monotonicNowUsec - session.IdleSinceMonotonicUsec
 		if idleUsec > maximumDurationUsec {
 			return 0, false, false
 		}
+
 		if idleUsec < minimumIdleUsec {
 			minimumIdleUsec = idleUsec
 		}
+
 		if !session.IdleHint {
 			active = true
 		}
 	}
+
 	if selectedCount == 0 {
 		return 0, false, false
 	}
+
 	if active {
 		return 0, true, true
 	}
+
 	idleFor, available := durationFromMicroseconds(minimumIdleUsec)
+
 	return idleFor, false, available
 }
 
@@ -156,9 +171,11 @@ func currentUserID() (uint32, bool) {
 	if uid < 0 {
 		return 0, false
 	}
+
 	if uint64(uid) > math.MaxUint32 {
 		return 0, false
 	}
+
 	return uint32(uid), true
 }
 
@@ -167,5 +184,6 @@ func durationFromMicroseconds(microseconds uint64) (time.Duration, bool) {
 	if microseconds > maximumDurationUsec {
 		return 0, false
 	}
+
 	return time.Duration(int64(microseconds)) * time.Microsecond, true
 }

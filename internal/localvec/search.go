@@ -53,6 +53,7 @@ func (store *Store) Search(
 							return false
 						}
 					}
+
 					return matchesSearchPrefix(candidate.stored.RelativePath, prefix)
 				},
 			)
@@ -61,10 +62,12 @@ func (store *Store) Search(
 	if err != nil {
 		return nil, err
 	}
+
 	results := make([]model.StoredChunk, 0, len(scored))
 	for _, candidate := range scored {
 		results = append(results, candidate.stored.chunk(candidate.score))
 	}
+
 	return results, nil
 }
 
@@ -83,17 +86,21 @@ func (store *Store) searchRows(
 	if err := operationContextError(ctx, "search local vectors"); err != nil {
 		return nil, err
 	}
+
 	stored, err := store.collectionForName(collectionName, false)
 	if err != nil {
 		return nil, err
 	}
+
 	collectionSize, exists, err := stored.vectorCount()
 	if err != nil {
 		return nil, err
 	}
+
 	if !exists {
 		return nil, semantic.ErrCollectionMissing
 	}
+
 	normalizedQuery, err := store.embedQuery(ctx, collectionName, query)
 	if err != nil {
 		return nil, err
@@ -106,6 +113,7 @@ func (store *Store) searchRows(
 		if snapshotErr != nil {
 			return nil, snapshotErr
 		}
+
 		scored, err = scoreExactRows(ctx, collectionName, rows, normalizedQuery)
 	} else {
 		scored, err = scoreApproximateRowsAdaptive(
@@ -116,6 +124,7 @@ func (store *Store) searchRows(
 			filter,
 		)
 	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -124,6 +133,7 @@ func (store *Store) searchRows(
 		sortScoredRows(scored)
 		scored = filter(scored, resultLimit)
 	}
+
 	return scored, nil
 }
 
@@ -138,6 +148,7 @@ func (store *Store) embedQuery(
 	if err != nil {
 		return nil, err
 	}
+
 	queryText := store.cfg.QueryInstructionPrefix + query
 	queryVector, err := provider.Embed(ctx, queryText)
 	if err != nil {
@@ -149,8 +160,10 @@ func (store *Store) embedQuery(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("embed local vector query: %w", err)
 	}
+
 	normalizedQuery, err := normalizeVector(queryVector)
 	if err != nil {
 		slog.ErrorContext(
@@ -161,8 +174,10 @@ func (store *Store) embedQuery(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("normalize local vector query: %w", err)
 	}
+
 	return normalizedQuery, nil
 }
 
@@ -173,15 +188,16 @@ func scoreApproximateRowsAdaptive(
 	resultLimit int,
 	filter scoredRowFilter,
 ) ([]scoredRow, error) {
-	candidateCount := int(min(
-		int64(resultLimit)*int64(initialSearchOverfetchFactor),
-		int64(collectionSize),
-	))
+	candidateCount := int(
+		min(int64(resultLimit)*int64(initialSearchOverfetchFactor), int64(collectionSize)),
+	)
+
 	for {
 		scored, err := scoreApproximateRows(stored, query, candidateCount)
 		if err != nil {
 			return nil, err
 		}
+
 		sortScoredRows(scored)
 		filtered := filter(scored, resultLimit)
 		if len(filtered) >= resultLimit ||
@@ -189,10 +205,10 @@ func scoreApproximateRowsAdaptive(
 			len(scored) < candidateCount {
 			return filtered, nil
 		}
-		candidateCount = int(min(
-			int64(candidateCount)*int64(searchOverfetchGrowthFactor),
-			int64(collectionSize),
-		))
+
+		candidateCount = int(
+			min(int64(candidateCount)*int64(searchOverfetchGrowthFactor), int64(collectionSize)),
+		)
 	}
 }
 
@@ -206,11 +222,13 @@ func limitScoredRows(
 		if keep != nil && !keep(candidate) {
 			continue
 		}
+
 		filtered = append(filtered, candidate)
 		if len(filtered) >= resultLimit {
 			break
 		}
 	}
+
 	return filtered
 }
 
@@ -225,6 +243,7 @@ func scoreExactRows(
 		if err := operationContextError(ctx, "score local vectors"); err != nil {
 			return nil, err
 		}
+
 		score, err := dotProduct(query, candidate.Vector)
 		if err != nil {
 			slog.ErrorContext(
@@ -237,10 +256,13 @@ func scoreExactRows(
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("score local vector row %s: %w", candidate.ID, err)
 		}
+
 		scored = append(scored, scoredRow{stored: candidate, score: score})
 	}
+
 	return scored, nil
 }
 
@@ -253,16 +275,22 @@ func scoreApproximateRows(
 	if err != nil {
 		return nil, err
 	}
+
 	if !exists {
 		return nil, semantic.ErrCollectionMissing
 	}
+
 	scored := make([]scoredRow, 0, len(rows))
 	for index, candidate := range rows {
-		scored = append(scored, scoredRow{
-			stored: candidate,
-			score:  1 - float64(distances[index]),
-		})
+		scored = append(
+			scored,
+			scoredRow{
+				stored: candidate,
+				score:  1 - float64(distances[index]),
+			},
+		)
 	}
+
 	return scored, nil
 }
 
@@ -270,15 +298,20 @@ func scoreApproximateRows(
 // then ascending row id, the same total order the Milvus collection search
 // applies to its ranking.
 func sortScoredRows(scored []scoredRow) {
-	sort.SliceStable(scored, func(left int, right int) bool {
-		if scored[left].score != scored[right].score {
-			return scored[left].score > scored[right].score
-		}
-		if scored[left].stored.RelativePath != scored[right].stored.RelativePath {
-			return scored[left].stored.RelativePath < scored[right].stored.RelativePath
-		}
-		return scored[left].stored.ID < scored[right].stored.ID
-	})
+	sort.SliceStable(
+		scored,
+		func(left int, right int) bool {
+			if scored[left].score != scored[right].score {
+				return scored[left].score > scored[right].score
+			}
+
+			if scored[left].stored.RelativePath != scored[right].stored.RelativePath {
+				return scored[left].stored.RelativePath < scored[right].stored.RelativePath
+			}
+
+			return scored[left].stored.ID < scored[right].stored.ID
+		},
+	)
 }
 
 func dotProduct(left []float32, right []float32) (float64, error) {
@@ -289,10 +322,13 @@ func dotProduct(left []float32, right []float32) (float64, error) {
 			len(right),
 		)
 	}
+
 	var product float64
+
 	for index := range left {
 		product += float64(left[index]) * float64(right[index])
 	}
+
 	return product, nil
 }
 
@@ -303,11 +339,14 @@ func normalizeExtensions(extensionFilter []string) map[string]struct{} {
 		if normalized == "" {
 			continue
 		}
+
 		if !strings.HasPrefix(normalized, ".") {
 			normalized = "." + normalized
 		}
+
 		extensions[normalized] = struct{}{}
 	}
+
 	return extensions
 }
 
@@ -319,6 +358,7 @@ func matchesSearchPrefix(relativePath string, prefix string) bool {
 	if prefix == "" || prefix == "." {
 		return true
 	}
+
 	return relativePath == prefix || strings.HasPrefix(relativePath, prefix+"/")
 }
 
@@ -326,5 +366,6 @@ func effectiveLimit(limit int32) int {
 	if limit <= 0 {
 		return defaultSearchLimit
 	}
+
 	return int(limit)
 }

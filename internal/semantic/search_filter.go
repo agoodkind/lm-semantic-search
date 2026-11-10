@@ -16,9 +16,11 @@ func buildSearchFilter(extensionFilter []string, relativePathPrefixes []string) 
 	if extensionClause := buildExtensionFilter(extensionFilter); extensionClause != "" {
 		clauses = append(clauses, extensionClause)
 	}
+
 	if prefixClause := buildRelativePathPrefixSetFilter(relativePathPrefixes); prefixClause != "" {
 		clauses = append(clauses, prefixClause)
 	}
+
 	return strings.Join(clauses, " and ")
 }
 
@@ -33,12 +35,15 @@ func buildRelativePathPrefixSetFilter(relativePathPrefixes []string) string {
 			clauses = append(clauses, clause)
 		}
 	}
+
 	if len(clauses) == 0 {
 		return ""
 	}
+
 	if len(clauses) == 1 {
 		return clauses[0]
 	}
+
 	return "(" + strings.Join(clauses, " or ") + ")"
 }
 
@@ -51,7 +56,14 @@ func buildRelativePathPrefixFilter(relativePathPrefix string) string {
 	if trimmed == "" || trimmed == "." {
 		return ""
 	}
-	return fmt.Sprintf(`(%s == "%s" or %s like "%s/%%")`, relativePathFieldName, collection.EscapeString(trimmed), relativePathFieldName, escapeMilvusLikePattern(trimmed))
+
+	return fmt.Sprintf(
+		`(%s == "%s" or %s like "%s/%%")`,
+		relativePathFieldName,
+		collection.EscapeString(trimmed),
+		relativePathFieldName,
+		escapeMilvusLikePattern(trimmed),
+	)
 }
 
 // escapeMilvusLikePattern escapes a value for the literal portion of a Milvus
@@ -69,6 +81,7 @@ func buildRelativePathPrefixFilter(relativePathPrefix string) string {
 func escapeMilvusLikePattern(value string) string {
 	value = strings.ReplaceAll(value, "%", `\%`)
 	value = strings.ReplaceAll(value, "_", `\_`)
+
 	return collection.EscapeString(value)
 }
 
@@ -79,10 +92,13 @@ func buildExtensionFilter(extensionFilter []string) string {
 		if trimmedExtension == "" {
 			continue
 		}
+
 		cleanedExtensions = append(cleanedExtensions, fmt.Sprintf("%q", trimmedExtension))
 	}
+
 	if len(cleanedExtensions) == 0 {
 		return ""
 	}
+
 	return fileExtensionFieldName + " in [" + strings.Join(cleanedExtensions, ", ") + "]"
 }

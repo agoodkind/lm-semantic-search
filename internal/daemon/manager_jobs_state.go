@@ -43,6 +43,7 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 		manager.mu.Unlock()
 		return fmt.Errorf("start job: job missing")
 	}
+
 	now := clock.Now()
 	// A first build was pending while its job sat queued; now that the job is
 	// running, the codebase is actively indexing. Persist this transition before
@@ -53,10 +54,12 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 		manager.mu.Unlock()
 		return fmt.Errorf("start job: codebase missing")
 	}
+
 	if codebase.ActiveJobID != currentJob.ID {
 		manager.mu.Unlock()
 		return fmt.Errorf("start job: codebase ownership changed")
 	}
+
 	previousCodebase := codebase
 	switch codebase.Status {
 	case model.CodebaseStatusPending:
@@ -66,15 +69,39 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 		if err := manager.saveLocked(); err != nil {
 			manager.codebases[codebase.ID] = previousCodebase
 			manager.mu.Unlock()
-			wrapped := errors.Join(errRetryJobStart, fmt.Errorf("persist running codebase state: %w", err))
-			slog.Error("persist running codebase state", "err", wrapped, "codebase_id", codebase.ID, "job_id", currentJob.ID)
+			wrapped := errors.Join(
+				errRetryJobStart,
+				fmt.Errorf("persist running codebase state: %w", err),
+			)
+			slog.Error(
+				"persist running codebase state",
+				"err",
+				wrapped,
+				"codebase_id",
+				codebase.ID,
+				"job_id",
+				currentJob.ID,
+			)
+
 			return wrapped
 		}
 	case model.CodebaseStatusIndexing:
 		if err := manager.saveLocked(); err != nil {
 			manager.mu.Unlock()
-			wrapped := errors.Join(errRetryJobStart, fmt.Errorf("revalidate running codebase state: %w", err))
-			slog.Error("revalidate running codebase state", "err", wrapped, "codebase_id", codebase.ID, "job_id", currentJob.ID)
+			wrapped := errors.Join(
+				errRetryJobStart,
+				fmt.Errorf("revalidate running codebase state: %w", err),
+			)
+			slog.Error(
+				"revalidate running codebase state",
+				"err",
+				wrapped,
+				"codebase_id",
+				codebase.ID,
+				"job_id",
+				currentJob.ID,
+			)
+
 			return wrapped
 		}
 	case model.CodebaseStatusNotIndexed,
@@ -90,6 +117,7 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 		manager.mu.Unlock()
 		return fmt.Errorf("start job: codebase status %q cannot run", codebase.Status)
 	}
+
 	manager.mu.Unlock()
 
 	_, transitioned, transitionErr := manager.serializeJobTransitionLocked(
@@ -99,6 +127,7 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 			if current.State != model.JobStateQueued {
 				return false
 			}
+
 			current.State = model.JobStateRunning
 			current.SchedulingReason = model.SchedulingReasonUnspecified
 			current.UpdatedAt = now
@@ -107,6 +136,7 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 			current.Progress.LastEventAt = now
 			current.Progress.HeartbeatAt = now
 			current.Progress.OverallPercent = 0
+
 			return true
 		},
 	)
@@ -114,11 +144,17 @@ func (manager *Manager) updateJobRunning(job model.Job) error {
 		manager.mu.Lock()
 		manager.jobs[currentJob.ID] = currentJob
 		manager.mu.Unlock()
-		return errors.Join(errRetryJobStart, fmt.Errorf("append running job event: %w", transitionErr))
+
+		return errors.Join(
+			errRetryJobStart,
+			fmt.Errorf("append running job event: %w", transitionErr),
+		)
 	}
+
 	if !transitioned {
 		return fmt.Errorf("start job: job state changed")
 	}
+
 	return nil
 }
 
@@ -132,7 +168,9 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	if !found {
 		return
 	}
-	if job.State != model.JobStateQueued && job.State != model.JobStateRunning && job.State != model.JobStateCancelling {
+
+	if job.State != model.JobStateQueued && job.State != model.JobStateRunning &&
+		job.State != model.JobStateCancelling {
 		return
 	}
 
@@ -140,6 +178,7 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	if job.State == model.JobStateQueued {
 		job.State = model.JobStateRunning
 	}
+
 	job.UpdatedAt = now
 	job.Progress.Phase = progress.Phase
 	job.Progress.OverallPercent = progress.OverallPercent
@@ -149,6 +188,7 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 			job.Progress.ScopeUnit = "conversation"
 		}
 	}
+
 	job.Progress.FilesTotal = progress.FilesTotal
 	job.Progress.FilesProcessed = progress.FilesProcessed
 	job.Progress.FilesEmbedded = progress.FilesEmbedded
@@ -178,7 +218,11 @@ func (manager *Manager) updateJobProgress(jobID string, progress indexer.Progres
 	}
 }
 
-func (manager *Manager) updateDetachedJobProgress(jobID string, progress indexer.Progress, unit string) {
+func (manager *Manager) updateDetachedJobProgress(
+	jobID string,
+	progress indexer.Progress,
+	unit string,
+) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
@@ -186,7 +230,9 @@ func (manager *Manager) updateDetachedJobProgress(jobID string, progress indexer
 	if !found {
 		return
 	}
-	if job.State != model.JobStateQueued && job.State != model.JobStateRunning && job.State != model.JobStateCancelling {
+
+	if job.State != model.JobStateQueued && job.State != model.JobStateRunning &&
+		job.State != model.JobStateCancelling {
 		return
 	}
 
@@ -194,12 +240,14 @@ func (manager *Manager) updateDetachedJobProgress(jobID string, progress indexer
 	if job.State == model.JobStateQueued {
 		job.State = model.JobStateRunning
 	}
+
 	job.UpdatedAt = now
 	job.Progress.Phase = progress.Phase
 	job.Progress.OverallPercent = progress.OverallPercent
 	if unit != "" {
 		job.Progress.Unit = unit
 	}
+
 	job.Progress.FilesTotal = progress.FilesTotal
 	job.Progress.FilesProcessed = progress.FilesProcessed
 	job.Progress.FilesEmbedded = progress.FilesEmbedded
@@ -226,9 +274,12 @@ func (manager *Manager) updateDetachedJobHeartbeat(jobID string) {
 	if !found {
 		return
 	}
-	if job.State != model.JobStateQueued && job.State != model.JobStateRunning && job.State != model.JobStateCancelling {
+
+	if job.State != model.JobStateQueued && job.State != model.JobStateRunning &&
+		job.State != model.JobStateCancelling {
 		return
 	}
+
 	job.Progress.HeartbeatAt = clock.Now()
 	manager.jobs[jobID] = job
 }
@@ -240,7 +291,16 @@ func (manager *Manager) updateDetachedJobHeartbeat(jobID string) {
 // sitting frozen until the item finishes. It deliberately leaves the file
 // counters and the change breakdown alone, since reportDeltaProgress owns the
 // per-file totals and setJobDeltaCounts owns the added/modified/removed counts.
-func (manager *Manager) updateJobChunkProgress(jobID string, processed int32, reused int32, embedded int32, dropped int32, batchesTotal int32, batchesCompleted int32, rowsWritten int32) {
+func (manager *Manager) updateJobChunkProgress(
+	jobID string,
+	processed int32,
+	reused int32,
+	embedded int32,
+	dropped int32,
+	batchesTotal int32,
+	batchesCompleted int32,
+	rowsWritten int32,
+) {
 	manager.transitionMutex.Lock()
 	defer manager.transitionMutex.Unlock()
 	manager.mu.Lock()
@@ -250,7 +310,9 @@ func (manager *Manager) updateJobChunkProgress(jobID string, processed int32, re
 	if !found {
 		return
 	}
-	if job.State != model.JobStateQueued && job.State != model.JobStateRunning && job.State != model.JobStateCancelling {
+
+	if job.State != model.JobStateQueued && job.State != model.JobStateRunning &&
+		job.State != model.JobStateCancelling {
 		return
 	}
 
@@ -261,6 +323,7 @@ func (manager *Manager) updateJobChunkProgress(jobID string, processed int32, re
 	if job.State == model.JobStateQueued {
 		job.State = model.JobStateRunning
 	}
+
 	job.UpdatedAt = now
 	job.Progress.ChunksProcessed = processed
 	job.Progress.ChunksReused = reused
@@ -281,32 +344,42 @@ func (manager *Manager) updateCodebaseLiveTotalsLocked(job model.Job) {
 	if !found {
 		return
 	}
+
 	changed := false
 	lastRun := codebase.LastSuccessfulRun
 	if lastRun != nil && codebase.LiveFileTotal == 0 {
 		codebase.LiveFileTotal = lastRun.IndexedFiles
 		changed = true
 	}
+
 	if lastRun != nil && codebase.LiveChunkTotal == 0 {
 		codebase.LiveChunkTotal = lastRun.TotalChunks
 		changed = true
 	}
+
 	liveFiles := job.Progress.FilesInCodebase
 	if liveFiles == 0 {
 		liveFiles = job.Progress.FilesTotal
 	}
+
 	if liveFiles > 0 && codebase.LiveFileTotal != liveFiles {
 		codebase.LiveFileTotal = liveFiles
 		changed = true
 	}
-	liveChunks := max(job.Progress.ChunksTotal, max(job.Progress.ChunksProcessed, job.Progress.ChunksReused+job.Progress.ChunksEmbedded))
+
+	liveChunks := max(
+		job.Progress.ChunksTotal,
+		max(job.Progress.ChunksProcessed, job.Progress.ChunksReused+job.Progress.ChunksEmbedded),
+	)
 	if liveChunks > codebase.LiveChunkTotal {
 		codebase.LiveChunkTotal = liveChunks
 		changed = true
 	}
+
 	if !changed {
 		return
 	}
+
 	manager.codebases[job.CodebaseID] = codebase
 }
 
@@ -315,7 +388,13 @@ func (manager *Manager) updateCodebaseLiveTotalsLocked(job model.Job) {
 // the magnitude of a reconcile (for example after a large merge). The counts
 // are set once when the diff is known; updateJobProgress sets only the embed
 // counters, so these survive the per-file progress updates.
-func (manager *Manager) setJobDeltaCounts(jobID string, added int, modified int, removed int, filesInCodebase int) {
+func (manager *Manager) setJobDeltaCounts(
+	jobID string,
+	added int,
+	modified int,
+	removed int,
+	filesInCodebase int,
+) {
 	manager.transitionMutex.Lock()
 	defer manager.transitionMutex.Unlock()
 	manager.mu.Lock()
@@ -325,6 +404,7 @@ func (manager *Manager) setJobDeltaCounts(jobID string, added int, modified int,
 	if !found {
 		return
 	}
+
 	job.Progress.FilesAdded = safeInt32(added)
 	job.Progress.FilesModified = safeInt32(modified)
 	job.Progress.FilesRemoved = safeInt32(removed)
@@ -344,16 +424,30 @@ func (manager *Manager) setJobRunMode(jobID string, runMode string) {
 	if !found {
 		return
 	}
+
 	job.Progress.RunMode = runMode
 	manager.jobs[jobID] = job
 }
 
 // routeToBootstrap records the machine-readable reason before a job enters the
 // expensive bootstrap path.
-func (manager *Manager) routeToBootstrap(ctx context.Context, jobID string, reason bootstrapReason) {
+func (manager *Manager) routeToBootstrap(
+	ctx context.Context,
+	jobID string,
+	reason bootstrapReason,
+) {
 	caller := bootstrapRouteCaller()
 	if !reason.known() {
-		slog.WarnContext(ctx, "unknown bootstrap reason", "reason", reason, "caller", caller, "job_id", jobID)
+		slog.WarnContext(
+			ctx,
+			"unknown bootstrap reason",
+			"reason",
+			reason,
+			"caller",
+			caller,
+			"job_id",
+			jobID,
+		)
 	}
 
 	manager.transitionMutex.Lock()
@@ -364,12 +458,24 @@ func (manager *Manager) routeToBootstrap(ctx context.Context, jobID string, reas
 		manager.mu.Unlock()
 		return
 	}
+
 	job.Progress.BootstrapReason = string(reason)
 	codebaseID := job.CodebaseID
 	manager.jobs[jobID] = job
 	manager.mu.Unlock()
 
-	slog.InfoContext(ctx, "bootstrap.route", "reason", reason, "caller", caller, "codebase_id", codebaseID, "job_id", jobID)
+	slog.InfoContext(
+		ctx,
+		"bootstrap.route",
+		"reason",
+		reason,
+		"caller",
+		caller,
+		"codebase_id",
+		codebaseID,
+		"job_id",
+		jobID,
+	)
 }
 
 func (reason bootstrapReason) known() bool {
@@ -392,21 +498,31 @@ func bootstrapRouteCaller() string {
 	if !ok {
 		return ""
 	}
+
 	function := runtime.FuncForPC(pc)
 	if function == nil {
 		return ""
 	}
+
 	return function.Name()
 }
 
-func (manager *Manager) updateJobCompleted(ctx context.Context, jobID string, result indexer.Result) {
+func (manager *Manager) updateJobCompleted(
+	ctx context.Context,
+	jobID string,
+	result indexer.Result,
+) {
 	manager.policyMutationMutex.Lock()
 	followup := manager.updateJobCompletedWithPolicy(ctx, jobID, result)
 	manager.policyMutationMutex.Unlock()
 	manager.runCancellationFollowup(ctx, followup)
 }
 
-func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID string, result indexer.Result) cancellationFollowup {
+func (manager *Manager) updateJobCompletedWithPolicy(
+	ctx context.Context,
+	jobID string,
+	result indexer.Result,
+) cancellationFollowup {
 	job, jobEvent, transitioned := manager.prepareTerminalJobTransition(
 		jobID,
 		"job_completed",
@@ -414,9 +530,11 @@ func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID 
 			if job.State == model.JobStateCancelled {
 				return false
 			}
+
 			if job.State == model.JobStateCancelling {
 				return false
 			}
+
 			now := clock.Now()
 			job.State = model.JobStateCompleted
 			job.UpdatedAt = now
@@ -429,6 +547,7 @@ func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID 
 			job.Progress.ChunksGenerated = job.Progress.ChunksEmbedded
 			job.Progress.LastEventAt = now
 			job.Progress.HeartbeatAt = now
+
 			return true
 		},
 	)
@@ -439,14 +558,17 @@ func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID 
 		if found && current.State == model.JobStateCancelling {
 			return manager.updateJobCancelledWithPolicy(ctx, jobID)
 		}
+
 		return emptyCancellationFollowup()
 	}
+
 	metrics.JobCompleted()
 	if job.Progress.FilesEmbedded > 0 {
 		manager.mu.Lock()
 		manager.noteDependencyHealthyLocked()
 		manager.mu.Unlock()
 	}
+
 	now := *job.CompletedAt
 	manager.mu.Lock()
 	manager.forgetJobJournalLocked(jobID)
@@ -455,6 +577,7 @@ func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID 
 		manager.mu.Unlock()
 		return emptyCancellationFollowup()
 	}
+
 	delete(manager.failedBuildRetries, codebase.ID)
 	codebase.Status = model.CodebaseStatusIndexed
 	// Clear ActiveJobID only when it still points at this job, so a raced or
@@ -462,6 +585,7 @@ func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID 
 	if codebase.ActiveJobID == jobID {
 		codebase.ActiveJobID = ""
 	}
+
 	codebase.Quarantine = nil
 	codebase.LastSuccessfulRun = &model.IndexRunSummary{
 		IndexedFiles: result.IndexedFiles,
@@ -478,17 +602,34 @@ func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID 
 	manager.codebases[codebase.ID] = codebase
 	manager.writeCompletedArtifacts(ctx, codebase, result, jobID)
 	if err := manager.saveLocked(); err != nil {
-		slog.ErrorContext(ctx, "write registry after completed job failed", "job_id", jobID, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"write registry after completed job failed",
+			"job_id",
+			jobID,
+			"err",
+			err,
+		)
 	}
+
 	// drainPendingJobLocked no-ops unless ActiveJobID was cleared above, so a raced
 	// transition that did not own the slot never drains a duplicate.
 	drainedJobID, drained := manager.drainPendingJobLocked(ctx, codebase.ID)
 	manager.mu.Unlock()
 	if journalErr := manager.writeJobTransition(jobEvent); journalErr != nil {
-		slog.ErrorContext(ctx, "append completed job event failed", "job_id", jobID, "err", journalErr)
+		slog.ErrorContext(
+			ctx,
+			"append completed job event failed",
+			"job_id",
+			jobID,
+			"err",
+			journalErr,
+		)
 	}
+
 	manager.notifyIndexReady(ctx, codebase)
 	manager.startBuildsHeldForSource(ctx, codebase.ID)
+
 	return cancellationFollowup{
 		codebaseID:    codebase.ID,
 		drainedJobID:  drainedJobID,
@@ -500,15 +641,26 @@ func (manager *Manager) updateJobCompletedWithPolicy(ctx context.Context, jobID 
 // writeCompletedArtifacts persists the chunk cache and Merkle snapshot for a
 // completed job. Code codebases keep the whole-result chunk cache write; legacy
 // registry entries have an empty Kind and are treated as code.
-func (manager *Manager) writeCompletedArtifacts(ctx context.Context, codebase model.Codebase, result indexer.Result, jobID string) {
+func (manager *Manager) writeCompletedArtifacts(
+	ctx context.Context,
+	codebase model.Codebase,
+	result indexer.Result,
+	jobID string,
+) {
 	if codebase.Kind != model.CodebaseKindDocument {
 		chunkPath := manager.chunkPath(codebase.ID)
 		if err := store.WriteChunks(chunkPath, result.Chunks); err != nil {
 			slog.ErrorContext(ctx, "write chunk cache failed", "job_id", jobID, "err", err)
 		}
 	}
+
 	if len(result.FileHashes) != 0 {
-		snapshot := checkpointSnapshot(codebase.EffectiveConfig.IgnoreDigest, result.FileHashes, result.FileInodes, codebase.InodeTrackingDisabled)
+		snapshot := checkpointSnapshot(
+			codebase.EffectiveConfig.IgnoreDigest,
+			result.FileHashes,
+			result.FileInodes,
+			codebase.InodeTrackingDisabled,
+		)
 		if err := merkle.WriteSnapshot(codebase.MerkleSnapshotPath, snapshot); err != nil {
 			slog.ErrorContext(ctx, "write Merkle snapshot failed", "job_id", jobID, "err", err)
 		}
@@ -523,6 +675,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 		manager.policyMutationMutex.Unlock()
 		return
 	}
+
 	metrics.JobFailed()
 
 	manager.mu.Lock()
@@ -537,20 +690,32 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 		errorCode = job.Error.Code
 		traceID = job.Error.TraceID
 	}
+
 	codebase, found := manager.codebases[job.CodebaseID]
 	if !found {
 		manager.mu.Unlock()
 		if journalErr := manager.writeJobTransition(jobEvent); journalErr != nil {
-			slog.ErrorContext(ctx, "append failed job event failed", "job_id", jobID, "err", journalErr)
+			slog.ErrorContext(
+				ctx,
+				"append failed job event failed",
+				"job_id",
+				jobID,
+				"err",
+				journalErr,
+			)
 		}
+
 		manager.policyMutationMutex.Unlock()
+
 		return
 	}
+
 	// Clear ActiveJobID only when it still points at this job, so a raced or
 	// duplicate terminal transition never clobbers a drained successor.
 	if codebase.ActiveJobID == jobID {
 		codebase.ActiveJobID = ""
 	}
+
 	switch {
 	case infra:
 		// A shared-infrastructure failure is not the codebase's fault and never
@@ -574,11 +739,20 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 			JobID:                   jobID,
 		}
 	}
+
 	codebase.UpdatedAt = now
 	manager.codebases[codebase.ID] = codebase
 	if err := manager.saveLocked(); err != nil {
-		slog.ErrorContext(ctx, "write registry after failed job failed", "job_id", jobID, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"write registry after failed job failed",
+			"job_id",
+			jobID,
+			"err",
+			err,
+		)
 	}
+
 	// drainPendingJobLocked no-ops unless ActiveJobID was cleared above.
 	drainedJobID, drained := manager.drainPendingJobLocked(ctx, codebase.ID)
 	codebaseID := codebase.ID
@@ -586,6 +760,7 @@ func (manager *Manager) updateJobFailed(ctx context.Context, jobID string, runEr
 	if journalErr := manager.writeJobTransition(jobEvent); journalErr != nil {
 		slog.ErrorContext(ctx, "append failed job event failed", "job_id", jobID, "err", journalErr)
 	}
+
 	manager.policyMutationMutex.Unlock()
 	manager.notifyIndexStopped(ctx, codebaseID)
 	manager.startBuildsHeldForSource(ctx, codebaseID)
@@ -601,7 +776,11 @@ func (manager *Manager) updateDetachedJobFailed(ctx context.Context, jobID strin
 	}
 }
 
-func (manager *Manager) updateDetachedJobCompleted(ctx context.Context, jobID string, result indexer.Result) {
+func (manager *Manager) updateDetachedJobCompleted(
+	ctx context.Context,
+	jobID string,
+	result indexer.Result,
+) {
 	job, transitioned, journalErr := manager.serializeJobTransition(
 		jobID,
 		"job_completed",
@@ -609,6 +788,7 @@ func (manager *Manager) updateDetachedJobCompleted(ctx context.Context, jobID st
 			if isTerminalJobState(job.State) {
 				return false
 			}
+
 			now := clock.Now()
 			job.State = model.JobStateCompleted
 			job.UpdatedAt = now
@@ -625,16 +805,26 @@ func (manager *Manager) updateDetachedJobCompleted(ctx context.Context, jobID st
 			job.Progress.ChunksGenerated = job.Progress.ChunksEmbedded
 			job.Progress.LastEventAt = now
 			job.Progress.HeartbeatAt = now
+
 			return true
 		},
 	)
 	if !transitioned {
 		return
 	}
+
 	metrics.JobCompleted()
 	if journalErr != nil {
-		slog.ErrorContext(ctx, "append completed job event failed", "job_id", jobID, "err", journalErr)
+		slog.ErrorContext(
+			ctx,
+			"append completed job event failed",
+			"job_id",
+			jobID,
+			"err",
+			journalErr,
+		)
 	}
+
 	manager.mu.Lock()
 	manager.forgetJobJournalLocked(jobID)
 	manager.mu.Unlock()
@@ -649,6 +839,7 @@ func (manager *Manager) updateDetachedJobCancelled(ctx context.Context, jobID st
 			if isTerminalJobState(job.State) {
 				return false
 			}
+
 			now := clock.Now()
 			job.State = model.JobStateCancelled
 			job.UpdatedAt = now
@@ -656,16 +847,26 @@ func (manager *Manager) updateDetachedJobCancelled(ctx context.Context, jobID st
 			job.Progress.Phase = "cancelled"
 			job.Progress.LastEventAt = now
 			job.Progress.HeartbeatAt = now
+
 			return true
 		},
 	)
 	if !transitioned {
 		return
 	}
+
 	metrics.JobCancelled()
 	if journalErr != nil {
-		slog.ErrorContext(ctx, "append cancelled job event failed", "job_id", jobID, "err", journalErr)
+		slog.ErrorContext(
+			ctx,
+			"append cancelled job event failed",
+			"job_id",
+			jobID,
+			"err",
+			journalErr,
+		)
 	}
+
 	manager.mu.Lock()
 	manager.forgetJobJournalLocked(jobID)
 	manager.mu.Unlock()
@@ -679,6 +880,7 @@ func (manager *Manager) finishDetachedCodebase(ctx context.Context, job model.Jo
 		manager.mu.Unlock()
 		return
 	}
+
 	codebase.ActiveJobID = ""
 	switch job.State {
 	case model.JobStateCompleted:
@@ -697,11 +899,20 @@ func (manager *Manager) finishDetachedCodebase(ctx context.Context, job model.Jo
 		manager.mu.Unlock()
 		return
 	}
+
 	codebase.UpdatedAt = clock.Now()
 	manager.codebases[codebase.ID] = codebase
 	if err := manager.saveLocked(); err != nil {
-		slog.ErrorContext(ctx, "write registry after detached job terminal transition failed", "job_id", job.ID, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"write registry after detached job terminal transition failed",
+			"job_id",
+			job.ID,
+			"err",
+			err,
+		)
 	}
+
 	drainedJobID, drained := manager.drainPendingJobLocked(ctx, codebase.ID)
 	manager.mu.Unlock()
 	manager.notifyIndexStopped(ctx, codebase.ID)
@@ -741,9 +952,11 @@ func (manager *Manager) runCancellationFollowup(
 		manager.notifyIndexStopped(ctx, followup.codebaseID)
 		manager.startBuildsHeldForSource(ctx, followup.codebaseID)
 	}
+
 	if !followup.drained {
 		return
 	}
+
 	manager.runDrainedJob(ctx, followup.codebaseID, followup.drainedJobID)
 }
 
@@ -758,6 +971,7 @@ func (manager *Manager) updateJobCancelledWithPolicy(
 			if isTerminalJobState(job.State) {
 				return false
 			}
+
 			now := clock.Now()
 			job.State = model.JobStateCancelled
 			job.UpdatedAt = now
@@ -765,16 +979,26 @@ func (manager *Manager) updateJobCancelledWithPolicy(
 			job.Progress.Phase = "cancelled"
 			job.Progress.LastEventAt = now
 			job.Progress.HeartbeatAt = now
+
 			return true
 		},
 	)
 	if !transitioned {
 		return emptyCancellationFollowup()
 	}
+
 	metrics.JobCancelled()
 	if journalErr != nil {
-		slog.ErrorContext(ctx, "append cancelled job event failed", "job_id", jobID, "err", journalErr)
+		slog.ErrorContext(
+			ctx,
+			"append cancelled job event failed",
+			"job_id",
+			jobID,
+			"err",
+			journalErr,
+		)
 	}
+
 	now := *job.CompletedAt
 	manager.mu.Lock()
 	manager.forgetJobJournalLocked(jobID)
@@ -783,10 +1007,12 @@ func (manager *Manager) updateJobCancelledWithPolicy(
 		manager.mu.Unlock()
 		return emptyCancellationFollowup()
 	}
+
 	if codebase.ActiveJobID != jobID {
 		manager.mu.Unlock()
 		return emptyCancellationFollowup()
 	}
+
 	// A cancellation is not a failure: leave the codebase at its last-good state
 	// so a status check reflects the current usable state, not a stale failure.
 	// Clear ActiveJobID only when it still points at this job, so a raced or
@@ -797,12 +1023,21 @@ func (manager *Manager) updateJobCancelledWithPolicy(
 	codebase.UpdatedAt = now
 	manager.codebases[codebase.ID] = codebase
 	if err := manager.saveLocked(); err != nil {
-		slog.ErrorContext(ctx, "write registry after cancelled job failed", "job_id", jobID, "err", err)
+		slog.ErrorContext(
+			ctx,
+			"write registry after cancelled job failed",
+			"job_id",
+			jobID,
+			"err",
+			err,
+		)
 	}
+
 	// drainPendingJobLocked no-ops unless ActiveJobID was cleared above.
 	drainedJobID, drained := manager.drainPendingJobLocked(ctx, codebase.ID)
 	codebaseID := codebase.ID
 	manager.mu.Unlock()
+
 	return cancellationFollowup{
 		codebaseID:    codebaseID,
 		drainedJobID:  drainedJobID,
@@ -812,12 +1047,15 @@ func (manager *Manager) updateJobCancelledWithPolicy(
 }
 
 func codebaseStatusAfterCancellation(codebase model.Codebase) model.CodebaseStatus {
-	if codebase.Status != model.CodebaseStatusPending && codebase.Status != model.CodebaseStatusIndexing {
+	if codebase.Status != model.CodebaseStatusPending &&
+		codebase.Status != model.CodebaseStatusIndexing {
 		return codebase.Status
 	}
+
 	if codebase.LastSuccessfulRun != nil {
 		return model.CodebaseStatusIndexed
 	}
+
 	return model.CodebaseStatusNotIndexed
 }
 

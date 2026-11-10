@@ -7,6 +7,7 @@ import (
 
 func TestRegisterPublishesMilvusCollectionMetrics(t *testing.T) {
 	Register()
+
 	wantNames := []string{
 		"milvus_collection_loads_total",
 		"milvus_collection_load_failures_total",

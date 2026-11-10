@@ -115,10 +115,12 @@ func (handler callObserverStatsHandler) HandleRPC(ctx context.Context, rpcStats 
 	if !ok {
 		return
 	}
+
 	request, ok := payload.Payload.(proto.Message)
 	if !ok {
 		return
 	}
+
 	method, _ := ctx.Value(callObserverMethodContextKey{}).(string)
 	handler.observer(method, transmittedDatabaseName(ctx, request), request)
 }
@@ -129,10 +131,12 @@ func transmittedDatabaseName(ctx context.Context, request proto.Message) string 
 			return databaseName
 		}
 	}
+
 	outgoingMetadata, ok := metadata.FromOutgoingContext(ctx)
 	if !ok {
 		return ""
 	}
+
 	return strings.Join(outgoingMetadata.Get("dbname"), ",")
 }
 
@@ -160,7 +164,9 @@ func (timeouts CallTimeouts) WithMetadata(metadata time.Duration) CallTimeouts {
 	if metadata <= 0 {
 		return timeouts
 	}
+
 	timeouts.Metadata = metadata
+
 	return timeouts
 }
 
@@ -175,7 +181,9 @@ func (timeouts CallTimeouts) WithMutation(mutation time.Duration) CallTimeouts {
 	if mutation <= 0 {
 		return timeouts
 	}
+
 	timeouts.Mutation = mutation
+
 	return timeouts
 }
 
@@ -185,6 +193,7 @@ func (timeouts CallTimeouts) forMethod(method string) time.Duration {
 	if slices.Contains(mutationMethodNames, method) {
 		return timeouts.Mutation
 	}
+
 	return timeouts.Metadata
 }
 
@@ -214,6 +223,7 @@ func (reportable deadlineReportable) ClientReporter(
 		timeout:      timeout,
 		logger:       reportable.logger,
 	}
+
 	return reporter, callContext
 }
 
@@ -232,12 +242,17 @@ func (reporter *deadlineReporter) PostCall(err error, duration time.Duration) {
 	if status.Code(err) != codes.DeadlineExceeded && !errors.Is(err, context.DeadlineExceeded) {
 		return
 	}
+
 	reporter.logger.Error(
 		"milvus call deadline exceeded",
-		"method", reporter.method,
-		"timeout_ms", reporter.timeout.Milliseconds(),
-		"duration_ms", duration.Milliseconds(),
-		"err", err,
+		"method",
+		reporter.method,
+		"timeout_ms",
+		reporter.timeout.Milliseconds(),
+		"duration_ms",
+		duration.Milliseconds(),
+		"err",
+		err,
 	)
 }
 
@@ -257,8 +272,12 @@ func DialOptions(
 	}
 	observer, _ := ctx.Value(CallObserverContextKey{}).(CallObserver)
 	if observer != nil {
-		dialOptions = append(dialOptions, grpc.WithStatsHandler(callObserverStatsHandler{observer: observer}))
+		dialOptions = append(
+			dialOptions,
+			grpc.WithStatsHandler(callObserverStatsHandler{observer: observer}),
+		)
 	}
+
 	return dialOptions
 }
 
@@ -274,10 +293,14 @@ func keepaliveParameters() keepalive.ClientParameters {
 	}
 }
 
-func milvusDeadlineInterceptor(logger *slog.Logger, timeouts CallTimeouts) grpc.UnaryClientInterceptor {
+func milvusDeadlineInterceptor(
+	logger *slog.Logger,
+	timeouts CallTimeouts,
+) grpc.UnaryClientInterceptor {
 	reportable := deadlineReportable{
 		timeouts: timeouts,
 		logger:   logger,
 	}
+
 	return interceptors.UnaryClientInterceptor(reportable)
 }

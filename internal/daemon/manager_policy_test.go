@@ -47,6 +47,7 @@ func TestDeduplicatedPolicyOverrideQueuesSuccessor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath: %v", err)
 	}
+
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexing
 	job := newQueuedJob(
@@ -85,6 +86,7 @@ func TestDeduplicatedPolicyOverrideQueuesSuccessor(t *testing.T) {
 	if !found {
 		t.Fatal("deduplicated override did not queue a successor")
 	}
+
 	if pending.policyPatch.Priority == nil ||
 		*pending.policyPatch.Priority != model.JobPriorityHigh {
 		t.Fatalf("pending override = %+v, want high priority", pending.policyPatch)
@@ -97,6 +99,7 @@ func TestFirstExplicitIndexPersistsPolicyAfterDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath: %v", err)
 	}
+
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusDiscovered
 	codebase.PolicyPendingInitialization = true
@@ -124,20 +127,35 @@ func TestFirstExplicitIndexPersistsPolicyAfterDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartIndexWithPolicy: %v", err)
 	}
+
 	want := model.SchedulingPolicy{
 		Priority:         model.JobPriorityHigh,
 		Quiet:            true,
 		IdleAfterSeconds: 600,
 	}
 	if updated.SchedulingPolicy != want || updated.PolicyPendingInitialization {
-		t.Fatalf("codebase policy = %+v pending=%v, want %+v and false", updated.SchedulingPolicy, updated.PolicyPendingInitialization, want)
+		t.Fatalf(
+			"codebase policy = %+v pending=%v, want %+v and false",
+			updated.SchedulingPolicy,
+			updated.PolicyPendingInitialization,
+			want,
+		)
 	}
+
 	if job.EffectiveSchedulingPolicy != want || job.SchedulingOverride != patch {
-		t.Fatalf("job policy = %+v override = %+v, want %+v and %+v", job.EffectiveSchedulingPolicy, job.SchedulingOverride, want, patch)
+		t.Fatalf(
+			"job policy = %+v override = %+v, want %+v and %+v",
+			job.EffectiveSchedulingPolicy,
+			job.SchedulingOverride,
+			want,
+			patch,
+		)
 	}
+
 	if job.QueueSequence == 0 {
 		t.Fatal("job QueueSequence = 0, want assigned before journaling")
 	}
+
 	waitForTerminalJob(t, manager, job.ID)
 }
 
@@ -150,6 +168,7 @@ func TestExistingCodebaseUsesIndexPolicyForOneRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath: %v", err)
 	}
+
 	codebase := newCodebaseRecord(canonicalPath)
 	stored := model.SchedulingPolicy{
 		Priority:         model.JobPriorityNormal,
@@ -177,6 +196,7 @@ func TestExistingCodebaseUsesIndexPolicyForOneRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartIndexWithPolicy: %v", err)
 	}
+
 	wantEffective := model.SchedulingPolicy{
 		Priority:         model.JobPriorityLow,
 		Quiet:            true,
@@ -185,21 +205,34 @@ func TestExistingCodebaseUsesIndexPolicyForOneRun(t *testing.T) {
 	if updated.SchedulingPolicy != stored {
 		t.Fatalf("stored policy = %+v, want %+v", updated.SchedulingPolicy, stored)
 	}
+
 	if job.EffectiveSchedulingPolicy != wantEffective || job.SchedulingOverride != patch {
-		t.Fatalf("job policy = %+v override = %+v, want %+v and %+v", job.EffectiveSchedulingPolicy, job.SchedulingOverride, wantEffective, patch)
+		t.Fatalf(
+			"job policy = %+v override = %+v, want %+v and %+v",
+			job.EffectiveSchedulingPolicy,
+			job.SchedulingOverride,
+			wantEffective,
+			patch,
+		)
 	}
+
 	waitForTerminalJob(t, manager, job.ID)
 }
 
 func waitForTerminalJob(t *testing.T, manager *Manager, jobID string) {
 	t.Helper()
-	waitForCondition(t, func() bool {
-		job, found := manager.GetJob(jobID)
-		if !found {
-			return false
-		}
-		return job.State == model.JobStateCompleted || job.State == model.JobStateFailed || job.State == model.JobStateCancelled
-	})
+	waitForCondition(
+		t,
+		func() bool {
+			job, found := manager.GetJob(jobID)
+			if !found {
+				return false
+			}
+
+			return job.State == model.JobStateCompleted || job.State == model.JobStateFailed ||
+				job.State == model.JobStateCancelled
+		},
+	)
 }
 
 func TestPendingCodeRequestMergesPolicyFields(t *testing.T) {
@@ -208,6 +241,7 @@ func TestPendingCodeRequestMergesPolicyFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath: %v", err)
 	}
+
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	indexConfig := defaultIndexConfig()
@@ -217,42 +251,53 @@ func TestPendingCodeRequestMergesPolicyFields(t *testing.T) {
 	secondIdleAfterSeconds := int32(900)
 	manager.mu.Lock()
 	manager.codebases[codebase.ID] = codebase
-	manager.mergePendingCodeRequestLocked(codebase.ID, pendingCodeRequest{
-		requestedPath: repoPath,
-		canonicalPath: canonicalPath,
-		client:        testClientInfo(),
-		indexConfig:   indexConfig,
-		policyPatch:   model.SchedulingPolicyPatch{Priority: &firstPriority},
-	})
-	manager.mergePendingCodeRequestLocked(codebase.ID, pendingCodeRequest{
-		requestedPath: repoPath,
-		canonicalPath: canonicalPath,
-		client:        testClientInfo(),
-		indexConfig:   indexConfig,
-		policyPatch: model.SchedulingPolicyPatch{
-			Quiet:            &secondQuiet,
-			IdleAfterSeconds: &secondIdleAfterSeconds,
+	manager.mergePendingCodeRequestLocked(
+		codebase.ID,
+		pendingCodeRequest{
+			requestedPath: repoPath,
+			canonicalPath: canonicalPath,
+			client:        testClientInfo(),
+			indexConfig:   indexConfig,
+			policyPatch:   model.SchedulingPolicyPatch{Priority: &firstPriority},
 		},
-	})
+	)
+	manager.mergePendingCodeRequestLocked(
+		codebase.ID,
+		pendingCodeRequest{
+			requestedPath: repoPath,
+			canonicalPath: canonicalPath,
+			client:        testClientInfo(),
+			indexConfig:   indexConfig,
+			policyPatch: model.SchedulingPolicyPatch{
+				Quiet:            &secondQuiet,
+				IdleAfterSeconds: &secondIdleAfterSeconds,
+			},
+		},
+	)
 	merged := manager.pendingCodeJobs[codebase.ID]
 	jobID, drained := manager.drainPendingJobLocked(context.Background(), codebase.ID)
 	manager.mu.Unlock()
 	if !drained || jobID == "" {
 		t.Fatal("pending request did not drain into a successor job")
 	}
+
 	if merged.policyPatch.Priority == nil || *merged.policyPatch.Priority != model.JobPriorityHigh {
 		t.Fatalf("merged priority = %v, want high", merged.policyPatch.Priority)
 	}
+
 	if merged.policyPatch.Quiet == nil || !*merged.policyPatch.Quiet {
 		t.Fatalf("merged quiet = %v, want true", merged.policyPatch.Quiet)
 	}
+
 	if merged.policyPatch.IdleAfterSeconds == nil || *merged.policyPatch.IdleAfterSeconds != 900 {
 		t.Fatalf("merged idle after = %v, want 900", merged.policyPatch.IdleAfterSeconds)
 	}
+
 	job, found := manager.GetJob(jobID)
 	if !found {
 		t.Fatalf("drained job %q is missing", jobID)
 	}
+
 	want := model.SchedulingPolicy{
 		Priority:         model.JobPriorityHigh,
 		Quiet:            true,
@@ -282,7 +327,8 @@ func TestResumePlanPreservesInterruptedEffectivePolicy(t *testing.T) {
 		schedulingOverride:        wantOverride,
 		queueSequence:             7,
 	}
-	if plan.effectiveSchedulingPolicy != wantPolicy || plan.schedulingOverride != wantOverride || plan.queueSequence != 7 {
+	if plan.effectiveSchedulingPolicy != wantPolicy || plan.schedulingOverride != wantOverride ||
+		plan.queueSequence != 7 {
 		t.Fatalf("resume plan = %+v, want preserved policy, override, and queue sequence", plan)
 	}
 }
@@ -295,7 +341,13 @@ func TestRecoveredJobsKeepQueueSequenceOrder(t *testing.T) {
 		{codebaseID: "second", queueSequence: 20},
 	}
 	sortResumePlans(plans)
-	got := []string{plans[0].codebaseID, plans[1].codebaseID, plans[2].codebaseID, plans[3].codebaseID}
+	got := []string{
+		plans[0].codebaseID,
+		plans[1].codebaseID,
+		plans[2].codebaseID,
+		plans[3].codebaseID,
+	}
+
 	want := []string{"first", "second", "third", "unknown"}
 	for index := range want {
 		if got[index] != want[index] {
@@ -311,97 +363,104 @@ func TestUpdateCodebasePolicyReclassifiesActiveQueuedAndPausedJobs(t *testing.T)
 		model.JobStatePaused,
 	}
 	for _, state := range states {
-		t.Run(string(state), func(t *testing.T) {
-			manager, cfg, repoPath := newTestManager(t)
-			manager.jobScheduler.Close()
-			manager.jobScheduler = jobscheduler.New(
-				context.Background(),
-				1,
-				readyActivitySource{},
-			)
-			t.Cleanup(manager.jobScheduler.Close)
+		t.Run(
+			string(state),
+			func(t *testing.T) {
+				manager, cfg, repoPath := newTestManager(t)
+				manager.jobScheduler.Close()
+				manager.jobScheduler = jobscheduler.New(
+					context.Background(),
+					1,
+					readyActivitySource{},
+				)
+				t.Cleanup(manager.jobScheduler.Close)
 
-			originalCodebase, originalJob := seedPolicyUpdateJob(
-				t,
-				manager,
-				repoPath,
-				state,
-			)
-			cleanupScheduler := registerPolicyUpdateSchedulerJob(
-				t,
-				manager.jobScheduler,
-				originalJob,
-			)
-			t.Cleanup(cleanupScheduler)
+				originalCodebase, originalJob := seedPolicyUpdateJob(t, manager, repoPath, state)
+				cleanupScheduler := registerPolicyUpdateSchedulerJob(
+					t,
+					manager.jobScheduler,
+					originalJob,
+				)
+				t.Cleanup(cleanupScheduler)
 
-			priority := model.JobPriorityHigh
-			updated, err := manager.UpdateCodebasePolicy(
-				context.Background(),
-				repoPath,
-				model.SchedulingPolicyPatch{Priority: &priority},
-			)
-			if err != nil {
-				t.Fatalf("UpdateCodebasePolicy: %v", err)
-			}
-			if updated.SchedulingPolicy.Priority != model.JobPriorityHigh ||
-				updated.SchedulingPolicy.Quiet != originalCodebase.SchedulingPolicy.Quiet ||
-				updated.SchedulingPolicy.IdleAfterSeconds != originalCodebase.SchedulingPolicy.IdleAfterSeconds ||
-				updated.PolicyPendingInitialization {
-				t.Fatalf("updated codebase policy = %+v pending=%v", updated.SchedulingPolicy, updated.PolicyPendingInitialization)
-			}
-
-			job, found := manager.GetJob(originalJob.ID)
-			if !found {
-				t.Fatalf("updated job %q is missing", originalJob.ID)
-			}
-			if job.State != state ||
-				job.EffectiveSchedulingPolicy.Priority != model.JobPriorityHigh ||
-				!job.EffectiveSchedulingPolicy.Quiet ||
-				job.EffectiveSchedulingPolicy.IdleAfterSeconds != 900 {
-				t.Fatalf("updated job = %+v", job)
-			}
-			if job.SchedulingOverride.Priority != nil ||
-				job.SchedulingOverride.Quiet == nil ||
-				!*job.SchedulingOverride.Quiet ||
-				job.SchedulingOverride.IdleAfterSeconds == nil ||
-				*job.SchedulingOverride.IdleAfterSeconds != 900 {
-				t.Fatalf("updated override = %+v", job.SchedulingOverride)
-			}
-
-			snapshot := manager.jobScheduler.Snapshot()
-			switch state {
-			case model.JobStateRunning:
-				if snapshot.Running[model.JobPriorityHigh] != 1 ||
-					snapshot.Running[model.JobPriorityLow] != 0 {
-					t.Fatalf("running snapshot = %+v", snapshot)
+				priority := model.JobPriorityHigh
+				updated, err := manager.UpdateCodebasePolicy(
+					context.Background(),
+					repoPath,
+					model.SchedulingPolicyPatch{Priority: &priority},
+				)
+				if err != nil {
+					t.Fatalf("UpdateCodebasePolicy: %v", err)
 				}
-			case model.JobStateQueued:
-				if snapshot.Queued[model.JobPriorityHigh] != 1 ||
-					snapshot.Queued[model.JobPriorityLow] != 0 {
-					t.Fatalf("queued snapshot = %+v", snapshot)
-				}
-			case model.JobStatePaused:
-				if snapshot.Paused[model.JobPriorityHigh] != 1 ||
-					snapshot.Paused[model.JobPriorityLow] != 0 {
-					t.Fatalf("paused snapshot = %+v", snapshot)
-				}
-			case model.JobStateCancelling,
-				model.JobStateCompleted,
-				model.JobStateFailed,
-				model.JobStateCancelled:
-				t.Fatalf("unexpected test state %q", state)
-			}
 
-			registry, err := store.ReadRegistry(cfg.RegistryPath)
-			if err != nil {
-				t.Fatalf("ReadRegistry: %v", err)
-			}
-			if len(registry.Codebases) != 1 ||
-				registry.Codebases[0].SchedulingPolicy != updated.SchedulingPolicy {
-				t.Fatalf("stored registry = %+v", registry.Codebases)
-			}
-			assertNoPolicyUpdateMarker(t, cfg.RegistryPath)
-		})
+				if updated.SchedulingPolicy.Priority != model.JobPriorityHigh ||
+					updated.SchedulingPolicy.Quiet != originalCodebase.SchedulingPolicy.Quiet ||
+					updated.SchedulingPolicy.IdleAfterSeconds != originalCodebase.SchedulingPolicy.IdleAfterSeconds ||
+					updated.PolicyPendingInitialization {
+					t.Fatalf(
+						"updated codebase policy = %+v pending=%v",
+						updated.SchedulingPolicy,
+						updated.PolicyPendingInitialization,
+					)
+				}
+
+				job, found := manager.GetJob(originalJob.ID)
+				if !found {
+					t.Fatalf("updated job %q is missing", originalJob.ID)
+				}
+
+				if job.State != state ||
+					job.EffectiveSchedulingPolicy.Priority != model.JobPriorityHigh ||
+					!job.EffectiveSchedulingPolicy.Quiet ||
+					job.EffectiveSchedulingPolicy.IdleAfterSeconds != 900 {
+					t.Fatalf("updated job = %+v", job)
+				}
+
+				if job.SchedulingOverride.Priority != nil ||
+					job.SchedulingOverride.Quiet == nil ||
+					!*job.SchedulingOverride.Quiet ||
+					job.SchedulingOverride.IdleAfterSeconds == nil ||
+					*job.SchedulingOverride.IdleAfterSeconds != 900 {
+					t.Fatalf("updated override = %+v", job.SchedulingOverride)
+				}
+
+				snapshot := manager.jobScheduler.Snapshot()
+				switch state {
+				case model.JobStateRunning:
+					if snapshot.Running[model.JobPriorityHigh] != 1 ||
+						snapshot.Running[model.JobPriorityLow] != 0 {
+						t.Fatalf("running snapshot = %+v", snapshot)
+					}
+				case model.JobStateQueued:
+					if snapshot.Queued[model.JobPriorityHigh] != 1 ||
+						snapshot.Queued[model.JobPriorityLow] != 0 {
+						t.Fatalf("queued snapshot = %+v", snapshot)
+					}
+				case model.JobStatePaused:
+					if snapshot.Paused[model.JobPriorityHigh] != 1 ||
+						snapshot.Paused[model.JobPriorityLow] != 0 {
+						t.Fatalf("paused snapshot = %+v", snapshot)
+					}
+				case model.JobStateCancelling,
+					model.JobStateCompleted,
+					model.JobStateFailed,
+					model.JobStateCancelled:
+					t.Fatalf("unexpected test state %q", state)
+				}
+
+				registry, err := store.ReadRegistry(cfg.RegistryPath)
+				if err != nil {
+					t.Fatalf("ReadRegistry: %v", err)
+				}
+
+				if len(registry.Codebases) != 1 ||
+					registry.Codebases[0].SchedulingPolicy != updated.SchedulingPolicy {
+					t.Fatalf("stored registry = %+v", registry.Codebases)
+				}
+
+				assertNoPolicyUpdateMarker(t, cfg.RegistryPath)
+			},
+		)
 	}
 }
 
@@ -414,75 +473,74 @@ func TestUpdateCodebasePolicyReclassifiesWatcherQueuedRunningAndPausedWork(
 		model.JobStatePaused,
 	}
 	for _, state := range states {
-		t.Run(string(state), func(t *testing.T) {
-			manager, _, repoPath := newTestManager(t)
-			manager.jobScheduler.Close()
-			manager.jobScheduler = jobscheduler.New(
-				context.Background(),
-				1,
-				readyActivitySource{},
-			)
-			t.Cleanup(manager.jobScheduler.Close)
-
-			_, watcherJob := seedWatcherPolicyUpdateJob(
-				t,
-				manager,
-				repoPath,
-				state,
-			)
-			cleanupScheduler := registerPolicyUpdateSchedulerJob(
-				t,
-				manager.jobScheduler,
-				watcherJob,
-			)
-			t.Cleanup(cleanupScheduler)
-
-			priority := model.JobPriorityHigh
-			if _, err := manager.UpdateCodebasePolicy(
-				context.Background(),
-				repoPath,
-				model.SchedulingPolicyPatch{Priority: &priority},
-			); err != nil {
-				t.Fatalf("UpdateCodebasePolicy: %v", err)
-			}
-
-			updatedJob, found := manager.GetJob(watcherJob.ID)
-			if !found {
-				t.Fatalf("watcher job %q is missing", watcherJob.ID)
-			}
-			if updatedJob.EffectiveSchedulingPolicy.Priority != model.JobPriorityHigh ||
-				updatedJob.SchedulingOverride.Priority != nil {
-				t.Fatalf(
-					"watcher policy = %+v override=%+v, want high without priority override",
-					updatedJob.EffectiveSchedulingPolicy,
-					updatedJob.SchedulingOverride,
+		t.Run(
+			string(state),
+			func(t *testing.T) {
+				manager, _, repoPath := newTestManager(t)
+				manager.jobScheduler.Close()
+				manager.jobScheduler = jobscheduler.New(
+					context.Background(),
+					1,
+					readyActivitySource{},
 				)
-			}
+				t.Cleanup(manager.jobScheduler.Close)
 
-			snapshot := manager.jobScheduler.Snapshot()
-			switch state {
-			case model.JobStateQueued:
-				if snapshot.Queued[model.JobPriorityHigh] != 1 ||
-					snapshot.Queued[model.JobPriorityLow] != 0 {
-					t.Fatalf("queued watcher snapshot = %+v", snapshot)
+				_, watcherJob := seedWatcherPolicyUpdateJob(t, manager, repoPath, state)
+				cleanupScheduler := registerPolicyUpdateSchedulerJob(
+					t,
+					manager.jobScheduler,
+					watcherJob,
+				)
+				t.Cleanup(cleanupScheduler)
+
+				priority := model.JobPriorityHigh
+				if _, err := manager.UpdateCodebasePolicy(
+					context.Background(),
+					repoPath,
+					model.SchedulingPolicyPatch{Priority: &priority},
+				); err != nil {
+					t.Fatalf("UpdateCodebasePolicy: %v", err)
 				}
-			case model.JobStateRunning:
-				if snapshot.Running[model.JobPriorityHigh] != 1 ||
-					snapshot.Running[model.JobPriorityLow] != 0 {
-					t.Fatalf("running watcher snapshot = %+v", snapshot)
+
+				updatedJob, found := manager.GetJob(watcherJob.ID)
+				if !found {
+					t.Fatalf("watcher job %q is missing", watcherJob.ID)
 				}
-			case model.JobStatePaused:
-				if snapshot.Paused[model.JobPriorityHigh] != 1 ||
-					snapshot.Paused[model.JobPriorityLow] != 0 {
-					t.Fatalf("paused watcher snapshot = %+v", snapshot)
+
+				if updatedJob.EffectiveSchedulingPolicy.Priority != model.JobPriorityHigh ||
+					updatedJob.SchedulingOverride.Priority != nil {
+					t.Fatalf(
+						"watcher policy = %+v override=%+v, want high without priority override",
+						updatedJob.EffectiveSchedulingPolicy,
+						updatedJob.SchedulingOverride,
+					)
 				}
-			case model.JobStateCancelling,
-				model.JobStateCompleted,
-				model.JobStateFailed,
-				model.JobStateCancelled:
-				t.Fatalf("unexpected watcher test state %q", state)
-			}
-		})
+
+				snapshot := manager.jobScheduler.Snapshot()
+				switch state {
+				case model.JobStateQueued:
+					if snapshot.Queued[model.JobPriorityHigh] != 1 ||
+						snapshot.Queued[model.JobPriorityLow] != 0 {
+						t.Fatalf("queued watcher snapshot = %+v", snapshot)
+					}
+				case model.JobStateRunning:
+					if snapshot.Running[model.JobPriorityHigh] != 1 ||
+						snapshot.Running[model.JobPriorityLow] != 0 {
+						t.Fatalf("running watcher snapshot = %+v", snapshot)
+					}
+				case model.JobStatePaused:
+					if snapshot.Paused[model.JobPriorityHigh] != 1 ||
+						snapshot.Paused[model.JobPriorityLow] != 0 {
+						t.Fatalf("paused watcher snapshot = %+v", snapshot)
+					}
+				case model.JobStateCancelling,
+					model.JobStateCompleted,
+					model.JobStateFailed,
+					model.JobStateCancelled:
+					t.Fatalf("unexpected watcher test state %q", state)
+				}
+			},
+		)
 	}
 }
 
@@ -527,16 +585,20 @@ func TestUpdateCodebasePolicyChangesAcceptedPendingWork(t *testing.T) {
 					Removed:  false,
 				}, ctx.Err()
 			}
+
 			content := "package main\n"
+
 			return indexer.OneFileResult{
-				Chunks: []model.StoredChunk{{
-					Content:       content,
-					RelativePath:  relativePath,
-					StartLine:     1,
-					EndLine:       1,
-					Language:      "go",
-					FileExtension: ".go",
-				}},
+				Chunks: []model.StoredChunk{
+					{
+						Content:       content,
+						RelativePath:  relativePath,
+						StartLine:     1,
+						EndLine:       1,
+						Language:      "go",
+						FileExtension: ".go",
+					},
+				},
 				FileHash: hashText(content),
 				Skipped:  false,
 				Removed:  false,
@@ -555,6 +617,7 @@ func TestUpdateCodebasePolicyChangesAcceptedPendingWork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartIndex first job: %v", err)
 	}
+
 	waitForPolicyRunnerEntry(t, entered)
 
 	pendingConfig := defaultIndexConfig()
@@ -573,6 +636,7 @@ func TestUpdateCodebasePolicyChangesAcceptedPendingWork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartIndexWithPolicy pending job: %v", err)
 	}
+
 	if !deduplicated || deduplicatedJob.ID != firstJob.ID {
 		t.Fatalf(
 			"pending request returned job=%q deduplicated=%v, want active job %q",
@@ -590,6 +654,7 @@ func TestUpdateCodebasePolicyChangesAcceptedPendingWork(t *testing.T) {
 	); err != nil {
 		t.Fatalf("UpdateCodebasePolicy: %v", err)
 	}
+
 	manager.mu.Lock()
 	pending := manager.pendingCodeJobs[firstJob.CodebaseID]
 	manager.mu.Unlock()
@@ -602,18 +667,25 @@ func TestUpdateCodebasePolicyChangesAcceptedPendingWork(t *testing.T) {
 	release <- struct{}{}
 	waitForPolicyRunnerEntry(t, entered)
 	var successor model.Job
-	waitForCondition(t, func() bool {
-		manager.mu.Lock()
-		defer manager.mu.Unlock()
-		for _, job := range manager.jobs {
-			if job.ID == firstJob.ID || job.CodebaseID != firstJob.CodebaseID {
-				continue
+	waitForCondition(
+		t,
+		func() bool {
+			manager.mu.Lock()
+			defer manager.mu.Unlock()
+
+			for _, job := range manager.jobs {
+				if job.ID == firstJob.ID || job.CodebaseID != firstJob.CodebaseID {
+					continue
+				}
+
+				successor = job
+
+				return true
 			}
-			successor = job
-			return true
-		}
-		return false
-	})
+
+			return false
+		},
+	)
 	if successor.EffectiveSchedulingPolicy.Priority != model.JobPriorityHigh ||
 		!successor.EffectiveSchedulingPolicy.Quiet ||
 		successor.SchedulingOverride.Priority != nil ||
@@ -625,6 +697,7 @@ func TestUpdateCodebasePolicyChangesAcceptedPendingWork(t *testing.T) {
 			successor.SchedulingOverride,
 		)
 	}
+
 	release <- struct{}{}
 	waitForTerminalJob(t, manager, successor.ID)
 }
@@ -640,12 +713,7 @@ func TestUpdateCodebasePolicyCoordinatesQueuedSchedulerRegistration(
 		readyActivitySource{},
 	)
 	t.Cleanup(manager.jobScheduler.Close)
-	_, queuedJob := seedPolicyUpdateJob(
-		t,
-		manager,
-		repoPath,
-		model.JobStateQueued,
-	)
+	_, queuedJob := seedPolicyUpdateJob(t, manager, repoPath, model.JobStateQueued)
 
 	blockerPolicy := model.DefaultSchedulingPolicy()
 	blockerPolicy.Priority = model.JobPriorityHigh
@@ -674,11 +742,7 @@ func TestUpdateCodebasePolicyCoordinatesQueuedSchedulerRegistration(
 	registrationContext, cancelRegistration := context.WithCancel(context.Background())
 	registrationResult := make(chan *jobCapacity, 1)
 	go func() {
-		capacity, _, _ := manager.acquireJobCapacity(
-			registrationContext,
-			queuedJob,
-			false,
-		)
+		capacity, _, _ := manager.acquireJobCapacity(registrationContext, queuedJob, false)
 		registrationResult <- capacity
 	}()
 	t.Cleanup(func() {
@@ -694,18 +758,19 @@ func TestUpdateCodebasePolicyCoordinatesQueuedSchedulerRegistration(
 		}
 	})
 
-	waitForCondition(t, func() bool {
-		snapshot := manager.jobScheduler.Snapshot()
-		return snapshot.Queued[model.JobPriorityHigh]+
-			snapshot.Queued[model.JobPriorityLow] == 1
-	})
+	waitForCondition(
+		t,
+		func() bool {
+			snapshot := manager.jobScheduler.Snapshot()
+
+			return snapshot.Queued[model.JobPriorityHigh]+
+				snapshot.Queued[model.JobPriorityLow] == 1
+		},
+	)
 	snapshot := manager.jobScheduler.Snapshot()
 	if snapshot.Queued[model.JobPriorityHigh] != 1 ||
 		snapshot.Queued[model.JobPriorityLow] != 0 {
-		t.Fatalf(
-			"post-ack queued registration snapshot = %+v, want high policy",
-			snapshot,
-		)
+		t.Fatalf("post-ack queued registration snapshot = %+v, want high policy", snapshot)
 	}
 }
 
@@ -733,10 +798,12 @@ func TestUpdateCodebasePolicyRollsBackRegistryAfterJournalFailure(t *testing.T) 
 			if policyEventCount == 1 {
 				return originalAppendTransition(event)
 			}
+
 			registry, readErr := store.ReadRegistry(cfg.RegistryPath)
 			if readErr != nil {
 				return fmt.Errorf("read registry before injected journal failure: %w", readErr)
 			}
+
 			if len(registry.Codebases) != 1 ||
 				registry.Codebases[0].SchedulingPolicy.Priority != model.JobPriorityHigh {
 				return fmt.Errorf(
@@ -744,9 +811,12 @@ func TestUpdateCodebasePolicyRollsBackRegistryAfterJournalFailure(t *testing.T) 
 					registry.Codebases,
 				)
 			}
+
 			observedPatchedRegistry = true
+
 			return journalErr
 		}
+
 		return originalAppendTransition(event)
 	}
 	t.Cleanup(func() { manager.appendJobTransition = originalAppendTransition })
@@ -760,6 +830,7 @@ func TestUpdateCodebasePolicyRollsBackRegistryAfterJournalFailure(t *testing.T) 
 	if !errors.Is(err, journalErr) {
 		t.Fatalf("UpdateCodebasePolicy error = %v, want injected journal failure", err)
 	}
+
 	if !observedPatchedRegistry {
 		t.Fatal("journal failure ran before the patched registry reached disk")
 	}
@@ -772,9 +843,11 @@ func TestUpdateCodebasePolicyRollsBackRegistryAfterJournalFailure(t *testing.T) 
 	if !reflect.DeepEqual(gotCodebase, originalCodebase) {
 		t.Fatalf("in-memory codebase after rollback = %+v, want %+v", gotCodebase, originalCodebase)
 	}
+
 	if !reflect.DeepEqual(gotJob, originalJob) {
 		t.Fatalf("in-memory job after rollback = %+v, want %+v", gotJob, originalJob)
 	}
+
 	if !reflect.DeepEqual(gotWatcherJob, originalWatcherJob) {
 		t.Fatalf(
 			"in-memory watcher job after rollback = %+v, want %+v",
@@ -787,6 +860,7 @@ func TestUpdateCodebasePolicyRollsBackRegistryAfterJournalFailure(t *testing.T) 
 	if readErr != nil {
 		t.Fatalf("ReadRegistry: %v", readErr)
 	}
+
 	if len(registry.Codebases) != 1 ||
 		registry.Codebases[0].ID != originalCodebase.ID ||
 		registry.Codebases[0].SchedulingPolicy != originalCodebase.SchedulingPolicy ||
@@ -794,10 +868,12 @@ func TestUpdateCodebasePolicyRollsBackRegistryAfterJournalFailure(t *testing.T) 
 			originalCodebase.PolicyPendingInitialization {
 		t.Fatalf("registry after rollback = %+v, want %+v", registry.Codebases, originalCodebase)
 	}
+
 	jobs, readErr := store.ReadJobEvents(cfg.JobsPath)
 	if readErr != nil {
 		t.Fatalf("ReadJobEvents: %v", readErr)
 	}
+
 	journalJob := jobs[originalJob.ID]
 	if journalJob.ID != originalJob.ID ||
 		journalJob.State != originalJob.State ||
@@ -806,6 +882,7 @@ func TestUpdateCodebasePolicyRollsBackRegistryAfterJournalFailure(t *testing.T) 
 		*journalJob.SchedulingOverride.Priority != model.JobPriorityLow {
 		t.Fatalf("journal job after rollback = %+v, want old policy", journalJob)
 	}
+
 	journalWatcherJob := jobs[originalWatcherJob.ID]
 	if journalWatcherJob.ID != originalWatcherJob.ID ||
 		journalWatcherJob.State != originalWatcherJob.State ||
@@ -813,11 +890,9 @@ func TestUpdateCodebasePolicyRollsBackRegistryAfterJournalFailure(t *testing.T) 
 			originalWatcherJob.EffectiveSchedulingPolicy ||
 		journalWatcherJob.SchedulingOverride.Priority == nil ||
 		*journalWatcherJob.SchedulingOverride.Priority != model.JobPriorityLow {
-		t.Fatalf(
-			"journal watcher job after rollback = %+v, want old policy",
-			journalWatcherJob,
-		)
+		t.Fatalf("journal watcher job after rollback = %+v, want old policy", journalWatcherJob)
 	}
+
 	assertNoPolicyUpdateMarker(t, cfg.RegistryPath)
 }
 
@@ -877,24 +952,36 @@ func TestManagerStartupRollsBackPendingPolicyUpdateBeforeReplay(t *testing.T) {
 	if err := store.WritePolicyUpdate(markerPath, transaction); err != nil {
 		t.Fatalf("WritePolicyUpdate: %v", err)
 	}
-	if err := store.WriteRegistry(cfg.RegistryPath, model.RegistryFile{
-		Codebases: []model.Codebase{patchedCodebase},
-		UpdatedAt: time.Now(),
-	}); err != nil {
+
+	if err := store.WriteRegistry(
+		cfg.RegistryPath,
+		model.RegistryFile{
+			Codebases: []model.Codebase{patchedCodebase},
+			UpdatedAt: time.Now(),
+		},
+	); err != nil {
 		t.Fatalf("WriteRegistry: %v", err)
 	}
-	if err := store.AppendJobEventSync(cfg.JobsPath, model.JobEvent{
-		Event:      "job_policy_updated",
-		OccurredAt: time.Now(),
-		Job:        patchedJob,
-	}); err != nil {
+
+	if err := store.AppendJobEventSync(
+		cfg.JobsPath,
+		model.JobEvent{
+			Event:      "job_policy_updated",
+			OccurredAt: time.Now(),
+			Job:        patchedJob,
+		},
+	); err != nil {
 		t.Fatalf("AppendJobEventSync: %v", err)
 	}
-	if err := store.AppendJobEventSync(cfg.JobsPath, model.JobEvent{
-		Event:      "job_policy_updated",
-		OccurredAt: time.Now(),
-		Job:        patchedWatcherJob,
-	}); err != nil {
+
+	if err := store.AppendJobEventSync(
+		cfg.JobsPath,
+		model.JobEvent{
+			Event:      "job_policy_updated",
+			OccurredAt: time.Now(),
+			Job:        patchedWatcherJob,
+		},
+	); err != nil {
 		t.Fatalf("AppendJobEventSync watcher: %v", err)
 	}
 
@@ -902,6 +989,7 @@ func TestManagerStartupRollsBackPendingPolicyUpdateBeforeReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
+
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -918,11 +1006,17 @@ func TestManagerStartupRollsBackPendingPolicyUpdateBeforeReplay(t *testing.T) {
 	if !reflect.DeepEqual(gotCodebase, codebase) {
 		t.Fatalf("restarted codebase = %+v, want %+v", gotCodebase, codebase)
 	}
+
 	if gotJob.EffectiveSchedulingPolicy != job.EffectiveSchedulingPolicy ||
 		gotJob.SchedulingOverride.Priority == nil ||
 		*gotJob.SchedulingOverride.Priority != lowPriority {
-		t.Fatalf("restarted job policy = %+v override=%+v", gotJob.EffectiveSchedulingPolicy, gotJob.SchedulingOverride)
+		t.Fatalf(
+			"restarted job policy = %+v override=%+v",
+			gotJob.EffectiveSchedulingPolicy,
+			gotJob.SchedulingOverride,
+		)
 	}
+
 	if gotWatcherJob.EffectiveSchedulingPolicy != watcherJob.EffectiveSchedulingPolicy ||
 		gotWatcherJob.SchedulingOverride.Priority == nil ||
 		*gotWatcherJob.SchedulingOverride.Priority != lowPriority {
@@ -932,6 +1026,7 @@ func TestManagerStartupRollsBackPendingPolicyUpdateBeforeReplay(t *testing.T) {
 			gotWatcherJob.SchedulingOverride,
 		)
 	}
+
 	assertNoPolicyUpdateMarker(t, cfg.RegistryPath)
 }
 
@@ -946,6 +1041,7 @@ func seedPolicyUpdateJob(
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath: %v", err)
 	}
+
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexing
 	codebase.PolicyPendingInitialization = true
@@ -983,6 +1079,7 @@ func seedPolicyUpdateJob(
 		manager.mu.Unlock()
 		t.Fatalf("saveLocked: %v", err)
 	}
+
 	manager.mu.Unlock()
 	if err := manager.writeJobTransition(model.JobEvent{
 		Event:      "job_" + string(state),
@@ -991,6 +1088,7 @@ func seedPolicyUpdateJob(
 	}); err != nil {
 		t.Fatalf("writeJobTransition: %v", err)
 	}
+
 	return codebase, job
 }
 
@@ -1005,6 +1103,7 @@ func seedWatcherPolicyUpdateJob(
 	if err != nil {
 		t.Fatalf("resolveCanonicalPath: %v", err)
 	}
+
 	codebase := newCodebaseRecord(canonicalPath)
 	codebase.Status = model.CodebaseStatusIndexed
 	priority := model.JobPriorityLow
@@ -1030,6 +1129,7 @@ func seedWatcherPolicyUpdateJob(
 		manager.mu.Unlock()
 		t.Fatalf("saveLocked: %v", err)
 	}
+
 	manager.mu.Unlock()
 	if err := manager.writeJobTransition(model.JobEvent{
 		Event:      "converge_" + string(state),
@@ -1038,6 +1138,7 @@ func seedWatcherPolicyUpdateJob(
 	}); err != nil {
 		t.Fatalf("writeJobTransition: %v", err)
 	}
+
 	return codebase, job
 }
 
@@ -1073,6 +1174,7 @@ func addDetachedPolicyUpdateJob(
 	}); err != nil {
 		t.Fatalf("write detached job transition: %v", err)
 	}
+
 	return job
 }
 
@@ -1093,27 +1195,34 @@ func registerPolicyUpdateSchedulerJob(
 		if err != nil {
 			t.Fatalf("Acquire running job: %v", err)
 		}
+
 		return lease.Release
 	case model.JobStatePaused:
 		lease, err := scheduler.Acquire(context.Background(), entry)
 		if err != nil {
 			t.Fatalf("Acquire paused job: %v", err)
 		}
+
 		if !lease.Yield("test pause") {
 			t.Fatal("Yield paused job returned false")
 		}
+
 		return lease.Release
 	case model.JobStateQueued:
 		blockerPolicy := model.DefaultSchedulingPolicy()
 		blockerPolicy.Priority = model.JobPriorityHigh
-		blocker, err := scheduler.Acquire(context.Background(), jobscheduler.Entry{
-			JobID:         "policy-update-blocker",
-			Policy:        blockerPolicy,
-			QueueSequence: 1,
-		})
+		blocker, err := scheduler.Acquire(
+			context.Background(),
+			jobscheduler.Entry{
+				JobID:         "policy-update-blocker",
+				Policy:        blockerPolicy,
+				QueueSequence: 1,
+			},
+		)
 		if err != nil {
 			t.Fatalf("Acquire blocker: %v", err)
 		}
+
 		ctx, cancel := context.WithCancel(context.Background())
 		result := make(chan error, 1)
 		go func() {
@@ -1121,11 +1230,16 @@ func registerPolicyUpdateSchedulerJob(
 			if lease != nil {
 				lease.Release()
 			}
+
 			result <- acquireErr
 		}()
-		waitForCondition(t, func() bool {
-			return scheduler.Snapshot().Queued[model.JobPriorityLow] == 1
-		})
+		waitForCondition(
+			t,
+			func() bool {
+				return scheduler.Snapshot().Queued[model.JobPriorityLow] == 1
+			},
+		)
+
 		return func() {
 			cancel()
 			blocker.Release()
@@ -1138,6 +1252,7 @@ func registerPolicyUpdateSchedulerJob(
 		t.Fatalf("unsupported scheduler test state %q", job.State)
 		return func() {}
 	}
+
 	return func() {}
 }
 

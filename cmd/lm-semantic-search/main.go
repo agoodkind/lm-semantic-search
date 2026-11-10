@@ -17,6 +17,7 @@ func run() int {
 		_, _ = fmt.Fprint(os.Stderr, formatCLIError(err))
 		return 1
 	}
+
 	return 0
 }
 

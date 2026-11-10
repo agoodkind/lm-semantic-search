@@ -28,9 +28,11 @@ func TestForIndexStatusWithClientReturnsImmediatelyWhenSearchable(t *testing.T) 
 	if err != nil {
 		t.Fatalf("forIndexStatusWithClient returned error: %v", err)
 	}
+
 	if !result.GetSearchable() {
 		t.Fatal("forIndexStatusWithClient returned non-searchable result")
 	}
+
 	if client.getIndexCalls != 1 {
 		t.Fatalf("GetIndex calls = %d, want 1", client.getIndexCalls)
 	}
@@ -56,9 +58,11 @@ func TestForIndexStatusWithClientPollsUntilSearchable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("forIndexStatusWithClient returned error: %v", err)
 	}
+
 	if !result.GetSearchable() {
 		t.Fatal("forIndexStatusWithClient did not return searchable result")
 	}
+
 	if client.getIndexCalls != 3 {
 		t.Fatalf("GetIndex calls = %d, want 3", client.getIndexCalls)
 	}
@@ -86,9 +90,11 @@ func TestForIndexStatusWithClientPollsDiscoveredUntilSearchable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("forIndexStatusWithClient returned error: %v", err)
 	}
+
 	if !result.GetSearchable() {
 		t.Fatal("forIndexStatusWithClient did not return searchable result")
 	}
+
 	if client.getIndexCalls != 2 {
 		t.Fatalf("GetIndex calls = %d, want 2", client.getIndexCalls)
 	}
@@ -110,9 +116,11 @@ func TestForIndexStatusWithClientReturnsTerminalNonreadyState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("forIndexStatusWithClient returned error: %v", err)
 	}
+
 	if result.GetSearchable() {
 		t.Fatal("forIndexStatusWithClient returned searchable result")
 	}
+
 	if result.GetCollectionReadiness() != "unknown" {
 		t.Fatalf("collection readiness = %q, want unknown", result.GetCollectionReadiness())
 	}
@@ -132,9 +140,11 @@ func TestForIndexStatusWithClientReturnsTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("forIndexStatusWithClient returned nil error")
 	}
+
 	if err.Error() != "wait timeout expired" {
 		t.Fatalf("error = %q, want wait timeout expired", err.Error())
 	}
+
 	if result == nil {
 		t.Fatal("forIndexStatusWithClient returned nil result on timeout")
 	}
@@ -159,9 +169,11 @@ func TestForIndexStatusWithClientReturnsLastResponseWhenRPCTimesOut(t *testing.T
 	if err == nil {
 		t.Fatal("forIndexStatusWithClient returned nil error")
 	}
+
 	if err.Error() != "wait timeout expired" {
 		t.Fatalf("error = %q, want wait timeout expired", err.Error())
 	}
+
 	if result == nil || result.GetCollectionReadiness() != "building" {
 		t.Fatal("forIndexStatusWithClient did not return the last successful response")
 	}
@@ -181,9 +193,11 @@ func TestForIndexStatusWithClientReturnsCancellation(t *testing.T) {
 	if err == nil {
 		t.Fatal("forIndexStatusWithClient returned nil error")
 	}
+
 	if err.Error() != "wait cancelled" {
 		t.Fatalf("error = %q, want wait cancelled", err.Error())
 	}
+
 	if result == nil {
 		t.Fatal("forIndexStatusWithClient returned nil result on cancellation")
 	}
@@ -203,6 +217,7 @@ func TestForIndexStatusWithClientReturnsRPCError(t *testing.T) {
 	if err == nil {
 		t.Fatal("forIndexStatusWithClient returned nil error")
 	}
+
 	if err.Error() != "GetIndex: rpc failed" {
 		t.Fatalf("error = %q, want GetIndex: rpc failed", err.Error())
 	}
@@ -230,9 +245,11 @@ func TestForIndexStatusWithClientKeepsWaitingWhenActiveJobExists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("forIndexStatusWithClient returned error: %v", err)
 	}
+
 	if !result.GetSearchable() {
 		t.Fatal("forIndexStatusWithClient did not return searchable result")
 	}
+
 	if client.getIndexCalls != 2 {
 		t.Fatalf("GetIndex calls = %d, want 2", client.getIndexCalls)
 	}
@@ -245,85 +262,157 @@ type mockDaemonClient struct {
 	blockAfterFirst bool
 }
 
-func (client *mockDaemonClient) GetIndex(ctx context.Context, _ *pb.GetIndexRequest, _ ...grpc.CallOption) (*pb.GetIndexResponse, error) {
+func (client *mockDaemonClient) GetIndex(
+	ctx context.Context,
+	_ *pb.GetIndexRequest,
+	_ ...grpc.CallOption,
+) (*pb.GetIndexResponse, error) {
 	client.getIndexCalls++
 	if client.blockAfterFirst && client.getIndexCalls > 1 {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
+
 	if client.getIndexErr != nil {
 		return nil, client.getIndexErr
 	}
+
 	if len(client.responses) == 0 {
 		return &pb.GetIndexResponse{}, nil
 	}
+
 	responseIndex := client.getIndexCalls - 1
 	if responseIndex >= len(client.responses) {
 		responseIndex = len(client.responses) - 1
 	}
+
 	return client.responses[responseIndex], nil
 }
 
-func (client *mockDaemonClient) Version(context.Context, *pb.VersionRequest, ...grpc.CallOption) (*pb.VersionResponse, error) {
+func (client *mockDaemonClient) Version(
+	context.Context,
+	*pb.VersionRequest,
+	...grpc.CallOption,
+) (*pb.VersionResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) StartIndex(context.Context, *pb.StartIndexRequest, ...grpc.CallOption) (*pb.StartIndexResponse, error) {
+func (client *mockDaemonClient) StartIndex(
+	context.Context,
+	*pb.StartIndexRequest,
+	...grpc.CallOption,
+) (*pb.StartIndexResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) ClearIndex(context.Context, *pb.ClearIndexRequest, ...grpc.CallOption) (*pb.ClearIndexResponse, error) {
+func (client *mockDaemonClient) ClearIndex(
+	context.Context,
+	*pb.ClearIndexRequest,
+	...grpc.CallOption,
+) (*pb.ClearIndexResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) CancelJob(context.Context, *pb.CancelJobRequest, ...grpc.CallOption) (*pb.CancelJobResponse, error) {
+func (client *mockDaemonClient) CancelJob(
+	context.Context,
+	*pb.CancelJobRequest,
+	...grpc.CallOption,
+) (*pb.CancelJobResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) SyncIndex(context.Context, *pb.SyncIndexRequest, ...grpc.CallOption) (*pb.SyncIndexResponse, error) {
+func (client *mockDaemonClient) SyncIndex(
+	context.Context,
+	*pb.SyncIndexRequest,
+	...grpc.CallOption,
+) (*pb.SyncIndexResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) UpdateCodebasePolicy(context.Context, *pb.UpdateCodebasePolicyRequest, ...grpc.CallOption) (*pb.UpdateCodebasePolicyResponse, error) {
+func (client *mockDaemonClient) UpdateCodebasePolicy(
+	context.Context,
+	*pb.UpdateCodebasePolicyRequest,
+	...grpc.CallOption,
+) (*pb.UpdateCodebasePolicyResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) ListIndexes(context.Context, *pb.ListIndexesRequest, ...grpc.CallOption) (*pb.ListIndexesResponse, error) {
+func (client *mockDaemonClient) ListIndexes(
+	context.Context,
+	*pb.ListIndexesRequest,
+	...grpc.CallOption,
+) (*pb.ListIndexesResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) GetJob(context.Context, *pb.GetJobRequest, ...grpc.CallOption) (*pb.GetJobResponse, error) {
+func (client *mockDaemonClient) GetJob(
+	context.Context,
+	*pb.GetJobRequest,
+	...grpc.CallOption,
+) (*pb.GetJobResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) ListJobs(context.Context, *pb.ListJobsRequest, ...grpc.CallOption) (*pb.ListJobsResponse, error) {
+func (client *mockDaemonClient) ListJobs(
+	context.Context,
+	*pb.ListJobsRequest,
+	...grpc.CallOption,
+) (*pb.ListJobsResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) WatchJobs(context.Context, *pb.WatchJobsRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[pb.WatchJobsResponse], error) {
+func (client *mockDaemonClient) WatchJobs(
+	context.Context,
+	*pb.WatchJobsRequest,
+	...grpc.CallOption,
+) (grpc.ServerStreamingClient[pb.WatchJobsResponse], error) {
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) SearchCode(context.Context, *pb.SearchCodeRequest, ...grpc.CallOption) (*pb.SearchCodeResponse, error) {
+func (client *mockDaemonClient) SearchCode(
+	context.Context,
+	*pb.SearchCodeRequest,
+	...grpc.CallOption,
+) (*pb.SearchCodeResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) GraphTool(context.Context, *pb.GraphToolRequest, ...grpc.CallOption) (*pb.GraphToolResponse, error) {
+func (client *mockDaemonClient) GraphTool(
+	context.Context,
+	*pb.GraphToolRequest,
+	...grpc.CallOption,
+) (*pb.GraphToolResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) Doctor(context.Context, *pb.DoctorRequest, ...grpc.CallOption) (*pb.DoctorResponse, error) {
+func (client *mockDaemonClient) Doctor(
+	context.Context,
+	*pb.DoctorRequest,
+	...grpc.CallOption,
+) (*pb.DoctorResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) GetStatus(context.Context, *pb.GetStatusRequest, ...grpc.CallOption) (*pb.GetStatusResponse, error) {
+func (client *mockDaemonClient) GetStatus(
+	context.Context,
+	*pb.GetStatusRequest,
+	...grpc.CallOption,
+) (*pb.GetStatusResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) SetMaintenanceMode(context.Context, *pb.SetMaintenanceModeRequest, ...grpc.CallOption) (*pb.SetMaintenanceModeResponse, error) {
+func (client *mockDaemonClient) SetMaintenanceMode(
+	context.Context,
+	*pb.SetMaintenanceModeRequest,
+	...grpc.CallOption,
+) (*pb.SetMaintenanceModeResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (client *mockDaemonClient) Shutdown(context.Context, *pb.ShutdownRequest, ...grpc.CallOption) (*pb.ShutdownResponse, error) {
+func (client *mockDaemonClient) Shutdown(
+	context.Context,
+	*pb.ShutdownRequest,
+	...grpc.CallOption,
+) (*pb.ShutdownResponse, error) {
 	return nil, errors.New("not implemented")
 }

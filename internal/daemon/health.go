@@ -78,7 +78,10 @@ func (health dependencyHealth) lastReachableAt() time.Time {
 	switch health.Mode {
 	case dependencyStoreUnavailable:
 		return health.StoreReachableAt
-	case dependencyEmbedderUnreachable, dependencyEmbedderRejected, dependencyEmbedderPaused, dependencyEmbedderBusy:
+	case dependencyEmbedderUnreachable,
+		dependencyEmbedderRejected,
+		dependencyEmbedderPaused,
+		dependencyEmbedderBusy:
 		return health.EmbedderReachableAt
 	case dependencyHealthy:
 		return laterTime(health.StoreReachableAt, health.EmbedderReachableAt)
@@ -93,6 +96,7 @@ func laterTime(first time.Time, second time.Time) time.Time {
 	if first.After(second) {
 		return first
 	}
+
 	return second
 }
 
@@ -121,7 +125,10 @@ func dependenciesFor(mode dependencyMode) dependencySet {
 	switch mode {
 	case dependencyStoreUnavailable:
 		return dependencySet{Store: true, Embedder: false}
-	case dependencyEmbedderUnreachable, dependencyEmbedderRejected, dependencyEmbedderPaused, dependencyEmbedderBusy:
+	case dependencyEmbedderUnreachable,
+		dependencyEmbedderRejected,
+		dependencyEmbedderPaused,
+		dependencyEmbedderBusy:
 		return dependencySet{Store: false, Embedder: true}
 	case dependencyHealthy:
 		return dependencySet{Store: false, Embedder: false}
@@ -148,10 +155,12 @@ func degradeModeFor(err error) dependencyMode {
 	if err == nil {
 		return dependencyHealthy
 	}
+
 	var adapterErr *adapterr.AdapterError
 	if !errors.As(err, &adapterErr) {
 		return dependencyHealthy
 	}
+
 	switch adapterErr.Class {
 	case adapterr.ClassEmbedderUnreachable:
 		return dependencyEmbedderUnreachable
@@ -189,23 +198,32 @@ func (manager *Manager) beginHealthObservationLocked() healthObservation {
 // under manager.mu, so two callers racing cannot interleave in a way that lets
 // older evidence land on top of newer: whichever one holds the lock reads a
 // number that already accounts for every observation applied before it.
-func (manager *Manager) supersededHealthObservationLocked(observation healthObservation, covers dependencySet) bool {
+func (manager *Manager) supersededHealthObservationLocked(
+	observation healthObservation,
+	covers dependencySet,
+) bool {
 	if covers.Store && observation < manager.appliedStoreObservation {
 		return true
 	}
+
 	if covers.Embedder && observation < manager.appliedEmbedderObservation {
 		return true
 	}
+
 	return false
 }
 
 // applyHealthObservationLocked marks this observation as the newest evidence for
 // every dependency it covers. The caller holds manager.mu and has already found
 // the observation is not superseded.
-func (manager *Manager) applyHealthObservationLocked(observation healthObservation, covers dependencySet) {
+func (manager *Manager) applyHealthObservationLocked(
+	observation healthObservation,
+	covers dependencySet,
+) {
 	if covers.Store {
 		manager.appliedStoreObservation = observation
 	}
+
 	if covers.Embedder {
 		manager.appliedEmbedderObservation = observation
 	}
@@ -230,11 +248,24 @@ func (manager *Manager) recordDependencyFailureLocked(err error, observation hea
 	if mode == dependencyHealthy {
 		return
 	}
+
 	covers := dependenciesFor(mode)
 	if manager.supersededHealthObservationLocked(observation, covers) {
-		slog.Debug("dependency.health.observation_superseded", "component", "daemon", "subcomponent", "health", "observation", uint64(observation), "verdict", string(mode))
+		slog.Debug(
+			"dependency.health.observation_superseded",
+			"component",
+			"daemon",
+			"subcomponent",
+			"health",
+			"observation",
+			uint64(observation),
+			"verdict",
+			string(mode),
+		)
+
 		return
 	}
+
 	manager.applyHealthObservationLocked(observation, covers)
 	// The failure generation advances only for a failure that reached the record.
 	// A superseded observation returned above without changing anything, so
@@ -242,7 +273,17 @@ func (manager *Manager) recordDependencyFailureLocked(err error, observation hea
 	// the record still holds what it held before.
 	manager.dependencyFailureGeneration++
 	if manager.health.Mode != mode {
-		slog.Warn("dependency.health.degraded", "component", "daemon", "subcomponent", "health", "from", string(manager.health.Mode), "to", string(mode))
+		slog.Warn(
+			"dependency.health.degraded",
+			"component",
+			"daemon",
+			"subcomponent",
+			"health",
+			"from",
+			string(manager.health.Mode),
+			"to",
+			string(mode),
+		)
 		manager.health.Mode = mode
 		manager.health.Since = clock.Now()
 	}
@@ -262,8 +303,17 @@ func (manager *Manager) noteDependencyHealthyLocked() {
 	covers := dependencySet{Store: true, Embedder: true}
 	manager.applyHealthObservationLocked(manager.beginHealthObservationLocked(), covers)
 	if manager.health.Degraded() {
-		slog.Info("dependency.health.recovered", "component", "daemon", "subcomponent", "health", "from", string(manager.health.Mode))
+		slog.Info(
+			"dependency.health.recovered",
+			"component",
+			"daemon",
+			"subcomponent",
+			"health",
+			"from",
+			string(manager.health.Mode),
+		)
 	}
+
 	reachableAt := clock.Now()
 	manager.health.Mode = dependencyHealthy
 	manager.health.Since = time.Time{}
@@ -280,13 +330,35 @@ func (manager *Manager) noteDependencyHealthyLocked() {
 func (manager *Manager) recordStoreReachableLocked(observation healthObservation) {
 	covers := dependencySet{Store: true, Embedder: false}
 	if manager.supersededHealthObservationLocked(observation, covers) {
-		slog.Debug("dependency.health.observation_superseded", "component", "daemon", "subcomponent", "health", "observation", uint64(observation), "verdict", "store_reachable")
+		slog.Debug(
+			"dependency.health.observation_superseded",
+			"component",
+			"daemon",
+			"subcomponent",
+			"health",
+			"observation",
+			uint64(observation),
+			"verdict",
+			"store_reachable",
+		)
+
 		return
 	}
+
 	manager.applyHealthObservationLocked(observation, covers)
 	manager.health.StoreReachableAt = clock.Now()
 	if manager.health.Mode == dependencyStoreUnavailable {
-		slog.Info("dependency.health.recovered", "component", "daemon", "subcomponent", "health", "from", string(manager.health.Mode), "via", "store_probe")
+		slog.Info(
+			"dependency.health.recovered",
+			"component",
+			"daemon",
+			"subcomponent",
+			"health",
+			"from",
+			string(manager.health.Mode),
+			"via",
+			"store_probe",
+		)
 		manager.health.Mode = dependencyHealthy
 		manager.health.Since = time.Time{}
 	}
@@ -298,6 +370,7 @@ func storeProbeFailure(err error) *adapterr.AdapterError {
 	if degradeModeFor(err) != dependencyHealthy {
 		return nil
 	}
+
 	return adapterr.NewMilvusUnavailable(err)
 }
 
@@ -325,6 +398,7 @@ func (manager *Manager) noteDependencyHealthy() {
 func (manager *Manager) dependencyFailureGenerationNow() uint64 {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+
 	return manager.dependencyFailureGeneration
 }
 
@@ -336,7 +410,9 @@ func (manager *Manager) noteDependencyHealthyIfGeneration(generation uint64) boo
 	if manager.dependencyFailureGeneration != generation {
 		return false
 	}
+
 	manager.noteDependencyHealthyLocked()
+
 	return true
 }
 
@@ -365,11 +441,13 @@ func (manager *Manager) noteDependencyHealthyIfGeneration(generation uint64) boo
 func (manager *Manager) refreshDependencyHealth(ctx context.Context) {
 	manager.mu.Lock()
 	semantic := manager.semantic
-	stale := manager.lastDepProbeAt.IsZero() || clock.Now().Sub(manager.lastDepProbeAt) >= dependencyProbeInterval
+	stale := manager.lastDepProbeAt.IsZero() ||
+		clock.Now().Sub(manager.lastDepProbeAt) >= dependencyProbeInterval
 	if semantic == nil || !stale {
 		manager.mu.Unlock()
 		return
 	}
+
 	manager.lastDepProbeAt = clock.Now()
 	observation := manager.beginHealthObservationLocked()
 	manager.mu.Unlock()
@@ -382,15 +460,31 @@ func (manager *Manager) refreshDependencyHealth(ctx context.Context) {
 	defer manager.mu.Unlock()
 	if probeErr != nil {
 		if ctx.Err() != nil {
-			slog.DebugContext(ctx, "dependency.health.probe_abandoned", "component", "daemon", "subcomponent", "health", "observation", uint64(observation), "err", probeErr)
+			slog.DebugContext(
+				ctx,
+				"dependency.health.probe_abandoned",
+				"component",
+				"daemon",
+				"subcomponent",
+				"health",
+				"observation",
+				uint64(observation),
+				"err",
+				probeErr,
+			)
+
 			return
 		}
+
 		if classified := storeProbeFailure(probeErr); classified != nil {
 			probeErr = classified
 		}
+
 		manager.recordDependencyFailureLocked(probeErr, observation)
+
 		return
 	}
+
 	// ProbeHealth checks store reachability only, so a clean probe is evidence
 	// about the store alone: it clears a store-unavailable mode and stamps the
 	// store's reachability time, and it leaves both an embedder outage and the
@@ -417,6 +511,7 @@ func (manager *Manager) refreshDependencyHealth(ctx context.Context) {
 func (manager *Manager) DependencyHealth() dependencyHealth {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+
 	return manager.dependencyHealthLocked()
 }
 
@@ -444,6 +539,7 @@ func (manager *Manager) pathCollectionObservation(
 	if !searchableEligible || manager.semantic == nil || canonicalPath == "" {
 		return status.CollectionNotApplicable, nil
 	}
+
 	observation, err := manager.semantic.ObserveCollection(ctx, canonicalPath)
 	switch {
 	case err != nil:
@@ -459,6 +555,7 @@ func (manager *Manager) pathCollectionObservation(
 			rows := observation.Rows
 			return status.CollectionReady, &rows
 		}
+
 		return status.CollectionReady, nil
 	default:
 		return status.CollectionUnknown, nil

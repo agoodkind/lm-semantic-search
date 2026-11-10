@@ -40,6 +40,7 @@ func TestReportedIndexConfigNamesTheBuiltBackendNotTheConfiguredOne(t *testing.T
 			model.VectorBackendLocal,
 		)
 	}
+
 	if reported.EmbeddingProvider != model.EmbeddingProviderONNX {
 		t.Fatalf(
 			"reported EmbeddingProvider = %q, want %q from the built backend",
@@ -70,6 +71,7 @@ func TestReportedIndexConfigFallsBackToConfigurationWithNoBackend(t *testing.T) 
 			model.VectorBackendMilvus,
 		)
 	}
+
 	if reported.EmbeddingProvider != model.EmbeddingProviderOpenAI {
 		t.Fatalf(
 			"reported EmbeddingProvider = %q, want the configured %q with no backend built",
@@ -125,12 +127,14 @@ func TestConfigDigestIsUnchangedByProviderSpelling(t *testing.T) {
 	t.Parallel()
 
 	spellings := []string{"OpenAI", "openai", "OPENAI", "  OpenAI  "}
+
 	digests := make(map[string]string, len(spellings))
 	for _, spelling := range spellings {
 		provider, err := model.ParseEmbeddingProvider(spelling)
 		if err != nil {
 			t.Fatalf("ParseEmbeddingProvider(%q) returned error: %v", spelling, err)
 		}
+
 		indexConfig := model.IndexConfig{EmbeddingProvider: provider}
 		digests[spelling] = digestIndexConfig(indexConfig)
 	}
