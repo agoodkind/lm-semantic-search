@@ -1,4 +1,40 @@
-# golangci-lint: generated_at=2026-11-10T08:20:10Z
+# Historical Linux golangci-lint: generated_at=2026-11-10T10:47:18Z
+internal/merkle/inode_linux.go:15:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/merkle/inode_linux.go:16:2: missing whitespace above this line (too many lines above return) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/merkle/inode_linux.go:16:2: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/networkcost/platform/source_linux.go:6:1: New returns interface (goodkind.io/lm-semantic-search/internal/networkcost/platform.Source) (ireturn)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/orphanguard/orphan_guard_linux.go:22:2: variable name 'ch' is too short for the scope of its usage (varnamelen)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/orphanguard/orphan_guard_linux.go:34:3: missing whitespace above this line (too many lines above return) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/orphanguard/orphan_guard_linux.go:34:3: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/orphanguard/orphan_guard_linux.go:35:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/orphanguard/orphan_guard_linux.go:58:2: missing whitespace above this line (no shared variables above for) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/orphanguard/orphan_guard_linux.go:59:3: variable name 'n' is too short for the scope of its usage (varnamelen)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/login1_linux.go:101:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/login1_linux.go:104:2: missing whitespace above this line (too many lines above return) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/login1_linux.go:104:2: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/login1_linux.go:185:9: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"login1 property %s has an invalid variant\", name)" (err113)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/login1_linux.go:195:13: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"read monotonic clock: invalid timespec\")" (err113)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/login1_linux.go:195:13: error-format: fmt.Errorf can be replaced with errors.New (perfsprint)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/login1_linux.go:200:13: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"read monotonic clock: duration overflow\")" (err113)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/login1_linux.go:41:1: newLogin1SessionReader returns interface (goodkind.io/lm-semantic-search/internal/platformactivity.loginSessionReader) (ireturn)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/login1_linux.go:58:15: do not define dynamic errors, use wrapped static errors instead: "fmt.Errorf(\"read current user ID\")" (err113)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/login1_linux.go:60:2: missing whitespace above this line (too many statements above range) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/login1_linux.go:99:68: string `user` has 3 occurrences, make it a constant (goconst)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/source_linux.go:102:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/source_linux.go:103:2: missing whitespace above this line (too many lines above return) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/source_linux.go:103:2: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/source_linux.go:121:2: missing whitespace above this line (no shared variables above range) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/source_linux.go:123:21: string `user` has 3 occurrences, make it a constant (goconst)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/source_linux.go:31:7: interface method Read must have named param for type context.Context (inamedparam)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/source_linux.go:45:1: New returns interface (goodkind.io/lm-semantic-search/internal/platformactivity.Source) (ireturn)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/source_linux.go:53:1: newLinuxSource returns interface (goodkind.io/lm-semantic-search/internal/platformactivity.Source) (ireturn)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/source_linux_test.go:127:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/thermal_linux.go:23:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/thermal_linux.go:25:2: missing whitespace above this line (no shared variables above range) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/thermal_linux.go:34:3: missing whitespace above this line (invalid statement above range) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/thermal_linux.go:58:2: missing whitespace above this line (too many lines above return) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/thermal_linux.go:58:2: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
+internal/platformactivity/thermal_linux_test.go:100:2: missing whitespace below this line (after-block) (wsl_v5)	# golangci-lint:first_added=2026-11-10T10:47:18Z last_seen=2026-11-10T10:47:18Z
 client/client.go:16:1: DialDaemon returns interface (goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1.SemanticSearchDaemonServiceClient) (ireturn)	# golangci-lint:first_added=2026-11-10T07:58:19Z last_seen=2026-11-10T08:20:10Z
 client/client.go:34:3: return with no blank line before (nlreturn)	# golangci-lint:first_added=2026-11-10T07:58:19Z last_seen=2026-11-10T08:20:10Z
 client/client.go:29:1: godoc line is too long (81 > 77) (godoclint)	# golangci-lint:first_added=2026-11-10T07:59:37Z last_seen=2026-11-10T08:20:10Z
