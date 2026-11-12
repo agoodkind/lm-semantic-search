@@ -6,7 +6,7 @@ toolchain go1.27.3
 
 require (
 	charm.land/bubbletea/v2 v2.1.0
-	charm.land/lipgloss/v2 v2.0.6
+	charm.land/lipgloss/v2 v2.1.0
 	github.com/coder/hnsw v0.6.1
 	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/daulet/tokenizers v1.27.0
