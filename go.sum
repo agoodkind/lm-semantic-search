@@ -322,12 +322,12 @@ github.com/mattn/go-pointer v0.0.1 h1:n+XhsuGeVO6MEAp7xyEukFINEa+Quek5psIR/ylA6o
 github.com/mattn/go-pointer v0.0.1/go.mod h1:2zXcozF6qYGgmsG+SeTZz3oAbFLdD3OWqnUbNvJZAlc=
 github.com/mattn/go-runewidth v0.0.31 h1:1oCV4ReTlosDBc6rYRw5cL8S/4y8iv5oRl4SJ5IBgwo=
 github.com/mattn/go-runewidth v0.0.31/go.mod h1:3qAiGCV4Koz/yuveO58qUefmUTRm8r0IGEXZ9jeHp/8=
-github.com/milvus-io/milvus-proto/go-api/v3 v3.0.4 h1:qJ0L/E+qp1Jlw83WIcPDhuMasO31DtESN21az28+fzg=
-github.com/milvus-io/milvus-proto/go-api/v3 v3.0.4/go.mod h1:rbKpv5JToISTKTTLl0duL5r6wbYnjJ9SsD0QgXMzKy0=
+github.com/milvus-io/milvus-proto/go-api/v3 v3.0.6 h1:hCXsngClqziIses984tZj+KMhelof6FJY5zxrL1FBZc=
+github.com/milvus-io/milvus-proto/go-api/v3 v3.0.6/go.mod h1:rbKpv5JToISTKTTLl0duL5r6wbYnjJ9SsD0QgXMzKy0=
 github.com/milvus-io/milvus/client/v3 v3.0.0 h1:UFNCD036JNBtwRN9CXBDor57MQj4Hwea+xqaxBnxDQI=
 github.com/milvus-io/milvus/client/v3 v3.0.0/go.mod h1:c8MxviSO78ChpvY5LgOxALsSJEX14F21IPdwMJ8OfHQ=
-github.com/milvus-io/milvus/pkg/v3 v3.0.4 h1:WL6IkLCJ65ZNvVqSXjaPCFBOOPMiFSKjCHZDpzQ5CFo=
-github.com/milvus-io/milvus/pkg/v3 v3.0.4/go.mod h1:6AtZmA1mzMOoDfLGEKu8UAGFQrS/in2blWgL7cCRNfs=
+github.com/milvus-io/milvus/pkg/v3 v3.0.6 h1:FEQ7slDLsUKfWGSc06WS1NQns2U98ELzNgbp8aCfXvk=
+github.com/milvus-io/milvus/pkg/v3 v3.0.6/go.mod h1:ZYRCOK8Fb1FrM/lGVtstRLusRNuzf8hCe02riSEA9oA=
 github.com/mitchellh/go-homedir v1.1.0 h1:lukF9ziXFxDFPkA1vsr5zpc1XuPDn/wFntq5mG+4E0Y=
 github.com/mitchellh/go-homedir v1.1.0/go.mod h1:SfyaCUpYCn1Vlf4IUYiD9fPX4A5wJrkLzIz1N1q0pr0=
 github.com/mitchellh/mapstructure v1.5.0 h1:jeMsZIYE/09sWLaz43PL7Gy6RuMjD2eJVyuac5Z2hdY=
@@ -504,6 +504,8 @@ github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9de
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/zalando/go-keyring v0.2.6 h1:r7Yc3+H+Ux0+M72zacZoItR3UDxeWfKTcabvkI8ua9s=
 github.com/zalando/go-keyring v0.2.6/go.mod h1:2TCrxYrbUNYfNS/Kgy/LSrkSQzZ5UPVH85RwfczwvcI=
+go.etcd.io/etcd/api/v3 v3.6.8 h1:gqb1VN92TAI6G2FiBvWcqKtHiIjr4SU2GdXxTwyexbM=
+go.etcd.io/etcd/api/v3 v3.6.8/go.mod h1:qyQj1HZPUV3B5cbAL8scG62+fyz5dSxxu0w8pn28N6Q=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
 go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.72.0 h1:Tq+E65HaNbZTeqcLw6QUhsV+/EIWdkfUH2CQzcrlE5M=
