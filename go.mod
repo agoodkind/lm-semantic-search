@@ -22,8 +22,8 @@ require (
 	github.com/rjeczalik/notify v0.9.3
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/mod v0.42.0
-	golang.org/x/sys v0.49.0
-	golang.org/x/term v0.47.0
+	golang.org/x/sys v0.50.0
+	golang.org/x/term v0.48.0
 	goodkind.io/gklog v0.4.5
 	goodkind.io/gksyntax v0.1.0
 	goodkind.io/go-makefile v0.1.0
