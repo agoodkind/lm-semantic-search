@@ -26,7 +26,7 @@ require (
 	golang.org/x/term v0.47.0
 	goodkind.io/gklog v0.4.5
 	goodkind.io/gksyntax v0.1.0
-	goodkind.io/go-makefile v0.1.0
+	goodkind.io/go-makefile v0.1.1
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261019180522-ce908d29299b
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
