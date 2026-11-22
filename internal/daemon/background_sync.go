@@ -77,64 +77,6 @@ func NewBackgroundSync(cfg config.Config, manager *Manager) *BackgroundSync {
 	}
 }
 
-// Start launches the file watcher plus the periodic and trigger-driven sync
-// loops.
-func (syncer *BackgroundSync) Start(ctx context.Context) {
-	if syncer.cfg.IngestionDisabled {
-		return
-	}
-
-	if syncer.cfg.FileWatcherEnabled {
-		syncer.queue = NewEventQueue(
-			defaultTriggerDebounce,
-			func(codebaseID string, relativePaths []string) {
-				syncer.convergeViaWatcher(ctx, codebaseID, relativePaths)
-			},
-		)
-		syncer.watcher = NewWatcher(syncer.manager, syncer.queue)
-		syncer.manager.SetCodebaseLifecycleHook(syncer)
-		syncer.manager.SetWatcherActivityReporter(syncer)
-		go func() {
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					slog.ErrorContext(
-						ctx,
-						"background sync loop panic",
-						"loop",
-						"watcher",
-						"err",
-						recovered,
-					)
-				}
-			}()
-			syncer.watcher.Run(ctx)
-		}()
-	}
-
-	if syncer.cfg.TriggerWatcherEnabled {
-		go func() {
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					slog.ErrorContext(
-						ctx,
-						"background sync loop panic",
-						"loop",
-						"watchTrigger",
-						"err",
-						recovered,
-					)
-				}
-			}()
-			syncer.watchTrigger(ctx)
-		}()
-	}
-
-	if syncer.cfg.BackgroundSyncEnabled {
-		syncer.startLoop(ctx, "runPeriodicSync", syncer.runPeriodicSync)
-		syncer.startLoop(ctx, "runPeriodicMaintenance", syncer.runPeriodicMaintenance)
-	}
-}
-
 func (syncer *BackgroundSync) startLoop(
 	ctx context.Context,
 	name string,
@@ -1309,4 +1251,58 @@ func (syncer *BackgroundSync) WatcherActivity() []WatcherActivity {
 	)
 
 	return activity
+}
+
+// start launches the file watcher plus the periodic and trigger-driven sync
+// loops.
+func (syncer *BackgroundSync) start(ctx context.Context) {
+	if syncer.cfg.FileWatcherEnabled {
+		syncer.queue = NewEventQueue(
+			defaultTriggerDebounce,
+			func(codebaseID string, relativePaths []string) {
+				syncer.convergeViaWatcher(ctx, codebaseID, relativePaths)
+			},
+		)
+		syncer.watcher = NewWatcher(syncer.manager, syncer.queue)
+		syncer.manager.SetCodebaseLifecycleHook(syncer)
+		syncer.manager.SetWatcherActivityReporter(syncer)
+		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					slog.ErrorContext(
+						ctx,
+						"background sync loop panic",
+						"loop",
+						"watcher",
+						"err",
+						recovered,
+					)
+				}
+			}()
+			syncer.watcher.Run(ctx)
+		}()
+	}
+
+	if syncer.cfg.TriggerWatcherEnabled {
+		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					slog.ErrorContext(
+						ctx,
+						"background sync loop panic",
+						"loop",
+						"watchTrigger",
+						"err",
+						recovered,
+					)
+				}
+			}()
+			syncer.watchTrigger(ctx)
+		}()
+	}
+
+	if syncer.cfg.BackgroundSyncEnabled {
+		syncer.startLoop(ctx, "runPeriodicSync", syncer.runPeriodicSync)
+		syncer.startLoop(ctx, "runPeriodicMaintenance", syncer.runPeriodicMaintenance)
+	}
 }

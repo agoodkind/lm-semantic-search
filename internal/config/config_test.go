@@ -112,12 +112,20 @@ func TestDefaultResolvesIngestionAndSearchIndependently(t *testing.T) {
 		{"ingestion disabled", persistedConfig{IngestionEnabled: &disabled}, true, false},
 		{"search disabled", persistedConfig{SearchEnabled: &disabled}, false, true},
 	} {
-		t.Run(example.name, func(t *testing.T) {
-			cfg := defaultWithPersistedConfig(t, example.persisted)
-			if cfg.IngestionDisabled != example.ingestionDisabled || cfg.SearchDisabled != example.searchDisabled {
-				t.Fatalf("disabled ingestion = %t, disabled search = %t", cfg.IngestionDisabled, cfg.SearchDisabled)
-			}
-		})
+		t.Run(
+			example.name,
+			func(t *testing.T) {
+				cfg := defaultWithPersistedConfig(t, example.persisted)
+				if cfg.IngestionDisabled != example.ingestionDisabled ||
+					cfg.SearchDisabled != example.searchDisabled {
+					t.Fatalf(
+						"disabled ingestion = %t, disabled search = %t",
+						cfg.IngestionDisabled,
+						cfg.SearchDisabled,
+					)
+				}
+			},
+		)
 	}
 }
 

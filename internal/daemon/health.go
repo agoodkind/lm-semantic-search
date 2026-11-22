@@ -177,7 +177,7 @@ func degradeModeFor(err error) dependencyMode {
 		adapterr.ClassSearchResultIncomplete, adapterr.ClassInvalidPath, adapterr.ClassInvalidArgument,
 		adapterr.ClassConflictingJob, adapterr.ClassJobNotFound, adapterr.ClassIndexBudgetExceeded,
 		adapterr.ClassMaintenance, adapterr.ClassCollectionSchemaMismatch, adapterr.ClassEmbeddingModelNotReady,
-		adapterr.ClassInternal:
+		adapterr.ClassCapabilityDisabled, adapterr.ClassInternal:
 		return dependencyHealthy
 	default:
 		return dependencyHealthy

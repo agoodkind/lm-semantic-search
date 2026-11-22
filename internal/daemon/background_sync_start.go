@@ -6,6 +6,21 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
+// Start launches background sync when ingestion is enabled.
+//
+// The daemon keeps its watcher and periodic jobs idle while ingestion is off.
+//
+// Example:
+//
+//	syncer.Start(ctx)
+func (syncer *BackgroundSync) Start(ctx context.Context) {
+	if syncer.cfg.IngestionDisabled {
+		return
+	}
+
+	syncer.start(ctx)
+}
+
 // runPeriodicMaintenanceOnce runs one tick of the store-maintenance sweep: the
 // mmap migration. The migration writes to the store, and the tick is skipped
 // while the operator's maintenance mode is on.

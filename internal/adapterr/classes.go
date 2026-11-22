@@ -90,7 +90,7 @@ const (
 	// the store until the operator turns the mode off.
 	ClassMaintenance Class = "maintenance"
 
-	// ClassCapabilityDisabled reports that the daemon configuration disables an operation.
+	// ClassCapabilityDisabled reports an operation the daemon config disables.
 	ClassCapabilityDisabled Class = "capability_disabled"
 
 	// ClassCollectionSchemaMismatch reports a collection registration that
@@ -311,22 +311,36 @@ func NewMaintenance(reason string) *AdapterError {
 }
 
 // NewIngestionDisabled reports that ingestionEnabled is false.
+//
+// The daemon refuses requests to write indexes while ingestion is disabled.
+//
+// RPC failure:
+//   - FailedPrecondition with reason ingestion_disabled.
 func NewIngestionDisabled() *AdapterError {
 	return &AdapterError{
-		Class: ClassCapabilityDisabled, Code: "ingestion_disabled",
-		Message: "index ingestion is disabled",
-		Hint:    "set ingestionEnabled to true in config.json and restart the daemon",
-		Cause:   nil, SafeForClient: true,
+		Class:         ClassCapabilityDisabled,
+		Code:          "ingestion_disabled",
+		Message:       "index ingestion is disabled",
+		Hint:          "set ingestionEnabled to true in config.json and restart the daemon",
+		Cause:         nil,
+		SafeForClient: true,
 	}
 }
 
 // NewSearchDisabled reports that searchEnabled is false.
+//
+// The daemon refuses search requests while search is disabled.
+//
+// RPC failure:
+//   - FailedPrecondition with reason search_disabled.
 func NewSearchDisabled() *AdapterError {
 	return &AdapterError{
-		Class: ClassCapabilityDisabled, Code: "search_disabled",
-		Message: "semantic search is disabled",
-		Hint:    "set searchEnabled to true in config.json and restart the daemon",
-		Cause:   nil, SafeForClient: true,
+		Class:         ClassCapabilityDisabled,
+		Code:          "search_disabled",
+		Message:       "semantic search is disabled",
+		Hint:          "set searchEnabled to true in config.json and restart the daemon",
+		Cause:         nil,
+		SafeForClient: true,
 	}
 }
 

@@ -344,7 +344,7 @@ func resolveEmbeddingConfigDefaults(
 
 	return embeddingConfigDefaults{
 		provider:             provider,
-		model:                embeddingModelName,
+		model:                envOrDefault("EMBEDDING_MODEL", embeddingModelName),
 		offlineModel:         offlineModel,
 		queryInstructionText: queryInstructionText,
 	}
@@ -355,6 +355,7 @@ func Default() (Config, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		slog.Error("resolve user home directory failed", "err", err)
+
 		return Config{}, fmt.Errorf("resolve user home directory: %w", err)
 	}
 
@@ -401,29 +402,26 @@ func Default() (Config, error) {
 	}
 
 	return ApplyProfile(Config{
-		Profile:           resolveProfile(fileConfig.Profile),
-		IndexBackend:      IndexBackendMilvus,
-		ConfigRoot:        configRoot,
-		ConfigPath:        configPath,
-		StateRoot:         stateRoot,
-		SocketPath:        socketPath,
-		RegistryPath:      filepath.Join(stateRoot, "registry.json"),
-		JobsPath:          filepath.Join(stateRoot, "jobs.jsonl"),
-		EventsPath:        filepath.Join(stateRoot, "events.jsonl"),
-		LogsDir:           logsDir,
-		LogPath:           logPath,
-		MerkleDir:         filepath.Join(stateRoot, "merkle"),
-		LocksDir:          filepath.Join(stateRoot, "locks"),
-		SocketsDir:        socketsDir,
-		ChunksDir:         filepath.Join(stateRoot, "chunks"),
-		GraphDir:          filepath.Join(stateRoot, "graph"),
-		ContextRoot:       contextRoot,
-		ModelCacheRoot:    modelCacheRoot,
-		EmbeddingProvider: embeddingProviderName,
-		EmbeddingModel: envOrDefault(
-			"EMBEDDING_MODEL",
-			embeddingDefaults.model,
-		),
+		Profile:                      resolveProfile(fileConfig.Profile),
+		IndexBackend:                 IndexBackendMilvus,
+		ConfigRoot:                   configRoot,
+		ConfigPath:                   configPath,
+		StateRoot:                    stateRoot,
+		SocketPath:                   socketPath,
+		RegistryPath:                 filepath.Join(stateRoot, "registry.json"),
+		JobsPath:                     filepath.Join(stateRoot, "jobs.jsonl"),
+		EventsPath:                   filepath.Join(stateRoot, "events.jsonl"),
+		LogsDir:                      logsDir,
+		LogPath:                      logPath,
+		MerkleDir:                    filepath.Join(stateRoot, "merkle"),
+		LocksDir:                     filepath.Join(stateRoot, "locks"),
+		SocketsDir:                   socketsDir,
+		ChunksDir:                    filepath.Join(stateRoot, "chunks"),
+		GraphDir:                     filepath.Join(stateRoot, "graph"),
+		ContextRoot:                  contextRoot,
+		ModelCacheRoot:               modelCacheRoot,
+		EmbeddingProvider:            embeddingProviderName,
+		EmbeddingModel:               embeddingDefaults.model,
 		OfflineEmbeddingModel:        embeddingDefaults.offlineModel,
 		ModelDownloadNetworkPolicy:   modelDownloadNetwork.Policy,
 		ModelDownloadNetworkOverride: modelDownloadNetwork.Override,

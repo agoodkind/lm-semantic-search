@@ -28,7 +28,9 @@ func (manager *Manager) adoptUnregisteredCodebase(
 	canonicalPath string,
 ) (model.Codebase, bool) {
 	if manager.config.IngestionDisabled {
-		return model.Codebase{}, false
+		var empty model.Codebase
+
+		return empty, false
 	}
 
 	indexConfig := manager.enrichIndexConfig(model.IndexConfig{

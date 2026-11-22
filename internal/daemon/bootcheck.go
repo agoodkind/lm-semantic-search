@@ -249,8 +249,7 @@ func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutc
 
 	// The check's query would load a cold collection, which is exactly what a
 	// daemon restarted mid-restore must not do.
-	if manager.config.SearchDisabled || manager.config.IngestionDisabled ||
-		manager.skipForMaintenance(ctx, "boot-selfcheck") {
+	if manager.skipForMaintenance(ctx, "boot-selfcheck") {
 		return bootSelfCheckSkipped, nil
 	}
 
@@ -394,6 +393,10 @@ func (manager *Manager) bootSelfCheckSkipReason() string {
 
 	if manager.config.EmbeddingProvider == config.EmbeddingProviderONNX {
 		return "ONNX inference cannot guarantee cancellation"
+	}
+
+	if manager.config.SearchDisabled || manager.config.IngestionDisabled {
+		return "search or ingestion is disabled"
 	}
 
 	return ""

@@ -14,6 +14,13 @@ import (
 )
 
 // SearchCode performs a semantic search over indexed chunk content.
+//
+// With ingestion disabled, search reads the existing collection without
+// migrating its schema or scheduling a rebuild.
+//
+// Example:
+//
+//	manager.SearchCode(ctx, repoPath, "parse config", 5, nil)
 func (manager *Manager) SearchCode(
 	ctx context.Context,
 	requestedPath string,
@@ -32,11 +39,7 @@ func (manager *Manager) SearchCode(
 	}
 
 	if !found {
-		return SearchOutcome{}, fmt.Errorf(
-			"search codebase %s: %w",
-			requestedPath,
-			adapterr.NewNotIndexed(requestedPath, nil),
-		)
+		return SearchOutcome{}, adapterr.NewNotIndexed(requestedPath, nil)
 	}
 
 	// A worktree the daemon just discovered on this read has no collection yet,
@@ -71,41 +74,22 @@ func (manager *Manager) SearchCode(
 	// not the whole parent index.
 	relativePathPrefix := subtreePrefix(requestedPath, codebase.CanonicalPath)
 
-	if manager.semantic == nil || !manager.semantic.Available() {
-		storeErr := adapterr.NewMilvusUnavailable(semantic.ErrUnavailable)
-		manager.noteDependencyFailure(storeErr)
-		slog.ErrorContext(
-			ctx,
-			"semantic search unavailable",
-			"codebase_path",
-			codebase.CanonicalPath,
-			"err",
-			storeErr,
-		)
-
-		return SearchOutcome{}, fmt.Errorf(
-			"search codebase %s: %w",
-			codebase.CanonicalPath,
-			storeErr,
-		)
-	}
-
-	collectionName := manager.semantic.CollectionName(codebase.CanonicalPath)
-	if !manager.config.IngestionDisabled {
-		if prepareErr := manager.semantic.PrepareCollection(ctx, collectionName); prepareErr != nil {
-			manager.noteDependencyFailure(prepareErr)
-
-			return SearchOutcome{}, fmt.Errorf(
-				"prepare search collection %s: %w",
-				collectionName,
-				prepareErr,
-			)
-		}
+	collectionName, err := manager.prepareSearchCollection(ctx, codebase.CanonicalPath)
+	if err != nil {
+		return SearchOutcome{}, err
 	}
 
 	lease, leaseErr := manager.semantic.AcquireCollection(ctx, collectionName)
 	if leaseErr != nil {
 		manager.noteDependencyFailure(leaseErr)
+		slog.ErrorContext(
+			ctx,
+			"acquire search collection failed",
+			"collection",
+			collectionName,
+			"err",
+			leaseErr,
+		)
 
 		return SearchOutcome{}, fmt.Errorf(
 			"acquire search collection %s: %w",
@@ -123,6 +107,60 @@ func (manager *Manager) SearchCode(
 		normalizedExtensions,
 		relativePathPrefix,
 	)
+
+	return manager.searchCollectionOutcome(
+		ctx,
+		codebase,
+		activeJob,
+		collectionName,
+		stateNote,
+		chunks,
+		semanticErr,
+	)
+}
+
+func (manager *Manager) prepareSearchCollection(
+	ctx context.Context,
+	codebasePath string,
+) (string, error) {
+	if manager.semantic == nil || !manager.semantic.Available() {
+		storeErr := adapterr.NewMilvusUnavailable(semantic.ErrUnavailable)
+		manager.noteDependencyFailure(storeErr)
+		slog.ErrorContext(
+			ctx,
+			"semantic search unavailable",
+			"codebase_path",
+			codebasePath,
+			"err",
+			storeErr,
+		)
+
+		return "", fmt.Errorf("search codebase %s: %w", codebasePath, storeErr)
+	}
+
+	collectionName := manager.semantic.CollectionName(codebasePath)
+	if manager.config.IngestionDisabled {
+		return collectionName, nil
+	}
+
+	if err := manager.semantic.PrepareCollection(ctx, collectionName); err != nil {
+		manager.noteDependencyFailure(err)
+
+		return "", fmt.Errorf("prepare search collection %s: %w", collectionName, err)
+	}
+
+	return collectionName, nil
+}
+
+func (manager *Manager) searchCollectionOutcome(
+	ctx context.Context,
+	codebase model.Codebase,
+	activeJob *model.Job,
+	collectionName string,
+	stateNote string,
+	chunks []model.StoredChunk,
+	semanticErr error,
+) (SearchOutcome, error) {
 	switch {
 	case semanticErr == nil:
 		// A search that returns no error exercised both shared dependencies, which
@@ -151,39 +189,8 @@ func (manager *Manager) SearchCode(
 			Results:   []model.StoredChunk{},
 			StateNote: stateNote,
 		}, nil
-	case errors.Is(semanticErr, semantic.ErrCollectionMissing) && manager.config.IngestionDisabled:
-		missing := adapterr.NewIndexDataLost(codebase.CanonicalPath, semanticErr)
-		missing.Hint = "set ingestionEnabled to true in config.json and restart the daemon to allow a rebuild"
-
-		return SearchOutcome{}, missing
 	case errors.Is(semanticErr, semantic.ErrCollectionMissing):
-		switch decideSearchCollectionMode(codebase, activeJob, collectionPresenceMissing) {
-		case searchCollectionModeAutomaticRepair:
-			return SearchOutcome{
-				Codebase:  codebase,
-				ActiveJob: activeJob,
-				Results:   []model.StoredChunk{},
-				StateNote: status.StateNoteFor(status.SearchRepairing),
-			}, nil
-		case searchCollectionModeMissing:
-			return SearchOutcome{}, fmt.Errorf(
-				"search missing collection for %s: %w",
-				codebase.CanonicalPath,
-				adapterr.NewIndexDataLost(codebase.CanonicalPath, semanticErr),
-			)
-		case searchCollectionModeProceed:
-			return SearchOutcome{}, fmt.Errorf(
-				"search unavailable collection for %s: %w",
-				codebase.CanonicalPath,
-				adapterr.NewIndexDataLost(codebase.CanonicalPath, semanticErr),
-			)
-		default:
-			return SearchOutcome{}, fmt.Errorf(
-				"select search collection for %s: %w",
-				codebase.CanonicalPath,
-				adapterr.NewIndexDataLost(codebase.CanonicalPath, semanticErr),
-			)
-		}
+		return manager.searchMissingCollection(codebase, activeJob, semanticErr)
 	case errors.Is(semanticErr, semantic.ErrUnavailable):
 		storeErr := adapterr.NewMilvusUnavailable(semanticErr)
 		manager.noteDependencyFailure(storeErr)
@@ -221,6 +228,29 @@ func (manager *Manager) SearchCode(
 			semanticErr,
 		)
 	}
+}
+
+func (manager *Manager) searchMissingCollection(
+	codebase model.Codebase,
+	activeJob *model.Job,
+	semanticErr error,
+) (SearchOutcome, error) {
+	mode := decideSearchCollectionMode(codebase, activeJob, collectionPresenceMissing)
+	if !manager.config.IngestionDisabled && mode == searchCollectionModeAutomaticRepair {
+		return SearchOutcome{
+			Codebase:  codebase,
+			ActiveJob: activeJob,
+			Results:   []model.StoredChunk{},
+			StateNote: status.StateNoteFor(status.SearchRepairing),
+		}, nil
+	}
+
+	missing := adapterr.NewIndexDataLost(codebase.CanonicalPath, semanticErr)
+	if manager.config.IngestionDisabled {
+		missing.Hint = "set ingestionEnabled to true in config.json and restart the daemon to allow a rebuild"
+	}
+
+	return SearchOutcome{}, missing
 }
 
 // searchPreconditions checks what a search needs before it resolves a path:

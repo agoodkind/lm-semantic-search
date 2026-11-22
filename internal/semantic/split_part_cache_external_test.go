@@ -129,7 +129,14 @@ func TestSearchRemigratesCollectionAfterInspectObservesAbsence(t *testing.T) {
 	fakeMilvus := &splitPartLifecycleServer{collectionExists: true, splitPartExists: true}
 	service := newSplitPartSearchService(t, fakeMilvus, false)
 	codebasePath := t.TempDir()
-	if _, err := service.Search(context.Background(), codebasePath, "first", 1, nil, ""); err != nil {
+	if _, err := service.Search(
+		context.Background(),
+		codebasePath,
+		"first",
+		1,
+		nil,
+		"",
+	); err != nil {
 		t.Fatalf("initial Search returned error: %v", err)
 	}
 
@@ -139,14 +146,23 @@ func TestSearchRemigratesCollectionAfterInspectObservesAbsence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectCollection returned error: %v", err)
 	}
+
 	if facts.Exists {
 		t.Fatal("InspectCollection reported a dropped collection as present")
 	}
 
 	fakeMilvus.setCollection(true, false)
-	if _, err := service.Search(context.Background(), codebasePath, "second", 1, nil, ""); err != nil {
+	if _, err := service.Search(
+		context.Background(),
+		codebasePath,
+		"second",
+		1,
+		nil,
+		"",
+	); err != nil {
 		t.Fatalf("Search after external recreation returned error: %v", err)
 	}
+
 	if !fakeMilvus.addedSplitPart() {
 		t.Fatal("Search did not restore splitPart on the recreated collection")
 	}
@@ -157,16 +173,26 @@ func TestSearchLegacyCollectionWithIngestionDisabled(t *testing.T) {
 
 	fakeMilvus := &splitPartLifecycleServer{collectionExists: true}
 	service := newSplitPartSearchService(t, fakeMilvus, true)
-	if _, err := service.Search(context.Background(), t.TempDir(), "needle", 1, nil, ""); err != nil {
+	if _, err := service.Search(
+		context.Background(),
+		t.TempDir(),
+		"needle",
+		1,
+		nil,
+		"",
+	); err != nil {
 		t.Fatalf("Search without schema migration returned error: %v", err)
 	}
+
 	if fakeMilvus.addedSplitPart() {
 		t.Fatal("Search added splitPart with ingestion disabled")
 	}
 }
 
 func newSplitPartSearchService(
-	t *testing.T, fakeMilvus *splitPartLifecycleServer, ingestionDisabled bool,
+	t *testing.T,
+	fakeMilvus *splitPartLifecycleServer,
+	ingestionDisabled bool,
 ) *semantic.Service {
 	t.Helper()
 

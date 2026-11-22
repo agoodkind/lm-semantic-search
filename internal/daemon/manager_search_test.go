@@ -23,7 +23,10 @@ func TestSearchRPCWithIngestionDisabled(t *testing.T) {
 		prepareCollection: func(context.Context, string) error {
 			return errors.New("search attempted a schema migration")
 		},
-		search: func(context.Context, string, string, int32, []string, string) ([]model.StoredChunk, error) {
+		search: func(context.Context, string, string, int32, []string, string) (
+			[]model.StoredChunk,
+			error,
+		) {
 			return []model.StoredChunk{{Content: "needle", RelativePath: "fixture.go"}}, nil
 		},
 	}
@@ -32,17 +35,23 @@ func TestSearchRPCWithIngestionDisabled(t *testing.T) {
 	request := &pb.SearchCodeRequest{Path: repoPath, Query: "needle"}
 	response, err := server.SearchCode(ctx, request)
 	if err != nil || len(response.GetResults()) != 1 {
-		t.Fatalf("SearchCode with ingestion disabled returned %d hits, error = %v", len(response.GetResults()), err)
+		t.Fatalf(
+			"SearchCode with ingestion disabled returned %d hits, error = %v",
+			len(response.GetResults()),
+			err,
+		)
 	}
 
 	_, err = server.StartIndex(ctx, &pb.StartIndexRequest{Path: repoPath})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("StartIndex returned %v, want FailedPrecondition", err)
 	}
+
 	_, err = server.SyncIndex(ctx, &pb.SyncIndexRequest{Path: repoPath})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("SyncIndex returned %v, want FailedPrecondition", err)
 	}
+
 	_, err = server.ClearIndex(ctx, &pb.ClearIndexRequest{Path: repoPath})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("ClearIndex returned %v, want FailedPrecondition", err)

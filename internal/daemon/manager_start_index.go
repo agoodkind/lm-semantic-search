@@ -24,10 +24,6 @@ func (manager *Manager) startIndexWithRecovery(
 ) (model.Job, model.Codebase, bool, string, error) {
 	var emptyJob model.Job
 	var emptyCodebase model.Codebase
-	if manager.config.IngestionDisabled {
-		return emptyJob, emptyCodebase, false, "", adapterr.NewIngestionDisabled()
-	}
-
 	canonicalPath, sourceIntent, err := manager.startIndexTarget(ctx, requestedPath, source)
 	if err != nil {
 		return emptyJob, emptyCodebase, false, "", err
@@ -152,6 +148,10 @@ func (manager *Manager) startIndexTarget(
 	source model.WorktreeSourceRequest,
 ) (string, worktreeSourceIntent, error) {
 	emptyIntent := worktreeSourceIntent{sourcePath: "", startingCommit: ""}
+	if manager.config.IngestionDisabled {
+		return "", emptyIntent, adapterr.NewIngestionDisabled()
+	}
+
 	canonicalPath, err := manager.startIndexCanonicalPath(ctx, requestedPath)
 	if err != nil {
 		return "", emptyIntent, err
