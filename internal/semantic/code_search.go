@@ -15,9 +15,9 @@ import (
 //
 // A nonempty relativePathPrefix restricts the results to that subtree.
 //
-// Example:
-//
-//	service.Search(ctx, path, "parse config", 5, nil, "internal")
+// Filters:
+//   - An empty prefix searches the entire collection.
+//   - An extension filter limits the file types in the results.
 func (service *Service) Search(
 	ctx context.Context,
 	codebasePath string,

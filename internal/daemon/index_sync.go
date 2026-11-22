@@ -7,13 +7,13 @@ import (
 	"goodkind.io/lm-semantic-search/internal/model"
 )
 
-// SyncIndexWithPolicy starts a sync with a per-run scheduling policy patch.
+// SyncIndexWithPolicy returns the job registered for a sync request.
 //
-// The daemon refuses sync when ingestion is disabled.
+// The policy patch supplies scheduling overrides for that request.
 //
-// Example:
-//
-//	manager.SyncIndexWithPolicy(ctx, path, client, patch)
+// Results:
+//   - An active job can satisfy the request without creating another job.
+//   - Disabled ingestion returns the ingestion_disabled error.
 func (manager *Manager) SyncIndexWithPolicy(
 	ctx context.Context,
 	requestedPath string,

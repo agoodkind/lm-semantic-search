@@ -8,11 +8,12 @@ import (
 
 // Start launches background sync when ingestion is enabled.
 //
-// The daemon keeps its watcher and periodic jobs idle while ingestion is off.
+// Each task also checks its own configuration setting.
 //
-// Example:
-//
-//	syncer.Start(ctx)
+// Tasks:
+//   - File watcher for changes in tracked codebases.
+//   - Trigger watcher for explicit sync requests.
+//   - Periodic sync and store maintenance.
 func (syncer *BackgroundSync) Start(ctx context.Context) {
 	if syncer.cfg.IngestionDisabled {
 		return

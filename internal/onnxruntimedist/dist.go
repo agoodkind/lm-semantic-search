@@ -65,9 +65,10 @@ var (
 //
 // Microsoft uses its NuGet runtime identifiers for library directories.
 //
-// Example:
-//
-//	ArchiveFor("linux", "amd64")
+// Runtime directories:
+//   - Linux AMD64 uses runtimes/linux-x64/native.
+//   - Linux ARM64 uses runtimes/linux-arm64/native.
+//   - macOS ARM64 uses runtimes/osx-arm64/native.
 func ArchiveFor(goos string, goarch string) (Archive, error) {
 	var runtimeID string
 
