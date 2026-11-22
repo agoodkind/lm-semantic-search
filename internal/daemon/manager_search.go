@@ -151,6 +151,11 @@ func (manager *Manager) SearchCode(
 			Results:   []model.StoredChunk{},
 			StateNote: stateNote,
 		}, nil
+	case errors.Is(semanticErr, semantic.ErrCollectionMissing) && manager.config.IngestionDisabled:
+		missing := adapterr.NewIndexDataLost(codebase.CanonicalPath, semanticErr)
+		missing.Hint = "set ingestionEnabled to true in config.json and restart the daemon to allow a rebuild"
+
+		return SearchOutcome{}, missing
 	case errors.Is(semanticErr, semantic.ErrCollectionMissing):
 		switch decideSearchCollectionMode(codebase, activeJob, collectionPresenceMissing) {
 		case searchCollectionModeAutomaticRepair:
