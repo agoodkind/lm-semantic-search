@@ -90,6 +90,9 @@ const (
 	// the store until the operator turns the mode off.
 	ClassMaintenance Class = "maintenance"
 
+	// ClassCapabilityDisabled reports an operation the daemon config disables.
+	ClassCapabilityDisabled Class = "capability_disabled"
+
 	// ClassCollectionSchemaMismatch reports a collection registration that
 	// declares scalar columns in conflict with the saved declaration or with the
 	// stored collection schema. The daemon keeps the existing collection and
@@ -118,7 +121,7 @@ func CodeFor(class Class) codes.Code {
 	case ClassNotIndexed, ClassJobNotFound, ClassUnknownCodebaseID:
 		return codes.NotFound
 	case ClassCollectionMissing, ClassCollectionNotReady, ClassConflictingJob, ClassMaintenance,
-		ClassCollectionSchemaMismatch, ClassEmbeddingModelNotReady:
+		ClassCollectionSchemaMismatch, ClassEmbeddingModelNotReady, ClassCapabilityDisabled:
 		return codes.FailedPrecondition
 	case ClassMilvusUnavailable, ClassEmbedderUnreachable:
 		return codes.Unavailable
@@ -302,6 +305,40 @@ func NewMaintenance(reason string) *AdapterError {
 		Message:       message,
 		Code:          "maintenance",
 		Hint:          "retry after the operator turns maintenance mode off with lm-semantic-search daemon maintenance off",
+		Cause:         nil,
+		SafeForClient: true,
+	}
+}
+
+// NewIngestionDisabled tells the caller how to reenable index writes.
+//
+// The search setting independently controls queries against existing indexes.
+//
+// RPC failure:
+//   - FailedPrecondition with reason ingestion_disabled.
+func NewIngestionDisabled() *AdapterError {
+	return &AdapterError{
+		Class:         ClassCapabilityDisabled,
+		Code:          "ingestion_disabled",
+		Message:       "index ingestion is disabled",
+		Hint:          "set ingestionEnabled to true in config.json and restart the daemon",
+		Cause:         nil,
+		SafeForClient: true,
+	}
+}
+
+// NewSearchDisabled tells the caller how to reenable semantic search.
+//
+// The ingestion setting independently controls index writes.
+//
+// RPC failure:
+//   - FailedPrecondition with reason search_disabled.
+func NewSearchDisabled() *AdapterError {
+	return &AdapterError{
+		Class:         ClassCapabilityDisabled,
+		Code:          "search_disabled",
+		Message:       "semantic search is disabled",
+		Hint:          "set searchEnabled to true in config.json and restart the daemon",
 		Cause:         nil,
 		SafeForClient: true,
 	}

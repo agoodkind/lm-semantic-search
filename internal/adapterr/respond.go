@@ -219,7 +219,8 @@ func IsTransient(err error) bool {
 	case ClassNotIndexed, ClassUnknownCodebaseID, ClassCollectionMissing,
 		ClassCollectionNotReady, ClassSearchResultIncomplete, ClassEmbedderRejected,
 		ClassInvalidPath, ClassInvalidArgument, ClassConflictingJob, ClassJobNotFound,
-		ClassIndexBudgetExceeded, ClassMaintenance, ClassCollectionSchemaMismatch, ClassInternal:
+		ClassIndexBudgetExceeded, ClassMaintenance, ClassCapabilityDisabled,
+		ClassCollectionSchemaMismatch, ClassInternal:
 		return false
 	default:
 		return false

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 
@@ -94,11 +95,11 @@ func (server *splitPartLifecycleServer) AddCollectionField(
 
 func (server *splitPartLifecycleServer) Search(
 	_ context.Context,
-	_ *milvuspb.SearchRequest,
+	request *milvuspb.SearchRequest,
 ) (*milvuspb.SearchResults, error) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
-	if !server.splitPartExists {
+	if !server.splitPartExists && slices.Contains(request.GetOutputFields(), "splitPart") {
 		return &milvuspb.SearchResults{
 			Status: &commonpb.Status{
 				ErrorCode: commonpb.ErrorCode_UnexpectedError,
@@ -125,58 +126,9 @@ func (server *splitPartLifecycleServer) Search(
 func TestSearchRemigratesCollectionAfterInspectObservesAbsence(t *testing.T) {
 	t.Parallel()
 
-	embeddingServer := httptest.NewServer(
-		http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-			writer.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(writer).Encode(map[string][]map[string][]float64{
-				"data": {{"embedding": {0}}},
-			}); err != nil {
-				t.Errorf("encode embedding response: %v", err)
-			}
-		}),
-	)
-	t.Cleanup(embeddingServer.Close)
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen for fake Milvus: %v", err)
-	}
-
-	fakeMilvus := &splitPartLifecycleServer{
-		collectionExists: true,
-		splitPartExists:  true,
-	}
-	grpcServer := grpc.NewServer()
-	milvuspb.RegisterMilvusServiceServer(grpcServer, fakeMilvus)
-	t.Cleanup(grpcServer.Stop)
-	go func() {
-		if serveErr := grpcServer.Serve(listener); serveErr != nil {
-			t.Errorf("serve fake Milvus: %v", serveErr)
-		}
-	}()
-
+	fakeMilvus := &splitPartLifecycleServer{collectionExists: true, splitPartExists: true}
+	service := newSplitPartSearchService(t, fakeMilvus, false)
 	codebasePath := t.TempDir()
-	service, err := semantic.NewService(
-		context.Background(),
-		config.Config{
-			EmbeddingProvider:  "OpenAI",
-			EmbeddingModel:     "test-model",
-			EmbeddingDimension: 1,
-			OpenAIAPIKey:       "test-key",
-			OpenAIBaseURL:      embeddingServer.URL,
-			MilvusAddress:      listener.Addr().String(),
-		},
-	)
-	if err != nil {
-		t.Fatalf("NewService returned error: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := service.Close(context.Background()); closeErr != nil {
-			t.Errorf("Close returned error: %v", closeErr)
-		}
-	})
-
 	if _, err := service.Search(
 		context.Background(),
 		codebasePath,
@@ -214,6 +166,85 @@ func TestSearchRemigratesCollectionAfterInspectObservesAbsence(t *testing.T) {
 	if !fakeMilvus.addedSplitPart() {
 		t.Fatal("Search did not restore splitPart on the recreated collection")
 	}
+}
+
+func TestSearchLegacyCollectionWithIngestionDisabled(t *testing.T) {
+	t.Parallel()
+
+	fakeMilvus := &splitPartLifecycleServer{collectionExists: true}
+	service := newSplitPartSearchService(t, fakeMilvus, true)
+	if _, err := service.Search(
+		context.Background(),
+		t.TempDir(),
+		"needle",
+		1,
+		nil,
+		"",
+	); err != nil {
+		t.Fatalf("Search without schema migration returned error: %v", err)
+	}
+
+	if fakeMilvus.addedSplitPart() {
+		t.Fatal("Search added splitPart with ingestion disabled")
+	}
+}
+
+func newSplitPartSearchService(
+	t *testing.T,
+	fakeMilvus *splitPartLifecycleServer,
+	ingestionDisabled bool,
+) *semantic.Service {
+	t.Helper()
+
+	embeddingServer := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(writer).Encode(map[string][]map[string][]float64{
+				"data": {{"embedding": {0}}},
+			}); err != nil {
+				t.Errorf("encode embedding response: %v", err)
+			}
+		}),
+	)
+	t.Cleanup(embeddingServer.Close)
+
+	listener, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatalf("listen for fake Milvus: %v", err)
+	}
+
+	grpcServer := grpc.NewServer()
+	milvuspb.RegisterMilvusServiceServer(grpcServer, fakeMilvus)
+	t.Cleanup(grpcServer.Stop)
+	go func() {
+		if serveErr := grpcServer.Serve(listener); serveErr != nil {
+			t.Errorf("serve fake Milvus: %v", serveErr)
+		}
+	}()
+
+	service, err := semantic.NewService(
+		context.Background(),
+		config.Config{
+			EmbeddingProvider:  "OpenAI",
+			EmbeddingModel:     "test-model",
+			EmbeddingDimension: 1,
+			OpenAIAPIKey:       "test-key",
+			OpenAIBaseURL:      embeddingServer.URL,
+			MilvusAddress:      listener.Addr().String(),
+			IngestionDisabled:  ingestionDisabled,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := service.Close(context.Background()); closeErr != nil {
+			t.Errorf("Close returned error: %v", closeErr)
+		}
+	})
+
+	return service
 }
 
 func successStatus() *commonpb.Status {

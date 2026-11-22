@@ -494,11 +494,12 @@ func (store *Store) Load(
 // Query feeds the BM25 sparse leg, which is lexical and never embeds. A
 // non-positive Limit searches for defaultSearchLimit hits.
 type ExpressionSearch struct {
-	Collection string
-	Vector     []float32
-	Query      string
-	Limit      int
-	Expression string
+	Collection    string
+	Vector        []float32
+	Query         string
+	Limit         int
+	Expression    string
+	OmitSplitPart bool
 }
 
 // SearchExpression runs one top-K search limited to Limit and returns its rows
@@ -521,8 +522,12 @@ func (store *Store) SearchExpression(
 		EndLineField,
 		FileExtensionField,
 		MetadataField,
-		SplitPartField,
 	}
+
+	if !search.OmitSplitPart {
+		outputFields = append(outputFields, SplitPartField)
+	}
+
 	if store.options.Hybrid {
 		legDepth := max(searchLimit, minimumLegDepth)
 		denseRequest := store.denseAnnRequest(legDepth, search.Vector)

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	pb "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/indexer"
 	"goodkind.io/lm-semantic-search/internal/merkle"
 	"goodkind.io/lm-semantic-search/internal/model"
@@ -789,6 +790,18 @@ func TestSearchCodeMissingCollectionReportsAutomaticRepairWithoutQueuingWork(t *
 
 	if jobs := manager.ListJobs(""); len(jobs) != 0 {
 		t.Fatalf("search queued %d jobs, want 0", len(jobs))
+	}
+
+	manager.config.IngestionDisabled = true
+	_, err = manager.SearchCode(context.Background(), repoPath, "SearchableThing", 5, nil)
+
+	var adapterError *adapterr.AdapterError
+	if !errors.As(err, &adapterError) || adapterError.Class != adapterr.ClassCollectionMissing {
+		t.Fatalf("SearchCode with ingestion disabled returned %v, want collection missing", err)
+	}
+
+	if !strings.Contains(adapterError.Hint, "ingestionEnabled") {
+		t.Fatalf("SearchCode hint = %q, want instructions to enable ingestion", adapterError.Hint)
 	}
 }
 

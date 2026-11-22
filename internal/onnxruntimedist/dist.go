@@ -1,5 +1,5 @@
-// Package onnxruntimedist pins the ONNX Runtime release archives that
-// lm-semantic-search links against and installs their shared library.
+// Package onnxruntimedist installs the pinned ONNX Runtime shared library
+// and headers from Microsoft's NuGet package.
 package onnxruntimedist
 
 import (
@@ -13,28 +13,22 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 const (
 	// Version is the pinned ONNX Runtime release.
-	Version = "1.27.0"
+	Version = "1.32.0"
 
-	darwinARM64ArchiveName     = "onnxruntime-osx-arm64-1.27.0"
-	darwinARM64ArchiveURL      = "https://github.com/microsoft/onnxruntime/releases/download/v1.27.0/onnxruntime-osx-arm64-1.27.0.tgz"
-	darwinARM64ArchiveSHA256   = "545e81c58152353acb0d1e8bd6ce4b62f830c0961f5b3acfedc790ffd76e477a"
+	packageURL = "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/" + Version +
+		"/microsoft.ml.onnxruntime." + Version + ".nupkg"
+	packageSHA256 = "a9150bc2992cbbb6722070da9910e1ffa989a8bfc67bdd5bb8e745ca755641db"
+
 	darwinLibraryName          = "libonnxruntime.dylib"
 	darwinLibrarySONAME        = "libonnxruntime.1.dylib"
-	darwinVersionedLibraryName = "libonnxruntime.1.27.0.dylib"
-	linuxAMD64ArchiveName      = "onnxruntime-linux-x64-1.27.0"
-	linuxAMD64ArchiveURL       = "https://github.com/microsoft/onnxruntime/releases/download/v1.27.0/onnxruntime-linux-x64-1.27.0.tgz"
-	linuxAMD64ArchiveSHA256    = "547e40a48f1fe73e3f812d7c88a948612c23f896b91e4e2ee1e232d7b468246f"
-	linuxARM64ArchiveName      = "onnxruntime-linux-aarch64-1.27.0"
-	linuxARM64ArchiveURL       = "https://github.com/microsoft/onnxruntime/releases/download/v1.27.0/onnxruntime-linux-aarch64-1.27.0.tgz"
-	linuxARM64ArchiveSHA256    = "3e4d83ac06924a32a07b6d7f91ce6f852876153fc0bbdf931bf517a140bfbe48"
+	darwinVersionedLibraryName = "libonnxruntime.1.32.0.dylib"
 	linuxLibraryName           = "libonnxruntime.so"
 	linuxLibrarySONAME         = "libonnxruntime.so.1"
-	linuxVersionedLibraryName  = "libonnxruntime.so.1.27.0"
+	linuxVersionedLibraryName  = "libonnxruntime.so.1.32.0"
 	defaultDirectoryMode       = 0o755
 	maxExtractedFileSize       = 2 << 30
 
@@ -44,66 +38,82 @@ const (
 	architectureARM64     = "arm64"
 )
 
-// Archive is one pinned ONNX Runtime release archive. Name is the top-level
-// directory the archive extracts to.
+// Archive identifies the pinned package and library for one platform.
 type Archive struct {
-	Name   string
 	URL    string
 	SHA256 string
+
+	libraryPath string
+	libraryName string
 }
 
-// LibraryNames are the file names of the shared library: the versioned file
-// the archive ships, and the SONAME and unversioned names that link to it.
+// LibraryNames contains the versioned library file name and both symlink names.
 type LibraryNames struct {
 	Versioned   string
 	SONAME      string
 	Unversioned string
 }
 
-var darwinArchives = map[string]Archive{
-	architectureARM64: {
-		Name:   darwinARM64ArchiveName,
-		URL:    darwinARM64ArchiveURL,
-		SHA256: darwinARM64ArchiveSHA256,
-	},
-}
+var (
+	errUnsupportedGOOS   = errors.New("unsupported GOOS")
+	errUnsupportedGOARCH = errors.New("unsupported GOARCH")
+	errDownloadStatus    = errors.New("unexpected HTTP status")
+	errChecksumMismatch  = errors.New("checksum mismatch")
+)
 
-var linuxArchives = map[string]Archive{
-	architectureAMD64: {
-		Name:   linuxAMD64ArchiveName,
-		URL:    linuxAMD64ArchiveURL,
-		SHA256: linuxAMD64ArchiveSHA256,
-	},
-	architectureARM64: {
-		Name:   linuxARM64ArchiveName,
-		URL:    linuxARM64ArchiveURL,
-		SHA256: linuxARM64ArchiveSHA256,
-	},
-}
-
-// ArchiveFor returns the pinned archive for a GOOS and GOARCH pair.
+// ArchiveFor returns the pinned package and the library entry for a platform.
+//
+// Microsoft uses its NuGet runtime identifiers for library directories.
+//
+// Runtime directories:
+//   - Linux AMD64 uses runtimes/linux-x64/native.
+//   - Linux ARM64 uses runtimes/linux-arm64/native.
+//   - macOS ARM64 uses runtimes/osx-arm64/native.
 func ArchiveFor(goos string, goarch string) (Archive, error) {
+	var runtimeID string
+
 	switch goos {
 	case operatingSystemDarwin:
-		archive, ok := darwinArchives[goarch]
-		if !ok {
-			return Archive{}, fmt.Errorf("unsupported Darwin GOARCH %s", goarch)
+		if goarch != architectureARM64 {
+			return Archive{}, wrapError("select library for darwin/"+goarch, errUnsupportedGOARCH)
 		}
 
-		return archive, nil
+		runtimeID = "osx-arm64"
 	case operatingSystemLinux:
-		archive, ok := linuxArchives[goarch]
-		if !ok {
-			return Archive{}, fmt.Errorf("unsupported Linux GOARCH %s", goarch)
+		switch goarch {
+		case architectureAMD64:
+			runtimeID = "linux-x64"
+		case architectureARM64:
+			runtimeID = "linux-arm64"
+		default:
+			return Archive{}, wrapError("select library for linux/"+goarch, errUnsupportedGOARCH)
 		}
-
-		return archive, nil
 	default:
-		return Archive{}, fmt.Errorf("unsupported GOOS %s", goos)
+		return Archive{}, wrapError("select library for "+goos, errUnsupportedGOOS)
 	}
+
+	names, err := LibraryNamesFor(goos)
+	if err != nil {
+		return Archive{}, err
+	}
+
+	return Archive{
+		URL:         packageURL,
+		SHA256:      packageSHA256,
+		libraryPath: "runtimes/" + runtimeID + "/native/" + names.Unversioned,
+		libraryName: names.Versioned,
+	}, nil
 }
 
 // LibraryNamesFor returns the shared library file names for a GOOS.
+//
+// Installers use the versioned name for the file and the other names for
+// symlinks to that file.
+//
+// Linux layout:
+//   - libonnxruntime.so.1.32.0
+//   - libonnxruntime.so.1
+//   - libonnxruntime.so
 func LibraryNamesFor(goos string) (LibraryNames, error) {
 	switch goos {
 	case operatingSystemDarwin:
@@ -119,14 +129,17 @@ func LibraryNamesFor(goos string) (LibraryNames, error) {
 			Unversioned: linuxLibraryName,
 		}, nil
 	default:
-		return LibraryNames{}, fmt.Errorf("unsupported GOOS %s", goos)
+		return LibraryNames{}, wrapError("select library names for "+goos, errUnsupportedGOOS)
 	}
 }
 
-// StageSharedLibrary downloads archive, verifies its pinned SHA-256, and
-// writes only its versioned library file into directory. It writes no SONAME
-// or unversioned symlink. A binary already installed in directory keeps
-// loading the library that those symlinks name.
+// StageSharedLibrary prepares a runtime library for a later install.
+//
+// It verifies the package checksum before writing to directory.
+//
+// Layout:
+//   - names.Versioned is the only file this function writes to directory.
+//   - The installer updates the SONAME and unversioned symlinks separately.
 func StageSharedLibrary(
 	ctx context.Context,
 	httpClient *http.Client,
@@ -164,15 +177,21 @@ func StageSharedLibrary(
 	return nil
 }
 
-// FetchArchive downloads archive into workDirectory, verifies its pinned
-// SHA-256, extracts it there, and returns the extracted top-level directory.
+// FetchArchive downloads and verifies the pinned ONNX Runtime package.
+//
+// It extracts the selected library and the public headers into a new
+// subdirectory of workDirectory. Pass that directory to [InstallLibrary].
+//
+// Extracted layout:
+//   - lib/ contains the selected shared library.
+//   - include/ contains the public headers.
 func FetchArchive(
 	ctx context.Context,
 	httpClient *http.Client,
 	archive Archive,
 	workDirectory string,
 ) (string, error) {
-	archivePath := filepath.Join(workDirectory, "onnxruntime.tgz")
+	archivePath := filepath.Join(workDirectory, "onnxruntime.nupkg")
 	if err := downloadAndVerify(
 		ctx,
 		httpClient,
@@ -183,19 +202,26 @@ func FetchArchive(
 		return "", err
 	}
 
-	extractedDirectory := filepath.Join(workDirectory, "onnxruntime")
-	if err := extractTarGzip(archivePath, extractedDirectory); err != nil {
-		return "", wrapError("extract ONNX Runtime archive", err)
+	extractedDirectory, err := os.MkdirTemp(workDirectory, "onnxruntime.")
+	if err != nil {
+		return "", wrapError("create ONNX Runtime extraction directory", err)
 	}
 
-	return filepath.Join(extractedDirectory, archive.Name), nil
+	if err := extractPackage(archivePath, extractedDirectory, archive); err != nil {
+		return "", wrapError("extract ONNX Runtime package", err)
+	}
+
+	return extractedDirectory, nil
 }
 
-// InstallLibrary copies the versioned library from an extracted archive into
-// libraryDirectory and points the SONAME and unversioned names at it with
-// relative symlinks. Each file is written beside its destination and renamed
-// into place, so a daemon that has the previous library mapped keeps its copy
-// and a repeated install converges on the same result.
+// InstallLibrary copies the versioned library and creates relative symlinks.
+//
+// It renames each file into place. A running daemon keeps the library that
+// it already mapped.
+//
+// Installed layout:
+//   - names.Versioned contains the library.
+//   - names.SONAME and names.Unversioned link to names.Versioned.
 func InstallLibrary(archiveDirectory string, names LibraryNames, libraryDirectory string) error {
 	sourceLibraryPath := filepath.Join(archiveDirectory, "lib", names.Versioned)
 	destinationLibraryPath := filepath.Join(libraryDirectory, names.Versioned)
@@ -215,6 +241,7 @@ func InstallLibrary(archiveDirectory string, names LibraryNames, libraryDirector
 
 func wrapError(operation string, err error) error {
 	slog.Error(operation+" failed", "err", err)
+
 	return fmt.Errorf("%s: %w", operation, err)
 }
 
@@ -246,21 +273,25 @@ func copyFileReplacing(sourcePath string, destinationPath string) error {
 	closeErr := destination.Close()
 	if copyErr != nil {
 		_ = os.Remove(temporaryPath)
+
 		return wrapError("copy dependency file", copyErr)
 	}
 
 	if closeErr != nil {
 		_ = os.Remove(temporaryPath)
+
 		return wrapError("close destination file", closeErr)
 	}
 
 	if err := os.Chmod(temporaryPath, sourceInfo.Mode().Perm()); err != nil {
 		_ = os.Remove(temporaryPath)
+
 		return wrapError("set destination file mode", err)
 	}
 
 	if err := os.Rename(temporaryPath, destinationPath); err != nil {
 		_ = os.Remove(temporaryPath)
+
 		return wrapError("replace destination file", err)
 	}
 
@@ -280,6 +311,7 @@ func symlinkReplacing(target string, linkPath string) error {
 
 	if err := os.Rename(temporaryLinkPath, linkPath); err != nil {
 		_ = os.Remove(temporaryLinkPath)
+
 		return wrapError("replace symlink", err)
 	}
 
@@ -307,7 +339,7 @@ func downloadAndVerify(
 
 	if response.StatusCode < http.StatusOK ||
 		response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("download %s: HTTP status %s", url, response.Status)
+		return wrapError("download "+url+" ("+response.Status+")", errDownloadStatus)
 	}
 
 	destination, err := os.Create(destinationPath)
@@ -352,36 +384,10 @@ func verifySHA256(path string, expected string) error {
 
 	actual := hex.EncodeToString(hash.Sum(nil))
 	if actual != expected {
-		return fmt.Errorf("checksum mismatch for %s: got %s, want %s", path, actual, expected)
+		operation := fmt.Sprintf("verify %s (got %s, want %s)", path, actual, expected)
+
+		return wrapError(operation, errChecksumMismatch)
 	}
 
 	return nil
-}
-
-func safeArchivePath(rootDirectory string, entryName string) (string, error) {
-	localName := filepath.FromSlash(entryName)
-	// [filepath.IsLocal] rejects absolute, empty, and parent-escaping names using
-	// lexical analysis. The real-path check in the extractor then rejects a name
-	// whose parent directory resolves through a symlink to outside the root.
-	if !filepath.IsLocal(localName) {
-		return "", fmt.Errorf("unsafe archive path %q", entryName)
-	}
-
-	return filepath.Join(rootDirectory, filepath.Clean(localName)), nil
-}
-
-// pathWithinRoot reports whether candidatePath resolves inside rootDirectory. It
-// is written as a boolean guard on the cleaned candidate so a caller can place
-// it directly in front of a filesystem operation. That inline prefix check is
-// the barrier static analysis recognizes against archive path traversal and
-// symlink escape, and it holds even when a crafted entry or target resolves back
-// out through the destination directory.
-func pathWithinRoot(rootDirectory string, candidatePath string) bool {
-	cleanRoot := filepath.Clean(rootDirectory)
-	cleanCandidate := filepath.Clean(candidatePath)
-	if cleanCandidate == cleanRoot {
-		return true
-	}
-
-	return strings.HasPrefix(cleanCandidate, cleanRoot+string(filepath.Separator))
 }

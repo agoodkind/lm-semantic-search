@@ -27,6 +27,12 @@ func (manager *Manager) adoptUnregisteredCodebase(
 	ctx context.Context,
 	canonicalPath string,
 ) (model.Codebase, bool) {
+	if manager.config.IngestionDisabled {
+		var empty model.Codebase
+
+		return empty, false
+	}
+
 	indexConfig := manager.enrichIndexConfig(model.IndexConfig{
 		SplitterType:       "",
 		SplitterChunkSize:  0,

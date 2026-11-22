@@ -314,6 +314,29 @@ func TestBootSelfCheckPassesAndClearsBootBanner(t *testing.T) {
 	}
 }
 
+func TestBootSelfCheckQueriesWithoutIngestion(t *testing.T) {
+	manager, _, repoPath := newTestManager(t)
+	indexedTestCodebase(t, manager, repoPath)
+	manager.config.IngestionDisabled = true
+	manager.semantic = &fakeSemantic{
+		prepareCollection: func(context.Context, string) error {
+			t.Fatal("boot check attempted collection preparation with ingestion disabled")
+			return nil
+		},
+		search: func(context.Context, string, string, int32, []string, string) (
+			[]model.StoredChunk,
+			error,
+		) {
+			return nil, semantic.ErrCollectionMissing
+		},
+	}
+
+	outcome, err := manager.runBootSelfCheck(context.Background())
+	if outcome != bootSelfCheckFailed || !errors.Is(err, semantic.ErrCollectionMissing) {
+		t.Fatalf("boot check = %s, %v, want failed with a missing collection", outcome, err)
+	}
+}
+
 func TestBootSelfCheckLoadsColdCollectionAndProtectsSearch(t *testing.T) {
 	manager, _, repoPath := newTestManager(t)
 	indexedTestCodebase(t, manager, repoPath)

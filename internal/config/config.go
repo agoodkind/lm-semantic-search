@@ -211,6 +211,8 @@ type Config struct {
 	IndexBackend           model.VectorBackend
 	CollectionNameOverride string
 	HybridMode             bool
+	IngestionDisabled      bool
+	SearchDisabled         bool
 	BackgroundSyncEnabled  bool
 	SyncIntervalMS         int
 	TriggerWatcherEnabled  bool
@@ -300,6 +302,8 @@ type persistedConfig struct {
 	MilvusMaxConcurrentCollectionLoads int    `json:"milvusMaxConcurrentCollectionLoads"`
 	CollectionNameOverride             string `json:"collectionNameOverride"`
 	HybridMode                         *bool  `json:"hybridMode"`
+	IngestionEnabled                   *bool  `json:"ingestionEnabled"`
+	SearchEnabled                      *bool  `json:"searchEnabled"`
 	ModelDownloadNetworkPolicy         string `json:"modelDownloadNetworkPolicy"`
 	ModelDownloadNetworkOverride       *bool  `json:"modelDownloadNetworkOverride"`
 }
@@ -320,10 +324,10 @@ func resolveEmbeddingConfigDefaults(
 		provider = fileConfig.EmbeddingProvider
 	}
 
-	embeddingModelName := fileConfig.EmbeddingModel
-	if embeddingModelName == "" {
-		embeddingModelName = envOrDefault("EMBEDDING_MODEL", "text-embedding-3-small")
-	}
+	embeddingModelName := envOrDefault(
+		"EMBEDDING_MODEL",
+		stringOrDefault(fileConfig.EmbeddingModel, "text-embedding-3-small"),
+	)
 
 	offlineModel := fileConfig.OfflineEmbeddingModel
 	if offlineModel == "" {
@@ -351,6 +355,7 @@ func Default() (Config, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		slog.Error("resolve user home directory failed", "err", err)
+
 		return Config{}, fmt.Errorf("resolve user home directory: %w", err)
 	}
 
@@ -397,29 +402,26 @@ func Default() (Config, error) {
 	}
 
 	return ApplyProfile(Config{
-		Profile:           resolveProfile(fileConfig.Profile),
-		IndexBackend:      IndexBackendMilvus,
-		ConfigRoot:        configRoot,
-		ConfigPath:        configPath,
-		StateRoot:         stateRoot,
-		SocketPath:        socketPath,
-		RegistryPath:      filepath.Join(stateRoot, "registry.json"),
-		JobsPath:          filepath.Join(stateRoot, "jobs.jsonl"),
-		EventsPath:        filepath.Join(stateRoot, "events.jsonl"),
-		LogsDir:           logsDir,
-		LogPath:           logPath,
-		MerkleDir:         filepath.Join(stateRoot, "merkle"),
-		LocksDir:          filepath.Join(stateRoot, "locks"),
-		SocketsDir:        socketsDir,
-		ChunksDir:         filepath.Join(stateRoot, "chunks"),
-		GraphDir:          filepath.Join(stateRoot, "graph"),
-		ContextRoot:       contextRoot,
-		ModelCacheRoot:    modelCacheRoot,
-		EmbeddingProvider: embeddingProviderName,
-		EmbeddingModel: envOrDefault(
-			"EMBEDDING_MODEL",
-			embeddingDefaults.model,
-		),
+		Profile:                      resolveProfile(fileConfig.Profile),
+		IndexBackend:                 IndexBackendMilvus,
+		ConfigRoot:                   configRoot,
+		ConfigPath:                   configPath,
+		StateRoot:                    stateRoot,
+		SocketPath:                   socketPath,
+		RegistryPath:                 filepath.Join(stateRoot, "registry.json"),
+		JobsPath:                     filepath.Join(stateRoot, "jobs.jsonl"),
+		EventsPath:                   filepath.Join(stateRoot, "events.jsonl"),
+		LogsDir:                      logsDir,
+		LogPath:                      logPath,
+		MerkleDir:                    filepath.Join(stateRoot, "merkle"),
+		LocksDir:                     filepath.Join(stateRoot, "locks"),
+		SocketsDir:                   socketsDir,
+		ChunksDir:                    filepath.Join(stateRoot, "chunks"),
+		GraphDir:                     filepath.Join(stateRoot, "graph"),
+		ContextRoot:                  contextRoot,
+		ModelCacheRoot:               modelCacheRoot,
+		EmbeddingProvider:            embeddingProviderName,
+		EmbeddingModel:               embeddingDefaults.model,
 		OfflineEmbeddingModel:        embeddingDefaults.offlineModel,
 		ModelDownloadNetworkPolicy:   modelDownloadNetwork.Policy,
 		ModelDownloadNetworkOverride: modelDownloadNetwork.Override,
@@ -481,6 +483,8 @@ func Default() (Config, error) {
 			"HYBRID_MODE",
 			boolOrDefault(fileConfig.HybridMode, true),
 		),
+		IngestionDisabled: !boolOrDefault(fileConfig.IngestionEnabled, true),
+		SearchDisabled:    !boolOrDefault(fileConfig.SearchEnabled, true),
 		BackgroundSyncEnabled: envBoolOrDefault(
 			"CLAUDE_CONTEXT_BACKGROUND_SYNC",
 			true,

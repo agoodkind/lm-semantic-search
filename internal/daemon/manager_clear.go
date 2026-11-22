@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/store"
@@ -15,8 +16,12 @@ import (
 func (manager *Manager) ClearIndex(
 	ctx context.Context,
 	requestedPath string,
-	client model.ClientInfo,
+	_ model.ClientInfo,
 ) (model.Codebase, error) {
+	if manager.config.IngestionDisabled {
+		return model.Codebase{}, adapterr.NewIngestionDisabled()
+	}
+
 	manager.policyMutationMutex.Lock()
 	policyLocked := true
 	unlockPolicy := func() {
@@ -30,8 +35,6 @@ func (manager *Manager) ClearIndex(
 	defer func() {
 		unlockPolicy()
 	}()
-	_ = client
-
 	canonicalPath, err := manager.resolveCanonicalPath(requestedPath)
 	if err != nil {
 		slog.ErrorContext(ctx, "canonicalize path failed", "path", requestedPath, "err", err)

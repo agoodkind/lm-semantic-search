@@ -148,6 +148,10 @@ func (manager *Manager) startIndexTarget(
 	source model.WorktreeSourceRequest,
 ) (string, worktreeSourceIntent, error) {
 	emptyIntent := worktreeSourceIntent{sourcePath: "", startingCommit: ""}
+	if manager.config.IngestionDisabled {
+		return "", emptyIntent, adapterr.NewIngestionDisabled()
+	}
+
 	canonicalPath, err := manager.startIndexCanonicalPath(ctx, requestedPath)
 	if err != nil {
 		return "", emptyIntent, err

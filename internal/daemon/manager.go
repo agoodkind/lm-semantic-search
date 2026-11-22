@@ -900,35 +900,6 @@ func (manager *Manager) SyncIndex(
 	)
 }
 
-// SyncIndexWithPolicy starts a sync with a per-run scheduling-policy patch.
-func (manager *Manager) SyncIndexWithPolicy(
-	ctx context.Context,
-	requestedPath string,
-	client model.ClientInfo,
-	policyPatch model.SchedulingPolicyPatch,
-) (model.Job, model.Codebase, bool, error) {
-	manager.policyMutationMutex.Lock()
-	job, codebase, deduplicated, err := manager.syncIndexWithPolicy(
-		ctx,
-		requestedPath,
-		client,
-		policyPatch,
-	)
-	manager.policyMutationMutex.Unlock()
-	if err != nil || deduplicated || job.ID == "" {
-		return job, codebase, deduplicated, err
-	}
-
-	ctx = spans.Attach(
-		ctx,
-		correlation.IdentityAttribute{Key: "job_id", Value: job.ID},
-		correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID},
-	)
-	manager.runJobAsync(ctx, job.ID)
-
-	return job, codebase, deduplicated, err
-}
-
 func (manager *Manager) syncIndexWithPolicy(
 	ctx context.Context,
 	requestedPath string,
@@ -1202,3 +1173,32 @@ func (manager *Manager) dedupAgainstActiveJob(
 // manager_config.go. Boundary guards (StateRoot, directory, inode-stability)
 // live in manager_guards.go. Active-job snapshot and cancellation helpers live
 // in manager_active_job.go.
+
+// syncIndexWithPolicyAndRun admits a sync job and starts its worker.
+func (manager *Manager) syncIndexWithPolicyAndRun(
+	ctx context.Context,
+	requestedPath string,
+	client model.ClientInfo,
+	policyPatch model.SchedulingPolicyPatch,
+) (model.Job, model.Codebase, bool, error) {
+	manager.policyMutationMutex.Lock()
+	job, codebase, deduplicated, err := manager.syncIndexWithPolicy(
+		ctx,
+		requestedPath,
+		client,
+		policyPatch,
+	)
+	manager.policyMutationMutex.Unlock()
+	if err != nil || deduplicated || job.ID == "" {
+		return job, codebase, deduplicated, err
+	}
+
+	ctx = spans.Attach(
+		ctx,
+		correlation.IdentityAttribute{Key: "job_id", Value: job.ID},
+		correlation.IdentityAttribute{Key: "codebase_id", Value: codebase.ID},
+	)
+	manager.runJobAsync(ctx, job.ID)
+
+	return job, codebase, deduplicated, err
+}
