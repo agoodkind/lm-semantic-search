@@ -21,9 +21,8 @@ RELEASE_BINS := $(INSTALL_BINS)
 # single target, so use ?= to defer to that environment value. A plain := would
 # override it and make every job rebuild all listed platforms with one
 # toolchain, so the Linux job would cross-build darwin with gcc and fail on the
-# Darwin-only -arch flag. This default drives local make release. darwin/amd64
-# is outside the build matrix because the pinned ONNX Runtime package lacks
-# an Intel macOS library. CI and release use the same platform list.
+# Darwin-only -arch flag. This default drives local make release.
+# CI and release use the same platform list.
 RELEASE_PLATFORMS ?= darwin/arm64 linux/amd64 linux/arm64
 # The daemon starts its automatic update scheduler only in a build compiled
 # with the lmsrelease tag. make install at a release tag stamps the same version

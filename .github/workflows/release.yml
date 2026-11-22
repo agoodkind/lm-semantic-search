@@ -15,7 +15,6 @@ jobs:
       cgo: true
       submodules: recursive
       binary: lm-semantic-search-daemon
-      # The pinned ONNX Runtime package lacks an Intel macOS library.
       # Keep this list in sync with ci.yml release_platforms.
       platforms: "darwin/arm64 linux/amd64 linux/arm64"
 
