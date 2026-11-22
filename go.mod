@@ -21,7 +21,7 @@ require (
 	github.com/openai/openai-go/v3 v3.88.0
 	github.com/rjeczalik/notify v0.9.3
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/mod v0.42.0
+	golang.org/x/mod v0.43.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
 	goodkind.io/gklog v0.4.5
