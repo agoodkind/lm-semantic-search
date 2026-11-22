@@ -37,6 +37,8 @@ Example `config.json`:
 
 If both `openaiBaseUrl` and `OPENAI_BASE_URL` are unset, the OpenAI SDK uses its default endpoint. `OPENAI_BASE_URL` overrides `openaiBaseUrl` when both are set.
 
+Set `"ingestionEnabled": false` and restart the daemon to pause indexing, sync, and index repair. Existing indexes remain searchable while `searchEnabled` is true. Set `"searchEnabled": false` to reject searches independently. Both settings default to `true`. Maintenance mode pauses both operations.
+
 ### Where the daemon keeps its files
 
 Each root below has a default and an environment variable that moves it. A variable that is set wins over the default.

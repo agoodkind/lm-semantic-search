@@ -90,6 +90,9 @@ const (
 	// the store until the operator turns the mode off.
 	ClassMaintenance Class = "maintenance"
 
+	// ClassCapabilityDisabled reports that the daemon configuration disables an operation.
+	ClassCapabilityDisabled Class = "capability_disabled"
+
 	// ClassCollectionSchemaMismatch reports a collection registration that
 	// declares scalar columns in conflict with the saved declaration or with the
 	// stored collection schema. The daemon keeps the existing collection and
@@ -118,7 +121,7 @@ func CodeFor(class Class) codes.Code {
 	case ClassNotIndexed, ClassJobNotFound, ClassUnknownCodebaseID:
 		return codes.NotFound
 	case ClassCollectionMissing, ClassCollectionNotReady, ClassConflictingJob, ClassMaintenance,
-		ClassCollectionSchemaMismatch, ClassEmbeddingModelNotReady:
+		ClassCollectionSchemaMismatch, ClassEmbeddingModelNotReady, ClassCapabilityDisabled:
 		return codes.FailedPrecondition
 	case ClassMilvusUnavailable, ClassEmbedderUnreachable:
 		return codes.Unavailable
@@ -304,6 +307,26 @@ func NewMaintenance(reason string) *AdapterError {
 		Hint:          "retry after the operator turns maintenance mode off with lm-semantic-search daemon maintenance off",
 		Cause:         nil,
 		SafeForClient: true,
+	}
+}
+
+// NewIngestionDisabled reports that ingestionEnabled is false.
+func NewIngestionDisabled() *AdapterError {
+	return &AdapterError{
+		Class: ClassCapabilityDisabled, Code: "ingestion_disabled",
+		Message: "index ingestion is disabled",
+		Hint:    "set ingestionEnabled to true in config.json and restart the daemon",
+		Cause:   nil, SafeForClient: true,
+	}
+}
+
+// NewSearchDisabled reports that searchEnabled is false.
+func NewSearchDisabled() *AdapterError {
+	return &AdapterError{
+		Class: ClassCapabilityDisabled, Code: "search_disabled",
+		Message: "semantic search is disabled",
+		Hint:    "set searchEnabled to true in config.json and restart the daemon",
+		Cause:   nil, SafeForClient: true,
 	}
 }
 

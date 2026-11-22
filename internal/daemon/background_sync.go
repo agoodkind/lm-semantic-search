@@ -80,6 +80,10 @@ func NewBackgroundSync(cfg config.Config, manager *Manager) *BackgroundSync {
 // Start launches the file watcher plus the periodic and trigger-driven sync
 // loops.
 func (syncer *BackgroundSync) Start(ctx context.Context) {
+	if syncer.cfg.IngestionDisabled {
+		return
+	}
+
 	if syncer.cfg.FileWatcherEnabled {
 		syncer.queue = NewEventQueue(
 			defaultTriggerDebounce,

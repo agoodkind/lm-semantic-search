@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"goodkind.io/gklog/correlation"
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/cbm"
 	"goodkind.io/lm-semantic-search/internal/clock"
 	"goodkind.io/lm-semantic-search/internal/config"
@@ -907,6 +908,10 @@ func (manager *Manager) SyncIndexWithPolicy(
 	client model.ClientInfo,
 	policyPatch model.SchedulingPolicyPatch,
 ) (model.Job, model.Codebase, bool, error) {
+	if manager.config.IngestionDisabled {
+		return model.Job{}, model.Codebase{}, false, adapterr.NewIngestionDisabled()
+	}
+
 	manager.policyMutationMutex.Lock()
 	job, codebase, deduplicated, err := manager.syncIndexWithPolicy(
 		ctx,

@@ -24,6 +24,10 @@ func (manager *Manager) startIndexWithRecovery(
 ) (model.Job, model.Codebase, bool, string, error) {
 	var emptyJob model.Job
 	var emptyCodebase model.Codebase
+	if manager.config.IngestionDisabled {
+		return emptyJob, emptyCodebase, false, "", adapterr.NewIngestionDisabled()
+	}
+
 	canonicalPath, sourceIntent, err := manager.startIndexTarget(ctx, requestedPath, source)
 	if err != nil {
 		return emptyJob, emptyCodebase, false, "", err

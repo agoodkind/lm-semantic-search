@@ -44,6 +44,10 @@ func (manager *Manager) SearchCode(
 	// return wrong-branch content. Return the discovered note with no results; the
 	// deferred build (already scheduled by GetIndex) makes it searchable shortly.
 	if codebase.Status == model.CodebaseStatusDiscovered {
+		if manager.config.IngestionDisabled {
+			return SearchOutcome{}, adapterr.NewNotIndexed(requestedPath, nil)
+		}
+
 		stateNote := heldForSourceSearchNote
 		if !manager.waitsForSourceFirstBuild(codebase.CanonicalPath) {
 			stateNote = discoveredSearchNote(manager.selectWorktreeReuseSource(codebase))
@@ -87,14 +91,16 @@ func (manager *Manager) SearchCode(
 	}
 
 	collectionName := manager.semantic.CollectionName(codebase.CanonicalPath)
-	if prepareErr := manager.semantic.PrepareCollection(ctx, collectionName); prepareErr != nil {
-		manager.noteDependencyFailure(prepareErr)
+	if !manager.config.IngestionDisabled {
+		if prepareErr := manager.semantic.PrepareCollection(ctx, collectionName); prepareErr != nil {
+			manager.noteDependencyFailure(prepareErr)
 
-		return SearchOutcome{}, fmt.Errorf(
-			"prepare search collection %s: %w",
-			collectionName,
-			prepareErr,
-		)
+			return SearchOutcome{}, fmt.Errorf(
+				"prepare search collection %s: %w",
+				collectionName,
+				prepareErr,
+			)
+		}
 	}
 
 	lease, leaseErr := manager.semantic.AcquireCollection(ctx, collectionName)
@@ -226,6 +232,10 @@ func (manager *Manager) searchPreconditions(
 
 	if refusal := manager.maintenanceRefusal(); refusal != nil {
 		return nil, refusal
+	}
+
+	if manager.config.SearchDisabled {
+		return nil, adapterr.NewSearchDisabled()
 	}
 
 	return normalizedExtensions, nil

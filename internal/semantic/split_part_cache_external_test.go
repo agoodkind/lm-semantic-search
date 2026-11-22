@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 
@@ -94,11 +95,11 @@ func (server *splitPartLifecycleServer) AddCollectionField(
 
 func (server *splitPartLifecycleServer) Search(
 	_ context.Context,
-	_ *milvuspb.SearchRequest,
+	request *milvuspb.SearchRequest,
 ) (*milvuspb.SearchResults, error) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
-	if !server.splitPartExists {
+	if !server.splitPartExists && slices.Contains(request.GetOutputFields(), "splitPart") {
 		return &milvuspb.SearchResults{
 			Status: &commonpb.Status{
 				ErrorCode: commonpb.ErrorCode_UnexpectedError,
@@ -125,6 +126,50 @@ func (server *splitPartLifecycleServer) Search(
 func TestSearchRemigratesCollectionAfterInspectObservesAbsence(t *testing.T) {
 	t.Parallel()
 
+	fakeMilvus := &splitPartLifecycleServer{collectionExists: true, splitPartExists: true}
+	service := newSplitPartSearchService(t, fakeMilvus, false)
+	codebasePath := t.TempDir()
+	if _, err := service.Search(context.Background(), codebasePath, "first", 1, nil, ""); err != nil {
+		t.Fatalf("initial Search returned error: %v", err)
+	}
+
+	collectionName := service.CollectionName(codebasePath)
+	fakeMilvus.setCollection(false, false)
+	facts, err := service.InspectCollection(context.Background(), collectionName)
+	if err != nil {
+		t.Fatalf("InspectCollection returned error: %v", err)
+	}
+	if facts.Exists {
+		t.Fatal("InspectCollection reported a dropped collection as present")
+	}
+
+	fakeMilvus.setCollection(true, false)
+	if _, err := service.Search(context.Background(), codebasePath, "second", 1, nil, ""); err != nil {
+		t.Fatalf("Search after external recreation returned error: %v", err)
+	}
+	if !fakeMilvus.addedSplitPart() {
+		t.Fatal("Search did not restore splitPart on the recreated collection")
+	}
+}
+
+func TestSearchLegacyCollectionWithIngestionDisabled(t *testing.T) {
+	t.Parallel()
+
+	fakeMilvus := &splitPartLifecycleServer{collectionExists: true}
+	service := newSplitPartSearchService(t, fakeMilvus, true)
+	if _, err := service.Search(context.Background(), t.TempDir(), "needle", 1, nil, ""); err != nil {
+		t.Fatalf("Search without schema migration returned error: %v", err)
+	}
+	if fakeMilvus.addedSplitPart() {
+		t.Fatal("Search added splitPart with ingestion disabled")
+	}
+}
+
+func newSplitPartSearchService(
+	t *testing.T, fakeMilvus *splitPartLifecycleServer, ingestionDisabled bool,
+) *semantic.Service {
+	t.Helper()
+
 	embeddingServer := httptest.NewServer(
 		http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 			writer.Header().Set("Content-Type", "application/json")
@@ -137,15 +182,11 @@ func TestSearchRemigratesCollectionAfterInspectObservesAbsence(t *testing.T) {
 	)
 	t.Cleanup(embeddingServer.Close)
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		t.Fatalf("listen for fake Milvus: %v", err)
 	}
 
-	fakeMilvus := &splitPartLifecycleServer{
-		collectionExists: true,
-		splitPartExists:  true,
-	}
 	grpcServer := grpc.NewServer()
 	milvuspb.RegisterMilvusServiceServer(grpcServer, fakeMilvus)
 	t.Cleanup(grpcServer.Stop)
@@ -155,7 +196,6 @@ func TestSearchRemigratesCollectionAfterInspectObservesAbsence(t *testing.T) {
 		}
 	}()
 
-	codebasePath := t.TempDir()
 	service, err := semantic.NewService(
 		context.Background(),
 		config.Config{
@@ -165,6 +205,7 @@ func TestSearchRemigratesCollectionAfterInspectObservesAbsence(t *testing.T) {
 			OpenAIAPIKey:       "test-key",
 			OpenAIBaseURL:      embeddingServer.URL,
 			MilvusAddress:      listener.Addr().String(),
+			IngestionDisabled:  ingestionDisabled,
 		},
 	)
 	if err != nil {
@@ -177,43 +218,7 @@ func TestSearchRemigratesCollectionAfterInspectObservesAbsence(t *testing.T) {
 		}
 	})
 
-	if _, err := service.Search(
-		context.Background(),
-		codebasePath,
-		"first",
-		1,
-		nil,
-		"",
-	); err != nil {
-		t.Fatalf("initial Search returned error: %v", err)
-	}
-
-	collectionName := service.CollectionName(codebasePath)
-	fakeMilvus.setCollection(false, false)
-	facts, err := service.InspectCollection(context.Background(), collectionName)
-	if err != nil {
-		t.Fatalf("InspectCollection returned error: %v", err)
-	}
-
-	if facts.Exists {
-		t.Fatal("InspectCollection reported a dropped collection as present")
-	}
-
-	fakeMilvus.setCollection(true, false)
-	if _, err := service.Search(
-		context.Background(),
-		codebasePath,
-		"second",
-		1,
-		nil,
-		"",
-	); err != nil {
-		t.Fatalf("Search after external recreation returned error: %v", err)
-	}
-
-	if !fakeMilvus.addedSplitPart() {
-		t.Fatal("Search did not restore splitPart on the recreated collection")
-	}
+	return service
 }
 
 func successStatus() *commonpb.Status {

@@ -100,6 +100,27 @@ func TestDefaultReadsCustomIgnoreEnvVar(t *testing.T) {
 	}
 }
 
+func TestDefaultResolvesIngestionAndSearchIndependently(t *testing.T) {
+	disabled := false
+	for _, example := range []struct {
+		name              string
+		persisted         persistedConfig
+		ingestionDisabled bool
+		searchDisabled    bool
+	}{
+		{"both enabled by default", persistedConfig{}, false, false},
+		{"ingestion disabled", persistedConfig{IngestionEnabled: &disabled}, true, false},
+		{"search disabled", persistedConfig{SearchEnabled: &disabled}, false, true},
+	} {
+		t.Run(example.name, func(t *testing.T) {
+			cfg := defaultWithPersistedConfig(t, example.persisted)
+			if cfg.IngestionDisabled != example.ingestionDisabled || cfg.SearchDisabled != example.searchDisabled {
+				t.Fatalf("disabled ingestion = %t, disabled search = %t", cfg.IngestionDisabled, cfg.SearchDisabled)
+			}
+		})
+	}
+}
+
 // isolateState points HOME and the state root at temp dirs so Default() never
 // reads the real machine's ~/.context or ~/.lm-semantic-search state during the test.
 func isolateState(t *testing.T) {

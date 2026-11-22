@@ -211,6 +211,8 @@ type Config struct {
 	IndexBackend           model.VectorBackend
 	CollectionNameOverride string
 	HybridMode             bool
+	IngestionDisabled      bool
+	SearchDisabled         bool
 	BackgroundSyncEnabled  bool
 	SyncIntervalMS         int
 	TriggerWatcherEnabled  bool
@@ -300,6 +302,8 @@ type persistedConfig struct {
 	MilvusMaxConcurrentCollectionLoads int    `json:"milvusMaxConcurrentCollectionLoads"`
 	CollectionNameOverride             string `json:"collectionNameOverride"`
 	HybridMode                         *bool  `json:"hybridMode"`
+	IngestionEnabled                   *bool  `json:"ingestionEnabled"`
+	SearchEnabled                      *bool  `json:"searchEnabled"`
 	ModelDownloadNetworkPolicy         string `json:"modelDownloadNetworkPolicy"`
 	ModelDownloadNetworkOverride       *bool  `json:"modelDownloadNetworkOverride"`
 }
@@ -481,6 +485,8 @@ func Default() (Config, error) {
 			"HYBRID_MODE",
 			boolOrDefault(fileConfig.HybridMode, true),
 		),
+		IngestionDisabled: !boolOrDefault(fileConfig.IngestionEnabled, true),
+		SearchDisabled:    !boolOrDefault(fileConfig.SearchEnabled, true),
 		BackgroundSyncEnabled: envBoolOrDefault(
 			"CLAUDE_CONTEXT_BACKGROUND_SYNC",
 			true,

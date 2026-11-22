@@ -287,7 +287,7 @@ func (manager *Manager) startAutomaticIndex(
 ) (automaticStart, error) {
 	var noJob model.Job
 	var noCodebase model.Codebase
-	if manager.skipForMaintenance(ctx, "automatic-index:"+client.Name) {
+	if manager.config.IngestionDisabled || manager.skipForMaintenance(ctx, "automatic-index:"+client.Name) {
 		return automaticStart{
 			job:          noJob,
 			codebase:     noCodebase,
@@ -361,7 +361,7 @@ func (manager *Manager) startAutomaticSync(
 	codebase model.Codebase,
 	client model.ClientInfo,
 ) {
-	if manager.skipForMaintenance(ctx, "automatic-sync:"+client.Name) {
+	if manager.config.IngestionDisabled || manager.skipForMaintenance(ctx, "automatic-sync:"+client.Name) {
 		return
 	}
 

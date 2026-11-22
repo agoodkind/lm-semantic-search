@@ -705,18 +705,20 @@ func (service *Service) searchCollectionWithVector(
 	filterExpr string,
 ) ([]model.StoredChunk, error) {
 	peerInfo, _ := peer.FromContext(ctx)
-	if err := service.ensureSplitPartColumnOnce(ctx, collectionName); err != nil {
+	omitSplitPart, err := service.omitSplitPartForSearch(ctx, collectionName)
+	if err != nil {
 		return nil, err
 	}
 
 	hits, err := service.collectionStore().SearchExpression(
 		ctx,
 		milvusstore.ExpressionSearch{
-			Collection: collectionName,
-			Vector:     queryVector,
-			Query:      rawQuery,
-			Limit:      limit,
-			Expression: filterExpr,
+			Collection:    collectionName,
+			Vector:        queryVector,
+			Query:         rawQuery,
+			Limit:         limit,
+			Expression:    filterExpr,
+			OmitSplitPart: omitSplitPart,
 		},
 	)
 	if err != nil {
@@ -735,6 +737,25 @@ func (service *Service) searchCollectionWithVector(
 	}
 
 	return chunksFromHits(hits), nil
+}
+
+func (service *Service) omitSplitPartForSearch(
+	ctx context.Context,
+	collectionName string,
+) (bool, error) {
+	if !service.cfg.IngestionDisabled {
+		return false, service.ensureSplitPartColumnOnce(ctx, collectionName)
+	}
+
+	described, err := service.milvus.DescribeCollection(
+		ctx,
+		milvusclient.NewDescribeCollectionOption(collectionName),
+	)
+	if err != nil {
+		return false, wrapStoreError(ctx, err, "describe Milvus search collection "+collectionName)
+	}
+
+	return len(splitPartFieldsToAdd(described.Schema)) != 0, nil
 }
 
 // Drop removes one semantic index collection.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"goodkind.io/lm-semantic-search/internal/adapterr"
 	"goodkind.io/lm-semantic-search/internal/model"
 	"goodkind.io/lm-semantic-search/internal/semantic"
 	"goodkind.io/lm-semantic-search/internal/store"
@@ -17,6 +18,10 @@ func (manager *Manager) ClearIndex(
 	requestedPath string,
 	client model.ClientInfo,
 ) (model.Codebase, error) {
+	if manager.config.IngestionDisabled {
+		return model.Codebase{}, adapterr.NewIngestionDisabled()
+	}
+
 	manager.policyMutationMutex.Lock()
 	policyLocked := true
 	unlockPolicy := func() {
