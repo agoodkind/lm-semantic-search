@@ -20,8 +20,7 @@ jobs:
       submodules: recursive
       # The compile matrix builds one job per platform, each with its own
       # toolchain, so every supported platform's build-tagged code is compiled.
-      # darwin/amd64 is omitted because ONNX Runtime 1.32.0 ships no osx-x64
-      # binary, so the offline profile cannot compile on Intel macOS. Keep this
-      # list in sync with release.yml platforms.
+      # The pinned ONNX Runtime package lacks an Intel macOS library.
+      # Keep this list in sync with release.yml platforms.
       release_platforms: "darwin/arm64 linux/amd64 linux/arm64"
       cgo: true
