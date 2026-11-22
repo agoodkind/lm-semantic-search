@@ -208,7 +208,7 @@ func newSplitPartSearchService(
 	)
 	t.Cleanup(embeddingServer.Close)
 
-	listener, err := net.Listen("tcp", "[::1]:0")
+	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatalf("listen for fake Milvus: %v", err)
 	}
