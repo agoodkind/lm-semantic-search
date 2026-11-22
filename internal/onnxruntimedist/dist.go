@@ -13,25 +13,19 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 const (
 	// Version is the pinned ONNX Runtime release.
 	Version = "1.27.0"
 
-	darwinARM64ArchiveName     = "onnxruntime-osx-arm64-1.27.0"
-	darwinARM64ArchiveURL      = "https://github.com/microsoft/onnxruntime/releases/download/v1.27.0/onnxruntime-osx-arm64-1.27.0.tgz"
-	darwinARM64ArchiveSHA256   = "545e81c58152353acb0d1e8bd6ce4b62f830c0961f5b3acfedc790ffd76e477a"
+	packageURL = "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/" + Version +
+		"/microsoft.ml.onnxruntime." + Version + ".nupkg"
+	packageSHA256 = "c725e8cefdfe4de08befb9f79b3f218c162439cdcdb97cbbb5192888d58ea669"
+
 	darwinLibraryName          = "libonnxruntime.dylib"
 	darwinLibrarySONAME        = "libonnxruntime.1.dylib"
 	darwinVersionedLibraryName = "libonnxruntime.1.27.0.dylib"
-	linuxAMD64ArchiveName      = "onnxruntime-linux-x64-1.27.0"
-	linuxAMD64ArchiveURL       = "https://github.com/microsoft/onnxruntime/releases/download/v1.27.0/onnxruntime-linux-x64-1.27.0.tgz"
-	linuxAMD64ArchiveSHA256    = "547e40a48f1fe73e3f812d7c88a948612c23f896b91e4e2ee1e232d7b468246f"
-	linuxARM64ArchiveName      = "onnxruntime-linux-aarch64-1.27.0"
-	linuxARM64ArchiveURL       = "https://github.com/microsoft/onnxruntime/releases/download/v1.27.0/onnxruntime-linux-aarch64-1.27.0.tgz"
-	linuxARM64ArchiveSHA256    = "3e4d83ac06924a32a07b6d7f91ce6f852876153fc0bbdf931bf517a140bfbe48"
 	linuxLibraryName           = "libonnxruntime.so"
 	linuxLibrarySONAME         = "libonnxruntime.so.1"
 	linuxVersionedLibraryName  = "libonnxruntime.so.1.27.0"
@@ -44,12 +38,13 @@ const (
 	architectureARM64     = "arm64"
 )
 
-// Archive is one pinned ONNX Runtime release archive. Name is the top-level
-// directory the archive extracts to.
+// Archive identifies the pinned package and library for one platform.
 type Archive struct {
-	Name   string
 	URL    string
 	SHA256 string
+
+	libraryPath string
+	libraryName string
 }
 
 // LibraryNames are the file names of the shared library: the versioned file
@@ -60,47 +55,41 @@ type LibraryNames struct {
 	Unversioned string
 }
 
-var darwinArchives = map[string]Archive{
-	architectureARM64: {
-		Name:   darwinARM64ArchiveName,
-		URL:    darwinARM64ArchiveURL,
-		SHA256: darwinARM64ArchiveSHA256,
-	},
-}
-
-var linuxArchives = map[string]Archive{
-	architectureAMD64: {
-		Name:   linuxAMD64ArchiveName,
-		URL:    linuxAMD64ArchiveURL,
-		SHA256: linuxAMD64ArchiveSHA256,
-	},
-	architectureARM64: {
-		Name:   linuxARM64ArchiveName,
-		URL:    linuxARM64ArchiveURL,
-		SHA256: linuxARM64ArchiveSHA256,
-	},
-}
-
 // ArchiveFor returns the pinned archive for a GOOS and GOARCH pair.
 func ArchiveFor(goos string, goarch string) (Archive, error) {
+	var runtimeID string
+
 	switch goos {
 	case operatingSystemDarwin:
-		archive, ok := darwinArchives[goarch]
-		if !ok {
+		if goarch != architectureARM64 {
 			return Archive{}, fmt.Errorf("unsupported Darwin GOARCH %s", goarch)
 		}
 
-		return archive, nil
+		runtimeID = "osx-arm64"
 	case operatingSystemLinux:
-		archive, ok := linuxArchives[goarch]
-		if !ok {
+		switch goarch {
+		case architectureAMD64:
+			runtimeID = "linux-x64"
+		case architectureARM64:
+			runtimeID = "linux-arm64"
+		default:
 			return Archive{}, fmt.Errorf("unsupported Linux GOARCH %s", goarch)
 		}
-
-		return archive, nil
 	default:
 		return Archive{}, fmt.Errorf("unsupported GOOS %s", goos)
 	}
+
+	names, err := LibraryNamesFor(goos)
+	if err != nil {
+		return Archive{}, err
+	}
+
+	return Archive{
+		URL:         packageURL,
+		SHA256:      packageSHA256,
+		libraryPath: "runtimes/" + runtimeID + "/native/" + names.Unversioned,
+		libraryName: names.Versioned,
+	}, nil
 }
 
 // LibraryNamesFor returns the shared library file names for a GOOS.
@@ -172,7 +161,7 @@ func FetchArchive(
 	archive Archive,
 	workDirectory string,
 ) (string, error) {
-	archivePath := filepath.Join(workDirectory, "onnxruntime.tgz")
+	archivePath := filepath.Join(workDirectory, "onnxruntime.nupkg")
 	if err := downloadAndVerify(
 		ctx,
 		httpClient,
@@ -183,12 +172,16 @@ func FetchArchive(
 		return "", err
 	}
 
-	extractedDirectory := filepath.Join(workDirectory, "onnxruntime")
-	if err := extractTarGzip(archivePath, extractedDirectory); err != nil {
-		return "", wrapError("extract ONNX Runtime archive", err)
+	extractedDirectory, err := os.MkdirTemp(workDirectory, "onnxruntime.")
+	if err != nil {
+		return "", wrapError("create ONNX Runtime extraction directory", err)
 	}
 
-	return filepath.Join(extractedDirectory, archive.Name), nil
+	if err := extractPackage(archivePath, extractedDirectory, archive); err != nil {
+		return "", wrapError("extract ONNX Runtime package", err)
+	}
+
+	return extractedDirectory, nil
 }
 
 // InstallLibrary copies the versioned library from an extracted archive into
@@ -356,32 +349,4 @@ func verifySHA256(path string, expected string) error {
 	}
 
 	return nil
-}
-
-func safeArchivePath(rootDirectory string, entryName string) (string, error) {
-	localName := filepath.FromSlash(entryName)
-	// [filepath.IsLocal] rejects absolute, empty, and parent-escaping names using
-	// lexical analysis. The real-path check in the extractor then rejects a name
-	// whose parent directory resolves through a symlink to outside the root.
-	if !filepath.IsLocal(localName) {
-		return "", fmt.Errorf("unsafe archive path %q", entryName)
-	}
-
-	return filepath.Join(rootDirectory, filepath.Clean(localName)), nil
-}
-
-// pathWithinRoot reports whether candidatePath resolves inside rootDirectory. It
-// is written as a boolean guard on the cleaned candidate so a caller can place
-// it directly in front of a filesystem operation. That inline prefix check is
-// the barrier static analysis recognizes against archive path traversal and
-// symlink escape, and it holds even when a crafted entry or target resolves back
-// out through the destination directory.
-func pathWithinRoot(rootDirectory string, candidatePath string) bool {
-	cleanRoot := filepath.Clean(rootDirectory)
-	cleanCandidate := filepath.Clean(candidatePath)
-	if cleanCandidate == cleanRoot {
-		return true
-	}
-
-	return strings.HasPrefix(cleanCandidate, cleanRoot+string(filepath.Separator))
 }
