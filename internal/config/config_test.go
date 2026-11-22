@@ -352,6 +352,24 @@ func TestDefaultQueryInstructionPrefixEmptyForOtherModels(t *testing.T) {
 	}
 }
 
+func TestDefaultQueryInstructionPrefixUsesEnvironmentModel(t *testing.T) {
+	defaultWithPersistedConfig(t, persistedConfig{EmbeddingModel: "text-embedding-3-small"})
+	t.Setenv("EMBEDDING_MODEL", "nvidia/NV-EmbedCode-7b-v1")
+
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default returned error: %v", err)
+	}
+
+	if cfg.QueryInstructionPrefix != nvEmbedCodeQueryPrefix {
+		t.Errorf(
+			"QueryInstructionPrefix = %q, want %q",
+			cfg.QueryInstructionPrefix,
+			nvEmbedCodeQueryPrefix,
+		)
+	}
+}
+
 func intPtr(value int) *int {
 	return &value
 }

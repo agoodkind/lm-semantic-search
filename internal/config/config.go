@@ -324,10 +324,10 @@ func resolveEmbeddingConfigDefaults(
 		provider = fileConfig.EmbeddingProvider
 	}
 
-	embeddingModelName := fileConfig.EmbeddingModel
-	if embeddingModelName == "" {
-		embeddingModelName = envOrDefault("EMBEDDING_MODEL", "text-embedding-3-small")
-	}
+	embeddingModelName := envOrDefault(
+		"EMBEDDING_MODEL",
+		stringOrDefault(fileConfig.EmbeddingModel, "text-embedding-3-small"),
+	)
 
 	offlineModel := fileConfig.OfflineEmbeddingModel
 	if offlineModel == "" {
@@ -344,7 +344,7 @@ func resolveEmbeddingConfigDefaults(
 
 	return embeddingConfigDefaults{
 		provider:             provider,
-		model:                envOrDefault("EMBEDDING_MODEL", embeddingModelName),
+		model:                embeddingModelName,
 		offlineModel:         offlineModel,
 		queryInstructionText: queryInstructionText,
 	}
