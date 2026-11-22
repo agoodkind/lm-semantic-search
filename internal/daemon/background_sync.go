@@ -1175,31 +1175,29 @@ type WatcherActivity struct {
 	StartedAt    time.Time
 }
 
-// WatcherActivityReporter is the seam the manager holds so a status read
-// reaches file-change work without the manager depending on the syncer.
+// WatcherActivityReporter lets the manager read file-change work during
+// a status request without depending on the syncer.
 type WatcherActivityReporter interface {
 	WatcherActivity() []WatcherActivity
 }
 
-// WatcherActivity reports every admitted converge and every codebase whose
-// changed paths are waiting on a debounce timer.
+// WatcherActivity reports admitted converge jobs and pending file changes.
 //
-// An admitted converge with no start time is still waiting for an index slot or
-// the shared advisory lock, so it reports queued rather than running: reporting
-// it as running would show an age that measures the wait, not the work. A
-// codebase that is converging while new paths accumulate reports once, carrying
-// the paths that drain after it. Rows sort by codebase id, so two reads of an
-// unchanged daemon render identically.
+// An admitted converge stays queued until the worker records its start time.
+// Before then, the job may wait for an index slot or the shared advisory lock.
+//
+// Results:
+//   - Each entry records the current converge and pending paths for a codebase.
+//   - The method sorts entries by codebase ID.
 func (syncer *BackgroundSync) WatcherActivity() []WatcherActivity {
 	syncer.convergeMu.Lock()
 	admitted := make(map[string]time.Time, len(syncer.converging))
 	maps.Copy(admitted, syncer.converging)
 	syncer.convergeMu.Unlock()
 
-	// Waiting paths come from two places. The event queue holds those inside a
-	// debounce window; the deferred buffer holds those a first build is standing
-	// in front of, which converge the moment that build promotes. Both are work
-	// the operator is waiting on, so both count toward one figure.
+	// The event queue stores paths during the debounce window. The deferred
+	// buffer stores paths while the first build runs. The syncer adds both
+	// counts to report all pending paths for each codebase.
 	pending := map[string]int{}
 	if syncer.queue != nil {
 		pending = syncer.queue.PendingCounts()

@@ -133,12 +133,13 @@ func LibraryNamesFor(goos string) (LibraryNames, error) {
 	}
 }
 
-// StageSharedLibrary downloads, verifies, and writes the versioned library.
+// StageSharedLibrary prepares a runtime library for a later install.
 //
-// The installer can update the SONAME and unversioned symlinks separately.
+// It verifies the package checksum before writing to directory.
 //
-// Example output on Linux:
-//   - libonnxruntime.so.1.32.0
+// Layout:
+//   - names.Versioned is the only file this function writes to directory.
+//   - The installer updates the SONAME and unversioned symlinks separately.
 func StageSharedLibrary(
 	ctx context.Context,
 	httpClient *http.Client,
