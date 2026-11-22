@@ -310,9 +310,9 @@ func NewMaintenance(reason string) *AdapterError {
 	}
 }
 
-// NewIngestionDisabled reports that ingestionEnabled is false.
+// NewIngestionDisabled tells the caller how to reenable index writes.
 //
-// The daemon refuses requests to write indexes while ingestion is disabled.
+// The search setting independently controls queries against existing indexes.
 //
 // RPC failure:
 //   - FailedPrecondition with reason ingestion_disabled.
@@ -327,9 +327,9 @@ func NewIngestionDisabled() *AdapterError {
 	}
 }
 
-// NewSearchDisabled reports that searchEnabled is false.
+// NewSearchDisabled tells the caller how to reenable semantic search.
 //
-// The daemon refuses search requests while search is disabled.
+// The ingestion setting independently controls index writes.
 //
 // RPC failure:
 //   - FailedPrecondition with reason search_disabled.
