@@ -18,9 +18,9 @@ import (
 // With ingestion disabled, search reads the existing collection without
 // migrating its schema or scheduling a rebuild.
 //
-// Example:
-//
-//	manager.SearchCode(ctx, repoPath, "parse config", 5, nil)
+// Results:
+//   - An existing collection returns matching chunks.
+//   - A missing collection returns collection_missing when ingestion is off.
 func (manager *Manager) SearchCode(
 	ctx context.Context,
 	requestedPath string,
