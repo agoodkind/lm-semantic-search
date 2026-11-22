@@ -353,11 +353,17 @@ func (manager *Manager) runBootSelfCheck(ctx context.Context) (bootSelfCheckOutc
 
 func (manager *Manager) runBootSelfCheckQuery(ctx context.Context, codebasePath string) error {
 	collectionName := manager.semantic.CollectionName(codebasePath)
-	if err := manager.semantic.PrepareCollection(ctx, collectionName); err != nil {
-		wrappedErr := fmt.Errorf("prepare boot self-check collection %s: %w", collectionName, err)
-		slog.WarnContext(ctx, "daemon.selfcheck.prepare_failed", "err", wrappedErr)
+	if !manager.config.IngestionDisabled {
+		if err := manager.semantic.PrepareCollection(ctx, collectionName); err != nil {
+			wrappedErr := fmt.Errorf(
+				"prepare boot self-check collection %s: %w",
+				collectionName,
+				err,
+			)
+			slog.WarnContext(ctx, "daemon.selfcheck.prepare_failed", "err", wrappedErr)
 
-		return wrappedErr
+			return wrappedErr
+		}
 	}
 
 	lease, err := manager.semantic.AcquireCollection(ctx, collectionName)
@@ -395,8 +401,8 @@ func (manager *Manager) bootSelfCheckSkipReason() string {
 		return "ONNX inference cannot guarantee cancellation"
 	}
 
-	if manager.config.SearchDisabled || manager.config.IngestionDisabled {
-		return "search or ingestion is disabled"
+	if manager.config.SearchDisabled {
+		return "search is disabled"
 	}
 
 	return ""
