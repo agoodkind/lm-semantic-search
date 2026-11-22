@@ -1,5 +1,5 @@
-// Package onnxruntimedist pins the ONNX Runtime release archives that
-// lm-semantic-search links against and installs their shared library.
+// Package onnxruntimedist installs the pinned ONNX Runtime shared library
+// and headers from Microsoft's NuGet package.
 package onnxruntimedist
 
 import (
@@ -17,18 +17,18 @@ import (
 
 const (
 	// Version is the pinned ONNX Runtime release.
-	Version = "1.27.0"
+	Version = "1.32.0"
 
 	packageURL = "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/" + Version +
 		"/microsoft.ml.onnxruntime." + Version + ".nupkg"
-	packageSHA256 = "c725e8cefdfe4de08befb9f79b3f218c162439cdcdb97cbbb5192888d58ea669"
+	packageSHA256 = "a9150bc2992cbbb6722070da9910e1ffa989a8bfc67bdd5bb8e745ca755641db"
 
 	darwinLibraryName          = "libonnxruntime.dylib"
 	darwinLibrarySONAME        = "libonnxruntime.1.dylib"
-	darwinVersionedLibraryName = "libonnxruntime.1.27.0.dylib"
+	darwinVersionedLibraryName = "libonnxruntime.1.32.0.dylib"
 	linuxLibraryName           = "libonnxruntime.so"
 	linuxLibrarySONAME         = "libonnxruntime.so.1"
-	linuxVersionedLibraryName  = "libonnxruntime.so.1.27.0"
+	linuxVersionedLibraryName  = "libonnxruntime.so.1.32.0"
 	defaultDirectoryMode       = 0o755
 	maxExtractedFileSize       = 2 << 30
 
@@ -47,22 +47,34 @@ type Archive struct {
 	libraryName string
 }
 
-// LibraryNames are the file names of the shared library: the versioned file
-// the archive ships, and the SONAME and unversioned names that link to it.
+// LibraryNames contains the versioned library file name and both symlink names.
 type LibraryNames struct {
 	Versioned   string
 	SONAME      string
 	Unversioned string
 }
 
-// ArchiveFor returns the pinned archive for a GOOS and GOARCH pair.
+var (
+	errUnsupportedGOOS   = errors.New("unsupported GOOS")
+	errUnsupportedGOARCH = errors.New("unsupported GOARCH")
+	errDownloadStatus    = errors.New("unexpected HTTP status")
+	errChecksumMismatch  = errors.New("checksum mismatch")
+)
+
+// ArchiveFor returns the pinned package and the library entry for a platform.
+//
+// Microsoft uses its NuGet runtime identifiers for library directories.
+//
+// Example:
+//
+//	ArchiveFor("linux", "amd64")
 func ArchiveFor(goos string, goarch string) (Archive, error) {
 	var runtimeID string
 
 	switch goos {
 	case operatingSystemDarwin:
 		if goarch != architectureARM64 {
-			return Archive{}, fmt.Errorf("unsupported Darwin GOARCH %s", goarch)
+			return Archive{}, wrapError("select library for darwin/"+goarch, errUnsupportedGOARCH)
 		}
 
 		runtimeID = "osx-arm64"
@@ -73,10 +85,10 @@ func ArchiveFor(goos string, goarch string) (Archive, error) {
 		case architectureARM64:
 			runtimeID = "linux-arm64"
 		default:
-			return Archive{}, fmt.Errorf("unsupported Linux GOARCH %s", goarch)
+			return Archive{}, wrapError("select library for linux/"+goarch, errUnsupportedGOARCH)
 		}
 	default:
-		return Archive{}, fmt.Errorf("unsupported GOOS %s", goos)
+		return Archive{}, wrapError("select library for "+goos, errUnsupportedGOOS)
 	}
 
 	names, err := LibraryNamesFor(goos)
@@ -93,6 +105,14 @@ func ArchiveFor(goos string, goarch string) (Archive, error) {
 }
 
 // LibraryNamesFor returns the shared library file names for a GOOS.
+//
+// Installers use the versioned name for the file and the other names for
+// symlinks to that file.
+//
+// Linux layout:
+//   - libonnxruntime.so.1.32.0
+//   - libonnxruntime.so.1
+//   - libonnxruntime.so
 func LibraryNamesFor(goos string) (LibraryNames, error) {
 	switch goos {
 	case operatingSystemDarwin:
@@ -108,14 +128,16 @@ func LibraryNamesFor(goos string) (LibraryNames, error) {
 			Unversioned: linuxLibraryName,
 		}, nil
 	default:
-		return LibraryNames{}, fmt.Errorf("unsupported GOOS %s", goos)
+		return LibraryNames{}, wrapError("select library names for "+goos, errUnsupportedGOOS)
 	}
 }
 
-// StageSharedLibrary downloads archive, verifies its pinned SHA-256, and
-// writes only its versioned library file into directory. It writes no SONAME
-// or unversioned symlink. A binary already installed in directory keeps
-// loading the library that those symlinks name.
+// StageSharedLibrary downloads, verifies, and writes the versioned library.
+//
+// The installer can update the SONAME and unversioned symlinks separately.
+//
+// Example output on Linux:
+//   - libonnxruntime.so.1.32.0
 func StageSharedLibrary(
 	ctx context.Context,
 	httpClient *http.Client,
@@ -153,8 +175,14 @@ func StageSharedLibrary(
 	return nil
 }
 
-// FetchArchive downloads archive into workDirectory, verifies its pinned
-// SHA-256, extracts it there, and returns the extracted top-level directory.
+// FetchArchive downloads and verifies the pinned ONNX Runtime package.
+//
+// It extracts the selected library and the public headers into a new
+// subdirectory of workDirectory. Pass that directory to [InstallLibrary].
+//
+// Extracted layout:
+//   - lib/ contains the selected shared library.
+//   - include/ contains the public headers.
 func FetchArchive(
 	ctx context.Context,
 	httpClient *http.Client,
@@ -184,11 +212,14 @@ func FetchArchive(
 	return extractedDirectory, nil
 }
 
-// InstallLibrary copies the versioned library from an extracted archive into
-// libraryDirectory and points the SONAME and unversioned names at it with
-// relative symlinks. Each file is written beside its destination and renamed
-// into place, so a daemon that has the previous library mapped keeps its copy
-// and a repeated install converges on the same result.
+// InstallLibrary copies the versioned library and creates relative symlinks.
+//
+// It renames each file into place. A running daemon keeps the library that
+// it already mapped.
+//
+// Installed layout:
+//   - names.Versioned contains the library.
+//   - names.SONAME and names.Unversioned link to names.Versioned.
 func InstallLibrary(archiveDirectory string, names LibraryNames, libraryDirectory string) error {
 	sourceLibraryPath := filepath.Join(archiveDirectory, "lib", names.Versioned)
 	destinationLibraryPath := filepath.Join(libraryDirectory, names.Versioned)
@@ -208,6 +239,7 @@ func InstallLibrary(archiveDirectory string, names LibraryNames, libraryDirector
 
 func wrapError(operation string, err error) error {
 	slog.Error(operation+" failed", "err", err)
+
 	return fmt.Errorf("%s: %w", operation, err)
 }
 
@@ -239,21 +271,25 @@ func copyFileReplacing(sourcePath string, destinationPath string) error {
 	closeErr := destination.Close()
 	if copyErr != nil {
 		_ = os.Remove(temporaryPath)
+
 		return wrapError("copy dependency file", copyErr)
 	}
 
 	if closeErr != nil {
 		_ = os.Remove(temporaryPath)
+
 		return wrapError("close destination file", closeErr)
 	}
 
 	if err := os.Chmod(temporaryPath, sourceInfo.Mode().Perm()); err != nil {
 		_ = os.Remove(temporaryPath)
+
 		return wrapError("set destination file mode", err)
 	}
 
 	if err := os.Rename(temporaryPath, destinationPath); err != nil {
 		_ = os.Remove(temporaryPath)
+
 		return wrapError("replace destination file", err)
 	}
 
@@ -273,6 +309,7 @@ func symlinkReplacing(target string, linkPath string) error {
 
 	if err := os.Rename(temporaryLinkPath, linkPath); err != nil {
 		_ = os.Remove(temporaryLinkPath)
+
 		return wrapError("replace symlink", err)
 	}
 
@@ -300,7 +337,7 @@ func downloadAndVerify(
 
 	if response.StatusCode < http.StatusOK ||
 		response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("download %s: HTTP status %s", url, response.Status)
+		return wrapError("download "+url+" ("+response.Status+")", errDownloadStatus)
 	}
 
 	destination, err := os.Create(destinationPath)
@@ -345,7 +382,9 @@ func verifySHA256(path string, expected string) error {
 
 	actual := hex.EncodeToString(hash.Sum(nil))
 	if actual != expected {
-		return fmt.Errorf("checksum mismatch for %s: got %s, want %s", path, actual, expected)
+		operation := fmt.Sprintf("verify %s (got %s, want %s)", path, actual, expected)
+
+		return wrapError(operation, errChecksumMismatch)
 	}
 
 	return nil

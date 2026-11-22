@@ -22,7 +22,7 @@ RELEASE_BINS := $(INSTALL_BINS)
 # override it and make every job rebuild all listed platforms with one
 # toolchain, so the Linux job would cross-build darwin with gcc and fail on the
 # Darwin-only -arch flag. This default drives local make release. darwin/amd64
-# is omitted because ONNX Runtime 1.27.0 ships no osx-x64 binary; the CI and
+# is omitted because ONNX Runtime 1.32.0 ships no osx-x64 binary; the CI and
 # release workflow inputs (release_platforms / platforms) exclude it from the
 # matrix.
 RELEASE_PLATFORMS ?= darwin/arm64 linux/amd64 linux/arm64
@@ -60,18 +60,18 @@ GO_MK_CGO_DEPS := cbm onnxruntime tokenizers
 # CI can read the pinned commit from the index before initializing the submodule.
 GO_MK_CGO_CACHE_VERSIONS := \
 	cbm=$(or $(shell git rev-parse --verify :third_party/cbm),$(error Cannot read the third_party/cbm gitlink)) \
-	onnxruntime=1.27.0 tokenizers=1.27.0
+	onnxruntime=1.32.0 tokenizers=1.27.0
 GO_MK_CGO_CACHE_INPUTS := cmd/onnxruntime-dep internal/onnxruntimedist cmd/tokenizers-dep \
 	scripts/setup-cgo-cbm.sh scripts/cbm-lib.mk scripts/cbm-call-resolution.patch
 export CGO_LDFLAGS_ALLOW := -Wl,-rpath,@loader_path
 ifeq ($(shell uname),Darwin)
 GO_MK_INSTALL_POST_CMD = \
 	if [ -w "$(INSTALL_DIR)" ]; then \
-		cp -P "$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.1.27.0.dylib" \
+		cp -P "$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.1.32.0.dylib" \
 			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.1.dylib" \
 			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.dylib" "$(INSTALL_DIR)/"; \
 	else \
-		sudo cp -P "$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.1.27.0.dylib" \
+		sudo cp -P "$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.1.32.0.dylib" \
 			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.1.dylib" \
 			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.dylib" "$(INSTALL_DIR)/"; \
 	fi
@@ -79,11 +79,11 @@ endif
 ifeq ($(shell uname),Linux)
 GO_MK_INSTALL_POST_CMD = \
 	if [ -w "$(INSTALL_DIR)" ]; then \
-		cp -P "$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1.27.0" \
+		cp -P "$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1.32.0" \
 			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1" \
 			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so" "$(INSTALL_DIR)/"; \
 	else \
-		sudo cp -P "$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1.27.0" \
+		sudo cp -P "$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1.32.0" \
 			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so.1" \
 			"$(GO_MK_CGO_PREFIX)/lib/libonnxruntime.so" "$(INSTALL_DIR)/"; \
 	fi

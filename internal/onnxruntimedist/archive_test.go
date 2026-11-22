@@ -18,9 +18,11 @@ func TestExtractPackageStagesTargetLibraryAndHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	defer file.Close()
 
 	writer := zip.NewWriter(file)
+
 	for name, content := range map[string]string{
 		"runtimes/linux-arm64/native/libonnxruntime.so": "arm64",
 		"runtimes/linux-x64/native/libonnxruntime.so":   "amd64",
@@ -30,6 +32,7 @@ func TestExtractPackageStagesTargetLibraryAndHeaders(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		if _, err := entry.Write([]byte(content)); err != nil {
 			t.Fatal(err)
 		}
@@ -38,6 +41,7 @@ func TestExtractPackageStagesTargetLibraryAndHeaders(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -55,6 +59,7 @@ func TestExtractPackageStagesTargetLibraryAndHeaders(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		if string(content) != want {
 			t.Errorf("%s contains %q, want %q", name, content, want)
 		}

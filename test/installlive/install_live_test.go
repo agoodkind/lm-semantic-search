@@ -61,13 +61,13 @@ func expectedONNXLibraryNames(t *testing.T) onnxLibraryNames {
 	switch runtime.GOOS {
 	case "darwin":
 		return onnxLibraryNames{
-			versioned:   "libonnxruntime.1.27.0.dylib",
+			versioned:   "libonnxruntime.1.32.0.dylib",
 			soname:      "libonnxruntime.1.dylib",
 			unversioned: "libonnxruntime.dylib",
 		}
 	case "linux":
 		return onnxLibraryNames{
-			versioned:   "libonnxruntime.so.1.27.0",
+			versioned:   "libonnxruntime.so.1.32.0",
 			soname:      "libonnxruntime.so.1",
 			unversioned: "libonnxruntime.so",
 		}
