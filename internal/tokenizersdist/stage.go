@@ -112,6 +112,15 @@ func stage(ctx context.Context) error {
 
 	archive, found := targetArchives[targetName]
 	if !found {
+		slog.ErrorContext(
+			ctx,
+			"unsupported tokenizer build target",
+			"target",
+			targetName,
+			"err",
+			errUnsupportedTarget,
+		)
+
 		return fmt.Errorf("%w %s", errUnsupportedTarget, targetName)
 	}
 
@@ -296,6 +305,15 @@ func (dependencyInstaller installer) download(
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK ||
 		response.StatusCode >= http.StatusMultipleChoices {
+		slog.ErrorContext(
+			ctx,
+			"download tokenizer archive failed",
+			"status",
+			response.StatusCode,
+			"err",
+			errDownloadStatus,
+		)
+
 		return fmt.Errorf("%w %s", errDownloadStatus, response.Status)
 	}
 
@@ -321,6 +339,15 @@ func (dependencyInstaller installer) download(
 
 	actualSHA256 := hex.EncodeToString(hash.Sum(nil))
 	if actualSHA256 != dependencyInstaller.archive.sha256 {
+		slog.ErrorContext(
+			ctx,
+			"verify tokenizer archive failed",
+			"target",
+			dependencyInstaller.targetName,
+			"err",
+			errArchiveChecksum,
+		)
+
 		return fmt.Errorf(
 			"%w: got %s, want %s",
 			errArchiveChecksum,
@@ -375,6 +402,13 @@ func extractLibrary(archivePath string, destinationPath string) error {
 		if header.Size <= 0 || header.Size > maximumLibraryBytes {
 			_ = gzipReader.Close()
 			_ = archive.Close()
+			slog.Error(
+				"unsupported tokenizer library size",
+				"bytes",
+				header.Size,
+				"err",
+				errUnsupportedSize,
+			)
 
 			return fmt.Errorf("%w %d", errUnsupportedSize, header.Size)
 		}
@@ -429,6 +463,16 @@ func writeLibrary(reader io.Reader, destinationPath string, size int64) error {
 	}
 
 	if written != size {
+		slog.Error(
+			"tokenizer library size mismatch",
+			"written",
+			written,
+			"expected",
+			size,
+			"err",
+			errLibrarySize,
+		)
+
 		return fmt.Errorf("%w: got %d, want %d", errLibrarySize, written, size)
 	}
 
@@ -477,6 +521,8 @@ func readGoEnvironment(ctx context.Context, name string) (string, error) {
 
 	value := strings.TrimSpace(string(output))
 	if value == "" {
+		slog.ErrorContext(ctx, "go env returned an empty value", "name", name, "err", errEmptyGoEnv)
+
 		return "", fmt.Errorf("%w for %s", errEmptyGoEnv, name)
 	}
 
