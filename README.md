@@ -114,7 +114,7 @@ When a file named `lms` that is not a symlink already exists in the install dire
 
 To upgrade to the latest release, run the `install.sh` command again. `lm-semantic-search install` without `--version` reinstalls the release that the CLI itself came from.
 
-From source, build and install the daemon, CLI, and MCP adapter:
+To build from source, install LLVM and make sure `llvm-objcopy` is on `PATH`. On macOS with Homebrew, `brew install llvm` installs it in the LLVM formula's `bin` directory. Then build and install the daemon, CLI, and MCP adapter:
 
 ```bash
 make install
