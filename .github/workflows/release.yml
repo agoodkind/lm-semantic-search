@@ -13,6 +13,7 @@ jobs:
     secrets: inherit
     with:
       cgo: true
+      apt_packages: llvm
       submodules: recursive
       binary: lm-semantic-search-daemon
       # Keep this list in sync with ci.yml release_platforms.
@@ -42,6 +43,7 @@ jobs:
             gh \
             git \
             libpcre2-dev \
+            llvm \
             pkg-config \
             tar \
             xz-utils \

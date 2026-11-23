@@ -22,6 +22,7 @@ import (
 
 const (
 	tokenizersVersion       = "1.27.0"
+	tokenizersCacheVersion  = tokenizersVersion + "-no-llvm-bitcode"
 	tokenizersArchivePrefix = "https://github.com/daulet/tokenizers/releases/download/v" +
 		tokenizersVersion + "/libtokenizers."
 	toolLogPrefix        = "setup-cgo-tokenizers"
@@ -153,7 +154,7 @@ func (dependencyInstaller installer) cached() bool {
 		return false
 	}
 
-	return strings.TrimSpace(string(version)) == tokenizersVersion
+	return strings.TrimSpace(string(version)) == tokenizersCacheVersion
 }
 
 func (dependencyInstaller installer) install(ctx context.Context) error {
@@ -189,6 +190,11 @@ func (dependencyInstaller installer) install(ctx context.Context) error {
 		return err
 	}
 
+	strippedLibraryPath := filepath.Join(temporaryDirectory, "libtokenizers-stripped.a")
+	if err := dependencyInstaller.stripBitcode(ctx, temporaryLibraryPath, strippedLibraryPath); err != nil {
+		return err
+	}
+
 	if err := os.MkdirAll(
 		filepath.Dir(dependencyInstaller.libraryPath()),
 		defaultDirectoryMode,
@@ -196,7 +202,7 @@ func (dependencyInstaller installer) install(ctx context.Context) error {
 		return wrapError("create tokenizers library directory", err)
 	}
 
-	if err := os.Rename(temporaryLibraryPath, dependencyInstaller.libraryPath()); err != nil {
+	if err := os.Rename(strippedLibraryPath, dependencyInstaller.libraryPath()); err != nil {
 		return wrapError("install tokenizers library", err)
 	}
 
@@ -209,10 +215,29 @@ func (dependencyInstaller installer) install(ctx context.Context) error {
 
 	if err := os.WriteFile(
 		dependencyInstaller.versionPath(),
-		[]byte(tokenizersVersion+"\n"),
+		[]byte(tokenizersCacheVersion+"\n"),
 		defaultFileMode,
 	); err != nil {
 		return wrapError("write tokenizers version", err)
+	}
+
+	return nil
+}
+
+func (dependencyInstaller installer) stripBitcode(ctx context.Context, source, destination string) error {
+	sections := []string{"--remove-section=.llvmbc", "--remove-section=.llvmcmd"}
+	if strings.HasPrefix(dependencyInstaller.targetName, "darwin/") {
+		sections = []string{"--remove-section=__LLVM,__bitcode", "--remove-section=__LLVM,__cmdline"}
+	}
+
+	objcopy, err := exec.LookPath("llvm-objcopy")
+	if err != nil {
+		return wrapError("find llvm-objcopy on PATH (install LLVM for tokenizer staging)", err)
+	}
+
+	command := exec.CommandContext(ctx, objcopy, append(sections, source, destination)...)
+	if output, err := command.CombinedOutput(); err != nil {
+		return wrapError("strip tokenizer LLVM bitcode", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output))))
 	}
 
 	return nil

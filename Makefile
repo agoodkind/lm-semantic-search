@@ -58,7 +58,7 @@ GO_MK_CGO_DEPS := cbm onnxruntime tokenizers
 # CI can read the pinned commit from the index before initializing the submodule.
 GO_MK_CGO_CACHE_VERSIONS := \
 	cbm=$(or $(shell git rev-parse --verify :third_party/cbm),$(error Cannot read the third_party/cbm gitlink)) \
-	onnxruntime=1.32.0 tokenizers=1.27.0
+	onnxruntime=1.32.0 tokenizers=1.27.0-no-llvm-bitcode
 GO_MK_CGO_CACHE_INPUTS := cmd/onnxruntime-dep internal/onnxruntimedist cmd/tokenizers-dep \
 	scripts/setup-cgo-cbm.sh scripts/cbm-lib.mk scripts/cbm-call-resolution.patch
 export CGO_LDFLAGS_ALLOW := -Wl,-rpath,@loader_path
