@@ -14,8 +14,22 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+)
+
+var (
+	errUnsupportedTarget = errors.New("tokenizers does not support build target")
+	errDownloadStatus    = errors.New("download tokenizers archive: HTTP status")
+	errArchiveChecksum   = errors.New("tokenizers archive checksum mismatch")
+	errInvalidEntry      = errors.New("tokenizers archive library is not a regular file")
+	errUnsupportedSize   = errors.New("tokenizers library has unsupported size")
+	errMissingEntry      = errors.New("tokenizers archive is missing libtokenizers.a")
+	errLibrarySize       = errors.New("tokenizers library size mismatch")
+	errEmptyGoEnv        = errors.New("go env returned an empty value")
+	errMissingModule     = errors.New("find module root: go.mod is missing")
 )
 
 const (
@@ -64,8 +78,27 @@ type installer struct {
 	client     *http.Client
 }
 
-// Stage installs the tokenizer archive for the configured cgo build target.
-func Stage(ctx context.Context) error {
+// Run stages the tokenizer archive and returns a command exit status.
+//
+// Run reads the target and cache directory from the build environment.
+// The Makefile invokes it through the tokenizer staging command:
+//
+//	go run ./cmd/tokenizers-dep
+func Run() int {
+	slog.Debug("tokenizers dependency command entry")
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := stage(ctx); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "%s: %v\n", toolLogPrefix, err)
+
+		return 1
+	}
+
+	return 0
+}
+
+func stage(ctx context.Context) error {
 	slog.DebugContext(ctx, "resolve tokenizer dependency setup")
 	rootDirectory, err := findModuleRoot()
 	if err != nil {
@@ -79,7 +112,7 @@ func Stage(ctx context.Context) error {
 
 	archive, found := targetArchives[targetName]
 	if !found {
-		return fmt.Errorf("tokenizers does not support build target %s", targetName)
+		return fmt.Errorf("%w %s", errUnsupportedTarget, targetName)
 	}
 
 	prefix := os.Getenv("GO_MK_CGO_PREFIX")
@@ -101,7 +134,8 @@ func Stage(ctx context.Context) error {
 		client:     http.DefaultClient,
 	}
 	if dependencyInstaller.cached() {
-		fmt.Printf(
+		fmt.Fprintf(
+			os.Stdout,
 			"%s: using cached tokenizers %s for %s\n",
 			toolLogPrefix,
 			tokenizersVersion,
@@ -115,7 +149,8 @@ func Stage(ctx context.Context) error {
 		return err
 	}
 
-	fmt.Printf(
+	fmt.Fprintf(
+		os.Stdout,
 		"%s: installed static tokenizers %s for %s\n",
 		toolLogPrefix,
 		tokenizersVersion,
@@ -216,12 +251,9 @@ func (dependencyInstaller installer) stripBitcode(
 	destination string,
 ) error {
 	slog.DebugContext(ctx, "strip tokenizer LLVM bitcode", "target", dependencyInstaller.targetName)
-	sections := []string{"--remove-section=.llvmbc", "--remove-section=.llvmcmd"}
+	bitcodeSection, commandLineSection := ".llvmbc", ".llvmcmd"
 	if strings.HasPrefix(dependencyInstaller.targetName, "darwin/") {
-		sections = []string{
-			"--remove-section=__LLVM,__bitcode",
-			"--remove-section=__LLVM,__cmdline",
-		}
+		bitcodeSection, commandLineSection = "__LLVM,__bitcode", "__LLVM,__cmdline"
 	}
 
 	objcopy, err := exec.LookPath("llvm-objcopy")
@@ -229,7 +261,14 @@ func (dependencyInstaller installer) stripBitcode(
 		return wrapError("find llvm-objcopy on PATH (install LLVM for tokenizer staging)", err)
 	}
 
-	command := exec.CommandContext(ctx, objcopy, append(sections, source, destination)...)
+	command := exec.CommandContext(
+		ctx,
+		objcopy,
+		"--remove-section="+bitcodeSection,
+		"--remove-section="+commandLineSection,
+		source,
+		destination,
+	)
 	if output, err := command.CombinedOutput(); err != nil {
 		return wrapError(
 			"strip tokenizer LLVM bitcode",
@@ -257,7 +296,7 @@ func (dependencyInstaller installer) download(
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK ||
 		response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("download tokenizers archive: HTTP status %s", response.Status)
+		return fmt.Errorf("%w %s", errDownloadStatus, response.Status)
 	}
 
 	destination, err := os.OpenFile(
@@ -283,7 +322,8 @@ func (dependencyInstaller installer) download(
 	actualSHA256 := hex.EncodeToString(hash.Sum(nil))
 	if actualSHA256 != dependencyInstaller.archive.sha256 {
 		return fmt.Errorf(
-			"tokenizers archive checksum mismatch: got %s, want %s",
+			"%w: got %s, want %s",
+			errArchiveChecksum,
 			actualSHA256,
 			dependencyInstaller.archive.sha256,
 		)
@@ -301,6 +341,7 @@ func extractLibrary(archivePath string, destinationPath string) error {
 	gzipReader, err := gzip.NewReader(archive)
 	if err != nil {
 		_ = archive.Close()
+
 		return wrapError("open tokenizers gzip stream", err)
 	}
 
@@ -328,14 +369,14 @@ func extractLibrary(archivePath string, destinationPath string) error {
 			_ = gzipReader.Close()
 			_ = archive.Close()
 
-			return errors.New("tokenizers archive library is not a regular file")
+			return errInvalidEntry
 		}
 
 		if header.Size <= 0 || header.Size > maximumLibraryBytes {
 			_ = gzipReader.Close()
 			_ = archive.Close()
 
-			return fmt.Errorf("tokenizers library has unsupported size %d", header.Size)
+			return fmt.Errorf("%w %d", errUnsupportedSize, header.Size)
 		}
 
 		if err := writeLibrary(tarReader, destinationPath, header.Size); err != nil {
@@ -346,6 +387,7 @@ func extractLibrary(archivePath string, destinationPath string) error {
 		}
 
 		found = true
+
 		break
 	}
 
@@ -360,7 +402,7 @@ func extractLibrary(archivePath string, destinationPath string) error {
 	}
 
 	if !found {
-		return errors.New("tokenizers archive is missing libtokenizers.a")
+		return errMissingEntry
 	}
 
 	return nil
@@ -387,7 +429,7 @@ func writeLibrary(reader io.Reader, destinationPath string, size int64) error {
 	}
 
 	if written != size {
-		return fmt.Errorf("tokenizers library size is %d, want %d", written, size)
+		return fmt.Errorf("%w: got %d, want %d", errLibrarySize, written, size)
 	}
 
 	return nil
@@ -435,7 +477,7 @@ func readGoEnvironment(ctx context.Context, name string) (string, error) {
 
 	value := strings.TrimSpace(string(output))
 	if value == "" {
-		return "", fmt.Errorf("read go env %s: empty value", name)
+		return "", fmt.Errorf("%w for %s", errEmptyGoEnv, name)
 	}
 
 	return value, nil
@@ -461,7 +503,7 @@ func findModuleRoot() (string, error) {
 
 		parentDirectory := filepath.Dir(currentDirectory)
 		if parentDirectory == currentDirectory {
-			return "", errors.New("find module root: go.mod is missing")
+			return "", errMissingModule
 		}
 
 		currentDirectory = parentDirectory
@@ -470,5 +512,6 @@ func findModuleRoot() (string, error) {
 
 func wrapError(operation string, err error) error {
 	slog.Error(operation+" failed", "err", err)
+
 	return fmt.Errorf("%s: %w", operation, err)
 }
