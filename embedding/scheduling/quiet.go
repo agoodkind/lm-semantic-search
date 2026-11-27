@@ -3,6 +3,9 @@ package scheduling
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
 	"strconv"
 	"sync/atomic"
 
@@ -15,7 +18,8 @@ import (
 // a batch when host activity resumes. Call Close when the owner shuts down.
 type Scheduler struct {
 	scheduler *jobscheduler.Scheduler
-	ctx       context.Context
+	done      <-chan struct{}
+	onClose   func(func()) func() bool
 	cancel    context.CancelFunc
 	sequence  atomic.Uint64
 }
@@ -33,22 +37,27 @@ func newQuiet(ctx context.Context, activity platformactivity.Source) *Scheduler 
 
 	return &Scheduler{
 		scheduler: scheduler,
-		ctx:       lifetime,
-		cancel:    cancel,
-		sequence:  atomic.Uint64{},
+		done:      lifetime.Done(),
+		onClose: func(callback func()) func() bool {
+			return context.AfterFunc(lifetime, callback)
+		},
+		cancel:   cancel,
+		sequence: atomic.Uint64{},
 	}
 }
 
 // Acquire waits until the quiet policy admits one batch. The returned function
 // releases the slot and must be called after the batch finishes.
 func (s *Scheduler) Acquire(ctx context.Context) (func(), error) {
-	if err := s.ctx.Err(); err != nil {
-		return nil, err
+	select {
+	case <-s.done:
+		return nil, context.Canceled
+	default:
 	}
 
 	batchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	stop := context.AfterFunc(s.ctx, cancel)
+	stop := s.onClose(cancel)
 	defer stop()
 	sequence := s.sequence.Add(1)
 	policy := model.DefaultSchedulingPolicy()
@@ -56,21 +65,30 @@ func (s *Scheduler) Acquire(ctx context.Context) (func(), error) {
 	lease, err := s.scheduler.Acquire(
 		batchCtx,
 		jobscheduler.Entry{
-			JobID:         strconv.FormatUint(sequence, 10),
-			Policy:        policy,
-			QueueSequence: sequence,
+			JobID:          strconv.FormatUint(sequence, 10),
+			Policy:         policy,
+			QueueSequence:  sequence,
+			State:          jobscheduler.EntryWaiting,
+			Reason:         model.SchedulingReasonUnspecified,
+			PauseRequested: false,
 		},
 	)
 	if err != nil {
-		return nil, err
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			slog.WarnContext(ctx, "quiet embedding batch admission failed", "err", err)
+		}
+
+		return nil, fmt.Errorf("admit quiet embedding batch: %w", err)
 	}
 
-	if err := s.ctx.Err(); err != nil {
+	select {
+	case <-s.done:
 		lease.Release()
-		return nil, err
-	}
 
-	return lease.Release, nil
+		return nil, context.Canceled
+	default:
+		return lease.Release, nil
+	}
 }
 
 // WaitingReason returns the current quiet policy reason for a pending batch, or
@@ -90,8 +108,12 @@ func (s *Scheduler) WaitingReason() string {
 	return ""
 }
 
-// Close cancels pending acquisitions and stops activity sampling. Callers own
-// the context and release function for each batch that already started.
+// Close cancels pending acquisitions and stops activity sampling.
+//
+// Callers own the context and release function for each batch that already
+// started. Close does not wait for those batches.
+//
+//	defer scheduler.Close()
 func (s *Scheduler) Close() {
 	s.cancel()
 	s.scheduler.Close()
