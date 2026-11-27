@@ -53,11 +53,14 @@ func (s *Scheduler) Acquire(ctx context.Context) (func(), error) {
 	sequence := s.sequence.Add(1)
 	policy := model.DefaultSchedulingPolicy()
 	policy.Quiet = true
-	lease, err := s.scheduler.Acquire(batchCtx, jobscheduler.Entry{
-		JobID:         strconv.FormatUint(sequence, 10),
-		Policy:        policy,
-		QueueSequence: sequence,
-	})
+	lease, err := s.scheduler.Acquire(
+		batchCtx,
+		jobscheduler.Entry{
+			JobID:         strconv.FormatUint(sequence, 10),
+			Policy:        policy,
+			QueueSequence: sequence,
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
