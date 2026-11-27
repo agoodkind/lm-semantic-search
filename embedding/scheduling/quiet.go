@@ -24,8 +24,13 @@ type Scheduler struct {
 	sequence  atomic.Uint64
 }
 
-// NewQuiet uses the LMS quiet policy with normal priority and its default idle
-// threshold. Canceling ctx cancels pending acquisitions and stops sampling.
+// NewQuiet opens a scheduler for background embedding.
+//
+// The scheduler uses normal priority and the LMS default idle threshold.
+// Canceling ctx cancels pending acquisitions and stops sampling.
+//
+//	scheduler := scheduling.NewQuiet(ctx)
+//	defer scheduler.Close()
 func NewQuiet(ctx context.Context) *Scheduler {
 	return newQuiet(ctx, platformactivity.New(ctx))
 }
@@ -46,8 +51,15 @@ func newQuiet(ctx context.Context, activity platformactivity.Source) *Scheduler 
 	}
 }
 
-// Acquire waits until the quiet policy admits one batch. The returned function
-// releases the slot and must be called after the batch finishes.
+// Acquire waits until the quiet policy admits one embedding batch.
+//
+// Call the returned function after the batch finishes to release the slot.
+//
+//	release, err := scheduler.Acquire(ctx)
+//	if err != nil {
+//	    return err
+//	}
+//	defer release()
 func (s *Scheduler) Acquire(ctx context.Context) (func(), error) {
 	select {
 	case <-s.done:
@@ -91,8 +103,11 @@ func (s *Scheduler) Acquire(ctx context.Context) (func(), error) {
 	}
 }
 
-// WaitingReason returns the current quiet policy reason for a pending batch, or
-// an empty string when the policy does not block any pending batch.
+// WaitingReason reports why a pending batch is waiting for the quiet policy.
+//
+// An empty string means the policy does not block a pending batch.
+//
+//	reason := scheduler.WaitingReason()
 func (s *Scheduler) WaitingReason() string {
 	snapshot := s.scheduler.Snapshot()
 	if snapshot.Queued[model.JobPriorityNormal] == 0 {
