@@ -44,6 +44,7 @@ func TestQuietSchedulerAdmitsBatchesWhenIdle(t *testing.T) {
 
 		activity.idle.Store(0)
 		awaitActivitySample()
+		assertWaiting(t, scheduler, model.SchedulingReasonUnspecified)
 		second := startAcquire(t.Context(), scheduler)
 		synctest.Wait()
 		assertWaiting(t, scheduler, model.SchedulingReasonUserActive)

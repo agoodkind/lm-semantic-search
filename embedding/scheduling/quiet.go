@@ -73,7 +73,12 @@ func (s *Scheduler) Acquire(ctx context.Context) (func(), error) {
 // WaitingReason returns the current quiet policy reason for a pending batch, or
 // an empty string when the policy does not block any pending batch.
 func (s *Scheduler) WaitingReason() string {
-	for _, reason := range s.scheduler.Snapshot().Reasons {
+	snapshot := s.scheduler.Snapshot()
+	if snapshot.Queued[model.JobPriorityNormal] == 0 {
+		return ""
+	}
+
+	for _, reason := range snapshot.Reasons {
 		if reason != model.SchedulingReasonUnspecified {
 			return string(reason)
 		}
